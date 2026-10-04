@@ -20,7 +20,7 @@ pub struct Map {
 }
 
 /// The maps it can be played on, picked from in the main menu.
-pub const MAPS: [Map; 2] = [
+pub const MAPS: [Map; 3] = [
     Map {
         name: "Lanes",
         path: "data/arena/ctf_map.glb",
@@ -30,6 +30,11 @@ pub const MAPS: [Map; 2] = [
         name: "Balconies",
         path: "data/arena/ctf_balconies.glb",
         about: "Two floors: each flag in a well under a balcony, catwalks along the walls, a raised hub.",
+    },
+    Map {
+        name: "Hybrid",
+        path: "data/arena/ctf_hybrid.glb",
+        about: "The walled bases and lanes of Lanes, the two floors of Balconies, and a maze in the middle.",
     },
 ];
 
