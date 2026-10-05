@@ -41,6 +41,9 @@ Layout (top view, x runs along the length, red base at -x and blue at +x):
   the highest and most open ground there is.
 - From each pad's inner corner, stepping stones drop a meter at a time to the centre's corner:
   a way down for the player, too far apart for the droids, who walk round.
+- Ferries: past the corner where each base's way round turns for the pad, a ferry waits to carry
+  the player out over the void and up beside the sky island on that side, and back. The droids
+  never take them.
 
 Made for Ruptura Systematis (MazeGame/maze), whose capture the flag reads the map's empties: the
 game puts each side's flag in a firewall at `flag_red` / `flag_blue`, the computer that opens it
@@ -48,7 +51,9 @@ at `computer_red` / `computer_blue`, and its droids at `post_red_1` and on. The 
 map is in the void (its `Map::void`): it gives it a black sky, no floor of its own under it, and
 surveys its floors with the sky for their ceiling, so a spot's floor, for the droids, is the
 first surface down - the catwalk, not the plaza under it, and not the walkway under a street
-light's head either, which they walk round. Every raised floor is reached by stairs of 0.25 m
+light's head either, which they walk round. Each ferry is a mesh of its own, `ferry_<side>_<n|s>`,
+whose origin is the middle of its deck's top; the game moves it from where it is through the
+empties `ferry_<side>_<n|s>_1`, `_2` and on, waiting at each end, and back. Every raised floor is reached by stairs of 0.25 m
 steps. Each street light's
 glass is pure magenta, which the game lights with a lamp of its own.
 """
@@ -83,6 +88,10 @@ MIN_GAP = 1.6        # walkable space kept around cover
 EDGE = 1.2           # how far cover keeps in from a platform's edge
 LAMP_HEIGHT = 4.6    # top of a street light's pole, over its foot
 ARM = 1.3            # how far its arm reaches out over the walkway
+FERRY = 1.8          # half the side of a ferry's deck
+FERRY_GAP = 0.1      # between a docked ferry and the edge it waits at
+FERRY_TURN = 28.0    # x where blue's north ferry, out over the void, turns along the island's line
+ISLAND_DOCK = 5.5    # how far from its front an island's side is left open for the ferry
 
 
 def get_args():
@@ -153,6 +162,7 @@ class Map:
         self.struct = collection("Structures")
         self.cover = collection("Cover")
         self.lights = collection("Lights")
+        self.ferries = collection("Ferries")
         self.deck = material("Deck", (0.34, 0.35, 0.38))
         self.bridge = material("Bridge", (0.28, 0.29, 0.32))
         self.rock = material("Rock", (0.16, 0.15, 0.17))
@@ -246,6 +256,46 @@ class Map:
                 self.lights, self.glass)
         self.keep_clear.append((x - 0.5, x + 0.5, y - 0.5, y + 0.5))
 
+    def ferry(self, name, stops, mat):
+        """A ferry: a deck with a post at each corner, a band of the side's colour round it and a
+        little rock under it, as one mesh with its origin in the middle of the deck's top, at the
+        first of `stops`, the places (x, y, top) it goes between; an empty marks each of the
+        others."""
+        x, y, top = stops[0]
+        f, r, post = FERRY, 0.06, 0.08
+        parts = [add_box(f"{name}_Deck", x - f, x + f, y - f, y + f, top - DECK, top, self.ferries, self.bridge)]
+        for i, rect in enumerate([(-f - r, f + r, f, f + r), (-f - r, f + r, -f - r, -f),
+                                  (-f - r, -f, -f, f), (f, f + r, -f, f)]):
+            x0, x1, y0, y1 = rect
+            parts.append(add_box(f"{name}_Rim_{i}", x + x0, x + x1, y + y0, y + y1, top - 0.4, top - 0.1,
+                                 self.ferries, mat))
+        for i, (cx, cy) in enumerate(((1, 1), (1, -1), (-1, 1), (-1, -1))):
+            px, py = x + cx * (f - post), y + cy * (f - post)
+            parts.append(add_box(f"{name}_Post_{i}", px - post, px + post, py - post, py + post, top, top + 1.0,
+                                 self.ferries, self.pole))
+            parts.append(add_box(f"{name}_Cap_{i}", px - post, px + post, py - post, py + post, top + 1.0,
+                                 top + 1.1, self.ferries, mat))
+        bpy.ops.mesh.primitive_cone_add(vertices=4, radius1=0.0, radius2=f * math.sqrt(2) * 0.9, depth=1.6,
+                                        location=(x, y, top - DECK - 0.8), rotation=(0, 0, math.pi / 4))
+        keel = bpy.context.active_object
+        keel.data.materials.append(self.rock)
+        move_to(keel, self.ferries)
+        parts.append(keel)
+        bpy.ops.object.select_all(action="DESELECT")
+        for o in parts:
+            o.select_set(True)
+        bpy.context.view_layer.objects.active = parts[0]
+        bpy.ops.object.join()
+        o = parts[0]
+        o.name = name
+        bpy.context.scene.cursor.location = (x, y, top)
+        bpy.ops.object.origin_set(type="ORIGIN_CURSOR")
+        bpy.context.scene.cursor.location = (0, 0, 0)
+        for n, (sx, sy, sz) in enumerate(stops[1:], start=1):
+            stop = bpy.data.objects.new(f"{name}_{n}", None)
+            stop.location = (sx, sy, sz)
+            bpy.context.scene.collection.objects.link(stop)
+
 
 def marker(name, x, y, z, facing_x):
     """An empty where the game puts something, its +x turned to point along `facing_x` (+1 or -1)."""
@@ -296,8 +346,12 @@ def build_centre(m):
         # walls along its far edge and part way down its sides, broken to look out over them
         x0, x1, y0, y1 = ISLAND
         for n, rect in enumerate([(x0, -1.5, y1 - 0.4, y1), (1.5, x1, y1 - 0.4, y1),
-                                  (x0, x0 + 0.4, y0 + 4.0, y1 - 0.4), (x1 - 0.4, x1, y0 + 4.0, y1 - 0.4)]):
+                                  (x0, x0 + 0.4, y0 + ISLAND_DOCK, y1 - 0.4),
+                                  (x1 - 0.4, x1, y0 + ISLAND_DOCK, y1 - 0.4)]):
             m.wall(f"IslandWall{side}_{n}", place(rect, 1, sy), SKY)
+        # where the ferries come in, either side: nothing in the way of stepping off
+        for sx in (1, -1):
+            m.keep_clear.append(place((x1 - 2.5, x1, y0, y0 + ISLAND_DOCK), sx, sy))
         m.street_light(x0 + 0.6, sy * (y0 + 0.6), turned("+y", 1, sy), SKY)
         m.street_light(x1 - 0.6, sy * (y0 + 0.6), turned("+y", 1, sy), SKY)
 
@@ -362,6 +416,13 @@ def build_half(m, team, sx):
                  0.0, HIGH, half_width=(LANE[1] - LANE[0]) / 2)
         m.bridge_deck(f"{team}Link{side}_2", place((PAD[1], stair_top, *LANE), sx, sy), HIGH)
         m.street_light(sx * (turn + 3.5), sy * (BASE[3] + 4.0), turned("-x", sx, sy))
+        # past the turn, the ferry out to the island on this side: the north one waits here, the
+        # south one at the island, so one is always on its way
+        dock = (turn + 2.0, LANE[1] + FERRY_GAP + FERRY, 0.0)
+        out = (FERRY_TURN, ISLAND[2] + ISLAND_DOCK / 2, SKY)
+        island = (ISLAND[1] + FERRY_GAP + FERRY, out[1], SKY)
+        stops = [dock, out, island] if sy > 0 else [island, out, dock]
+        m.ferry(f"ferry_{team}_{side.lower()}", [(sx * x, sy * y, z) for x, y, z in stops], mat)
         # a perch on the pad, looking out over the road
         perch = (px - 2.0, px + 2.0, PAD[3] - 3.5, PAD[3])
         add_box(f"{team}Perch{side}", *place(perch, sx, sy), HIGH - SLAB, HIGH + PERCH, m.struct, m.deck)
@@ -464,7 +525,7 @@ def main():
     out = os.path.abspath(os.path.expanduser(out)) if out else \
         os.path.join(os.path.dirname(os.path.abspath(__file__)), "ctf_void.blend")
     bpy.ops.wm.save_as_mainfile(filepath=out)
-    print(f"[map] seed={seed} cover={n_cover} street lights={m.n_lights} -> {out}")
+    print(f"[map] seed={seed} cover={n_cover} street lights={m.n_lights} ferries={len(m.ferries.objects)} -> {out}")
     if glb:
         export_glb(os.path.abspath(glb), [m.walk, m.under, m.struct, m.cover])
 
@@ -482,8 +543,8 @@ def join(col):
 
 def export_glb(path, cols):
     """Exports for the game with the walkways, their undersides, structures and cover each
-    joined into one mesh, the street lights' glass left a piece each, and the markers as
-    empties. Runs after the .blend is saved, so the saved file keeps every object separate."""
+    joined into one mesh, the street lights' glass and the ferries left a piece each, and the
+    markers and the ferries' stops as empties. Runs after the .blend is saved, so the saved file keeps every object separate."""
     for col in cols:
         join(col)
     bpy.ops.export_scene.gltf(filepath=path, export_format="GLB", export_extras=True,

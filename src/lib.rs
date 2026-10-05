@@ -35,6 +35,7 @@ mod drone_shot;
 mod health;
 mod hearts;
 mod firewall;
+mod ferry;
 mod fixtures;
 mod formants;
 pub mod game;

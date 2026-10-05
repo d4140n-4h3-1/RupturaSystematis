@@ -719,6 +719,8 @@ impl MazeGame {
         self.barks.clear();
         // Made (and seeded) first: the grid below borrows the game.
         self.rng();
+        // The ferries set off afresh, from where they start.
+        self.level.ferries.reset(&mut ctx.scenes[self.scene].graph);
         // The firewalls first, closed again, so that the floor round them is out of the grid
         // before anything is put on it.
         if let Some((grid, origin)) = self.level.grid.as_mut() {
@@ -2599,6 +2601,11 @@ impl Plugin for MazeGame {
         self.set_up_drone(ctx);
         self.set_up_hearts(ctx);
 
+        // The ferries go on whatever the player does, until the menu stops the world. First, so
+        // the player is carried along with where they are going this step.
+        if !self.menu.is_open() && matches!(self.phase, Phase::Playing | Phase::Won | Phase::Deleted) {
+            self.level.ferries.update(&mut ctx.scenes[self.scene].graph, ctx.dt);
+        }
         match self.phase {
             // While the menu is open nothing happens: no loading, no clock, no player.
             _ if self.menu.is_open() => (),

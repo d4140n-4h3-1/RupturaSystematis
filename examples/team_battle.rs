@@ -1900,6 +1900,7 @@ impl Battle {
                 jumped: std::mem::take(&mut droid.jumped),
                 low: droid.low_jump,
                 falling,
+                lifted: 0.0,
                 // Behind tall cover, its back to it at the side it leans out from - the corner -
                 // and leaning out round it to shoot.
                 cover: tall.map(|(wall, _, _)| wall),

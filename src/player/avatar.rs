@@ -702,6 +702,21 @@ fn ground(stances: &[Stance]) -> f32 {
         .fold(f32::INFINITY, f32::min)
 }
 
+/// The floor the hips ride on this frame, from `ride`, last frame's, and `floor`, the one the
+/// droid stands on. Up or down a step, the hips come after the floor at a steady pace, quicker
+/// the faster it goes along - never far from it; off the ground, they keep to it. `lifted` is how
+/// far the floor itself carried it up since, a ferry's doing, which they go along with at once.
+fn ride_floor(ride: Option<f32>, floor: f32, lifted: f32, grounded: bool, speed: f32, dt: f32) -> f32 {
+    match ride.map(|ride| ride + lifted) {
+        Some(ride) if grounded && (floor - ride).abs() < MOST_STEP => {
+            let catch_up = (speed * RIDE_PACE).max(LEAST_RIDE_PACE) * dt;
+            let ride = ride + (floor - ride).clamp(-catch_up, catch_up);
+            ride.clamp(floor - RIDE_BELOW, floor + RIDE_ABOVE)
+        }
+        _ => floor,
+    }
+}
+
 /// The bones from the droid's top down to the top of each leg and to each knee, left and right.
 #[derive(Debug, Clone, PartialEq)]
 struct Legs {
@@ -1362,6 +1377,9 @@ pub struct Going {
     pub low: bool,
     /// How fast it is falling, in meters per second.
     pub falling: f32,
+    /// How far the floor under it carried it up this frame, in meters - down, below 0: a ferry's
+    /// doing, not a step's, which the hips go along with at once.
+    pub lifted: f32,
     /// The wall it is in cover against, if it is: which side of it.
     pub cover: Option<Wall>,
     /// Whether, in cover, it is at the end of the wall, the way it faces: at the corner.
@@ -1458,6 +1476,8 @@ pub struct Avatar {
     from_made_on: [f32; 2],
     /// How fast it is going along the floor, as of the last frame, in meters per second.
     speed: f32,
+    /// How far the floor carried it up this frame, like [`Going::lifted`].
+    lifted: f32,
     /// The floor the hips ride on, in meters across the world: the floor it stands on, followed
     /// up a step over a moment. None until it has stood on one.
     ride: Option<f32>,
@@ -2289,6 +2309,7 @@ impl Avatar {
             made_on: [0.0; 2],
             from_made_on: [0.0; 2],
             speed: 0.0,
+            lifted: 0.0,
             ride: None,
             rest_hips,
             tops,
@@ -3017,16 +3038,7 @@ impl Avatar {
             };
             *footing += (wanted - *footing) * follow;
         }
-        // Up or down a step, the hips come after the floor at a steady pace - never far from
-        // it; off the ground, they keep to it.
-        let ride = match self.ride {
-            Some(ride) if grounded && (floor - ride).abs() < MOST_STEP => {
-                let catch_up = (self.speed * RIDE_PACE).max(LEAST_RIDE_PACE) * dt;
-                let ride = ride + (floor - ride).clamp(-catch_up, catch_up);
-                ride.clamp(floor - RIDE_BELOW, floor + RIDE_ABOVE)
-            }
-            _ => floor,
-        };
+        let ride = ride_floor(self.ride, floor, self.lifted, grounded, self.speed, dt);
         self.ride = Some(ride);
         let lag = (ride - floor) / SCALE;
         if self.footing.iter().all(|footing| footing.abs() < 1.0e-3) && lag.abs() < 1.0e-3 {
@@ -3060,6 +3072,7 @@ impl Avatar {
         self.squaring = going.strafing;
         self.look = going.look;
         self.speed = going.speed;
+        self.lifted = going.lifted;
         if self.skidding.is_some() || self.start_skid(graph, going) {
             if self.skid(graph, going, dt) {
                 return;
@@ -4343,6 +4356,25 @@ mod tests {
         let after = place(&[hips, chest], |bone| target[&bone]).rotation;
         assert_eq!(target[&hips].rotation, tilt);
         assert!(after.angle_to(&(turn * before)) < 1e-5);
+    }
+
+    #[test]
+    fn carried_up_or_down_standing_still_the_hips_keep_to_the_floor() {
+        let dt = 1.0 / 60.0;
+        for climb in [1.5, -1.5] {
+            let (mut floor, mut ride, mut riding) = (0.0, None, None);
+            for _ in 0..120 {
+                // Where the ferry has carried the floor since the frame before.
+                let lifted = if ride.is_some() { climb * dt } else { 0.0 };
+                floor += lifted;
+                ride = Some(ride_floor(ride, floor, lifted, true, 0.0, dt));
+                riding = Some(ride_floor(riding, floor, 0.0, true, 0.0, dt));
+            }
+            let (ride, riding) = (ride.unwrap(), riding.unwrap());
+            assert!((ride - floor).abs() < 1e-4, "{climb} m/s: {} off the floor", ride - floor);
+            // Taken for a flight of stairs, the floor runs away from the hips - a squat, going up.
+            assert!((riding - floor).abs() > 0.05, "{climb} m/s");
+        }
     }
 
     #[test]

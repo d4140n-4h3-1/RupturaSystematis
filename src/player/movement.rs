@@ -1,5 +1,6 @@
 //! Moving the body: speeding up and slowing down along the floor, jumping, stepping up stairs and
-//! down them on its feet, and feeling for the floor under the feet.
+//! down them on its feet, feeling for the floor under the feet, and being carried along by a floor
+//! that moves.
 
 use super::{posture::Posture, Player, FEET};
 use fyrox::{
@@ -85,6 +86,17 @@ fn fixed(graph: &Graph, collider: Handle<Collider>) -> bool {
         .is_ok_and(|body| body.body_type() == RigidBodyType::Static)
 }
 
+/// How fast `collider` goes, if it is a floor that moves by itself - a ferry (see
+/// [`crate::ferry`]) - and not a floor that stands still, or anyone's body.
+fn carrier(graph: &Graph, collider: Handle<Collider>) -> Option<Vector3<f32>> {
+    let body = graph[collider.transmute::<Node>()].parent();
+    graph
+        .try_get_of_type::<RigidBody>(body)
+        .ok()
+        .filter(|body| body.body_type() == RigidBodyType::KinematicVelocityBased)
+        .map(RigidBody::lin_vel)
+}
+
 impl Player {
     /// Whether the feet have something under them. A ray straight down from a little above them,
     /// reaching a little below: the body's own collider is passed over, so it can start inside it.
@@ -96,9 +108,11 @@ impl Player {
 
     /// Pushes the body the way the keys ask for this frame, and jumps if they ask for that.
     /// `forward` and `right` are the body's own. A droid's `skid` under way carries the body
-    /// instead, at its own speed, while the feet are on the ground. Returns how fast the body is
-    /// now travelling along the floor, whether it jumped, and whether the jump it is in turned
-    /// out to be a tap, and so a low one.
+    /// instead, at its own speed, while the feet are on the ground. All of it is on top of how
+    /// fast the floor goes, for a floor that moves: the body goes along with it, and keeps going
+    /// with it off its edge, in the air, until it lands on something else. Returns how fast the
+    /// body is now travelling along the floor, whether it jumped, and whether the jump it is in
+    /// turned out to be a tap, and so a low one.
     pub(super) fn drive(
         &mut self,
         graph: &mut Graph,
@@ -134,12 +148,20 @@ impl Player {
         // How far the floor is under its middle: nothing, standing on it; a step's height, its
         // middle out over the step below and its round bottom still on the edge.
         let feet = graph[self.body].global_position() + Vector3::new(0.0, FEET + GROUND_REACH, 0.0);
-        let gap = self
-            .first_hit(graph, feet, -Vector3::y(), GROUND_REACH * 2.0 + STEP_DOWN)
-            .map(|(down, _)| (down - GROUND_REACH).max(0.0));
+        let below = self.first_hit(graph, feet, -Vector3::y(), GROUND_REACH * 2.0 + STEP_DOWN);
+        let gap = below.map(|(down, _)| (down - GROUND_REACH).max(0.0));
+        // Everything below is as the floor sees it, which is what the legs push against: how
+        // fast the body went over the floor it was on, which takes it along however it speeds up
+        // or turns, and onto a floor it lands on.
+        let mut velocity = graph[self.body].lin_vel() - self.carried;
+        if self.grounded {
+            self.carried = below
+                .and_then(|(_, floor)| carrier(graph, floor))
+                .unwrap_or_default();
+        }
+        let carried = self.carried;
 
         let body = &mut graph[self.body];
-        let mut velocity = body.lin_vel();
         self.fall_speed = (-velocity.y).max(0.0);
         // Starting from what the body is actually doing, not from what it was asked for last
         // frame, so that a wall it has been pushed to a stop against has to be accelerated away
@@ -192,7 +214,7 @@ impl Player {
             self.jump_spent = true;
             self.since_jump = Some(0.0);
         }
-        body.set_lin_vel(velocity);
+        body.set_lin_vel(velocity + carried);
         if jumped {
             self.stepping = None;
             graph[self.body].set_gravity_scale(1.0);
@@ -417,6 +439,51 @@ mod tests {
         // Walking up at about 0.4 m/s, the eyes go up under a centimetre a frame; easing after
         // each step as it is lifted onto it, five the moment it is.
         assert!(jolt < 0.015, "up the stairs smoothly: {jolt} m in a frame");
+    }
+
+    /// The player standing on a 4 m square platform, its top at 0, moving at `velocity` for
+    /// `seconds`, jumping once if `jump`: how far the feet end up from the middle of its top.
+    fn ride(velocity: Vector3<f32>, seconds: f32, jump: bool) -> Vector3<f32> {
+        let mut graph = Graph::new();
+        let collider = ColliderBuilder::new(
+            BaseBuilder::new().with_local_transform(
+                TransformBuilder::new().with_local_position(Vector3::new(0.0, -0.25, 0.0)).build(),
+            ),
+        )
+        .with_shape(ColliderShape::cuboid(2.0, 0.25, 2.0))
+        .build(&mut graph);
+        let platform = RigidBodyBuilder::new(BaseBuilder::new().with_child(collider))
+            .with_body_type(RigidBodyType::KinematicVelocityBased)
+            .build(&mut graph);
+        let mut player = Player::spawn(&mut graph);
+        player.teleport(&mut graph, Vector3::new(0.0, -FEET + 0.01, 0.0), 0.0);
+        let dt = 1.0 / 60.0;
+        // Settled on it before it sets off.
+        for frame in 0..(seconds / dt) as usize + 30 {
+            if frame >= 30 {
+                graph[platform].set_lin_vel(velocity);
+            }
+            player.on_key(fyrox::keyboard::KeyCode::Space, jump && frame == 60);
+            player.update(&mut graph, dt, true);
+            graph.update(Vector2::new(800.0, 600.0), dt, GraphUpdateSwitches::default());
+        }
+        player.feet(&graph) - graph[platform].global_position()
+    }
+
+    #[test]
+    fn a_moving_floor_carries_the_player_along() {
+        for velocity in [Vector3::new(4.0, 0.0, 0.0), Vector3::new(-2.0, 1.5, 3.0), Vector3::new(0.0, -1.5, 2.0)] {
+            let off = ride(velocity, 3.0, false);
+            assert!(Vector3::new(off.x, 0.0, off.z).norm() < 0.1, "{velocity:?}: left behind by {off:?}");
+            assert!(off.y.abs() < 0.05, "{velocity:?}: not on it, {off:?}");
+        }
+    }
+
+    #[test]
+    fn a_jump_off_a_moving_floor_comes_down_on_it() {
+        let off = ride(Vector3::new(4.0, 0.0, 0.0), 3.0, true);
+        assert!(Vector3::new(off.x, 0.0, off.z).norm() < 0.2, "left behind by {off:?}");
+        assert!(off.y.abs() < 0.05, "not back on it: {off:?}");
     }
 
     #[test]

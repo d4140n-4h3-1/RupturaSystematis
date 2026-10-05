@@ -7,6 +7,7 @@
 
 use crate::{
     culling::Culling,
+    ferry::Ferries,
     fixtures::{self, Glow},
     generate::Maze,
     inward,
@@ -71,6 +72,8 @@ pub struct Level {
     pub grid: Option<(WalkGrid, Vector3<f32>)>,
     /// What of a random maze is drawn and lit: only what can be seen from where the player is.
     culling: Option<Culling>,
+    /// What of the level moves: see [`Ferries`].
+    pub ferries: Ferries,
 }
 
 impl Level {
@@ -159,6 +162,12 @@ impl Level {
         let panes = fixtures::glaze(&mut scene.graph, root, &mut glow);
         Log::info(format!("Maze: {panes} glass surfaces"));
         inward::make_double_sided(&mut scene.graph, root, doubled);
+        // Out of the level before its shape is taken, which they are no part of.
+        let (ferries, ferry_bodies) = if fixed {
+            Ferries::claim(&mut scene.graph, root)
+        } else {
+            Default::default()
+        };
         scene.graph.update_hierarchical_data();
 
         let meshes: Vec<GeometrySource> = scene
@@ -176,8 +185,10 @@ impl Level {
             .with_body_type(RigidBodyType::Static)
             .build(&mut scene.graph);
 
+        let mut nodes = vec![root, body.to_base()];
+        nodes.extend(ferry_bodies);
         Self {
-            nodes: vec![root, body.to_base()],
+            nodes,
             collider,
             fixtures,
             // A maze model's fixtures can sit close together and share a lamp; each tile's
@@ -189,6 +200,7 @@ impl Level {
             markers,
             grid: None,
             culling: None,
+            ferries,
         }
     }
 

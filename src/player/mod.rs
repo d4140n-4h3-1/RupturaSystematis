@@ -125,6 +125,9 @@ pub struct Player {
     grounded: bool,
     /// How fast the body was falling last frame, in meters per second, for the landing to read.
     fall_speed: f32,
+    /// How fast the floor it last stood on was going, in meters per second: nothing, unless that
+    /// was a ferry. The body moves along with it, on it and in the air off it.
+    carried: Vector3<f32>,
     /// Whether this press of Space has been jumped on already: it has to be let go to jump again.
     jump_spent: bool,
     /// How long ago the body pushed off, in seconds, while Space is still held from it and it
@@ -214,6 +217,7 @@ impl Default for Player {
             resting: false,
             grounded: false,
             fall_speed: 0.0,
+            carried: Vector3::zeros(),
             jump_spent: false,
             since_jump: None,
             stride: 0.0,
@@ -397,6 +401,7 @@ impl Player {
         self.stamina = 1.0;
         self.winded = false;
         self.fall_speed = 0.0;
+        self.carried = Vector3::zeros();
         self.since_jump = None;
         self.landing = 0.0;
         self.stepped = 0.0;
@@ -425,9 +430,11 @@ impl Player {
         // The body drops onto each step of its own weight, all at once; the eyes come down after
         // it over a moment, as they come up after it climbing - all the way down onto the step,
         // which reads as underfoot a little before the body is on it. Not after a fall.
+        // Not as the floor under it goes down, though, which the body rides down with.
         let height = graph[self.body].global_position().y;
-        if self.grounded && was_grounded && height < self.last_height {
-            self.stepped += height - self.last_height;
+        let dropped = height - self.last_height - self.carried.y * dt;
+        if self.grounded && was_grounded && dropped < 0.0 {
+            self.stepped += dropped;
         }
         self.last_height = height;
         // Landed: the knees take whatever the body was falling at as of last frame, since the
@@ -491,6 +498,7 @@ impl Player {
             peeking: self.cover_peek().is_some(),
             pushing,
             falling: self.fall_speed,
+            lifted: self.carried.y * dt,
             // In cover, the wall sets which way the droid faces.
             strafing: can_move && self.strafing() && !self.in_cover(),
             armed: self.armed,

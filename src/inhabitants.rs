@@ -1520,6 +1520,7 @@ impl Inhabitants {
                 jumped: false,
                 low: false,
                 falling: 0.0,
+                lifted: 0.0,
                 cover: None,
                 corner: false,
                 peeking: false,
