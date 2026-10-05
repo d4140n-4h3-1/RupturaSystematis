@@ -29,8 +29,9 @@
 //! On stairs, walking or running along them as it faces, it climbs or goes down them with its
 //! cycles made on stairs: a step at a time walking, two at a time at any faster gait, and only as
 //! fast as those go - a little faster hurrying. Each foot is still put down on the step under it,
-//! by however far that is from the step the cycle had there; and the hips come up or down a step
-//! after the floor, over a moment. Going over to them or back, the feet go by the steps under them in
+//! by however far that is from the step the cycle had there, staying on it as the body is lifted
+//! onto each step ahead of the feet; and the hips ride on the step under the lower foot - with the
+//! cycle as it climbs, over a moment as the other foot's step takes over. Going over to them or back, the feet go by the steps under them in
 //! the pose as far as it has gone over. Strafing any way but straight ahead, or crouched, it
 //! takes stairs in its own cycles, each foot put down on its step all the same.
 //!
@@ -332,6 +333,12 @@ const RIDE_PACE: f32 = 0.8;
 const LEAST_RIDE_PACE: f32 = 0.5;
 const RIDE_ABOVE: f32 = 0.1;
 const RIDE_BELOW: f32 = 0.3;
+/// On a cycle made on stairs, which climbs or goes down them by itself: how fast the floor the
+/// hips ride on may change and still be followed as it goes, in meters per second - faster than
+/// the cycles climb, slower than the change from one foot's step to the other's - and how quickly,
+/// like a rate, the hips come after a change any faster.
+const RIDE_CARRIED: f32 = 3.0;
+const RIDE_RATE: f32 = 15.0;
 /// The pistol in its right hand, which everything on it hangs off, as long as [`MOTION`] does not
 /// say otherwise.
 const PISTOL: &str = "pistol";
@@ -702,19 +709,40 @@ fn ground(stances: &[Stance]) -> f32 {
         .fold(f32::INFINITY, f32::min)
 }
 
-/// The floor the hips ride on this frame, from `ride`, last frame's, and `floor`, the one the
-/// droid stands on. Up or down a step, the hips come after the floor at a steady pace, quicker
-/// the faster it goes along - never far from it; off the ground, they keep to it. `lifted` is how
-/// far the floor itself carried it up since, a ferry's doing, which they go along with at once.
-fn ride_floor(ride: Option<f32>, floor: f32, lifted: f32, grounded: bool, speed: f32, dt: f32) -> f32 {
-    match ride.map(|ride| ride + lifted) {
-        Some(ride) if grounded && (floor - ride).abs() < MOST_STEP => {
-            let catch_up = (speed * RIDE_PACE).max(LEAST_RIDE_PACE) * dt;
-            let ride = ride + (floor - ride).clamp(-catch_up, catch_up);
-            ride.clamp(floor - RIDE_BELOW, floor + RIDE_ABOVE)
+/// The floor the hips ride on: where they are, and where they were going, in meters across the
+/// world.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Ride {
+    at: f32,
+    on: f32,
+}
+
+/// The floor the hips ride on this frame, from `ride`, last frame's, and `on`, where the feet
+/// need them. Up or down a step, the hips come after it at a steady pace, quicker the faster the
+/// droid goes along - never far from it; off the ground, they keep to it. `climbing` is for a
+/// cycle made on stairs, which has the hips climb or go down them by itself: they go along with
+/// where the feet need them as that changes, and come after it only where it changes all at once,
+/// as one foot's step takes over from the other's. `lifted` is how far the floor itself carried
+/// the droid up since, a ferry's doing, which they go along with at once.
+fn ride_floor(ride: Option<Ride>, on: f32, lifted: f32, grounded: bool, speed: f32, climbing: bool, dt: f32) -> Ride {
+    let at = match ride {
+        Some(ride) if grounded && (on - ride.at - lifted).abs() < MOST_STEP => {
+            let mut at = ride.at + lifted;
+            if climbing {
+                let change = on - ride.on - lifted;
+                if change.abs() <= RIDE_CARRIED * dt {
+                    at += change;
+                }
+                at += (on - at) * (1.0 - (-RIDE_RATE * dt).exp());
+            } else {
+                let catch_up = (speed * RIDE_PACE).max(LEAST_RIDE_PACE) * dt;
+                at += (on - at).clamp(-catch_up, catch_up);
+            }
+            at.clamp(on - RIDE_BELOW, on + RIDE_ABOVE)
         }
-        _ => floor,
-    }
+        _ => on,
+    };
+    Ride { at, on }
 }
 
 /// The bones from the droid's top down to the top of each leg and to each knee, left and right.
@@ -1478,9 +1506,11 @@ pub struct Avatar {
     speed: f32,
     /// How far the floor carried it up this frame, like [`Going::lifted`].
     lifted: f32,
-    /// The floor the hips ride on, in meters across the world: the floor it stands on, followed
-    /// up a step over a moment. None until it has stood on one.
-    ride: Option<f32>,
+    /// The floor the hips ride on: the step under the lower foot, followed up or down a step
+    /// over a moment (see [`ride_floor`]). None until it has stood on one.
+    ride: Option<Ride>,
+    /// The floor it stood on last frame, in meters across the world.
+    last_floor: Option<f32>,
     /// The hips at rest, in the model's own terms.
     rest_hips: Bone,
     /// The highest bones the animations move, each with where the bone it hangs off is in the
@@ -2311,6 +2341,7 @@ impl Avatar {
             speed: 0.0,
             lifted: 0.0,
             ride: None,
+            last_floor: None,
             rest_hips,
             tops,
             playing: None,
@@ -3029,6 +3060,15 @@ impl Avatar {
         // As of the last frame: the floor the droid stands on, and where its feet were over it.
         let floor = graph[self.root].global_position().y;
         let follow = 1.0 - (-FOOTING_RATE * dt).exp();
+        // Lifted onto a step, or dropping onto one, the body takes the feet with it: they stay on
+        // their steps, where they are across the world. Carried by the floor, they go with it.
+        let moved = self.last_floor.replace(floor).map_or(0.0, |last| floor - last - self.lifted);
+        if grounded && moved.abs() < MOST_STEP {
+            for footing in &mut self.footing {
+                *footing -= moved;
+            }
+        }
+        let mut lowest = 0.0_f32;
         for ((footing, chain), made_on) in self.footing.iter_mut().zip(&self.skeleton.feet).zip(made_on) {
             let wanted = match (grounded, chain.last()) {
                 (true, Some(&foot)) => {
@@ -3036,12 +3076,18 @@ impl Avatar {
                 }
                 _ => 0.0,
             };
+            lowest = lowest.min(wanted);
             *footing += (wanted - *footing) * follow;
         }
-        let ride = ride_floor(self.ride, floor, self.lifted, grounded, self.speed, dt);
+        // The hips go down as far as the lower foot needs: they ride on its step, where it is
+        // across the world - not on the body, which is lifted onto each step as it reaches it,
+        // a step or more ahead of the feet, and which the feet put back down on their steps
+        // already.
+        let climbing = self.stair_cycles.iter().any(|stair| Some(stair.index) == self.playing);
+        let ride = ride_floor(self.ride, floor + lowest, self.lifted, grounded, self.speed, climbing, dt);
         self.ride = Some(ride);
-        let lag = (ride - floor) / SCALE;
-        if self.footing.iter().all(|footing| footing.abs() < 1.0e-3) && lag.abs() < 1.0e-3 {
+        let drop = (ride.at - floor) / SCALE;
+        if self.footing.iter().all(|footing| footing.abs() < 1.0e-3) && drop.abs() < 1.0e-3 {
             return;
         }
         if self.skeleton.feet.iter().chain(&legs.thighs).chain(&legs.shins).flatten().any(|bone| !target.contains_key(bone)) {
@@ -3050,7 +3096,6 @@ impl Avatar {
         // In the model's own meters, which the root scales.
         let up = self.footing.map(|footing| footing / SCALE);
         let feet = self.skeleton.feet.each_ref().map(|chain| place(chain, |bone| target[&bone]));
-        let drop = up[0].min(up[1]).min(0.0) + lag;
         if let Some((&hips, above)) = self.skeleton.hips.split_last() {
             let parent = place(above, |bone| target[&bone]).rotation;
             if let Some(pose) = target.get_mut(&hips) {
@@ -4367,14 +4412,36 @@ mod tests {
                 // Where the ferry has carried the floor since the frame before.
                 let lifted = if ride.is_some() { climb * dt } else { 0.0 };
                 floor += lifted;
-                ride = Some(ride_floor(ride, floor, lifted, true, 0.0, dt));
-                riding = Some(ride_floor(riding, floor, 0.0, true, 0.0, dt));
+                ride = Some(ride_floor(ride, floor, lifted, true, 0.0, false, dt));
+                riding = Some(ride_floor(riding, floor, 0.0, true, 0.0, false, dt));
             }
-            let (ride, riding) = (ride.unwrap(), riding.unwrap());
+            let (ride, riding) = (ride.unwrap().at, riding.unwrap().at);
             assert!((ride - floor).abs() < 1e-4, "{climb} m/s: {} off the floor", ride - floor);
             // Taken for a flight of stairs, the floor runs away from the hips - a squat, going up.
             assert!((riding - floor).abs() > 0.05, "{climb} m/s");
         }
+    }
+
+    #[test]
+    fn climbing_stairs_in_their_cycle_the_hips_keep_up_and_ease_over_a_change_of_foot() {
+        let dt = 1.0 / 60.0;
+        // The step the feet need the hips on, rising as the cycle climbs at a jog, 1.3 m/s.
+        let (mut on, mut ride) = (0.0, None);
+        for _ in 0..30 {
+            on += 1.3 * dt;
+            ride = Some(ride_floor(ride, on, 0.0, true, 1.8, true, dt));
+        }
+        assert!((ride.unwrap().at - on).abs() < 1e-4, "kept up: {:?} for {on}", ride);
+        // The step under the other foot takes over, 0.2 m higher: eased over, not all at once,
+        // and most of the way there in a tenth of a second.
+        on += 0.2;
+        ride = Some(ride_floor(ride, on, 0.0, true, 1.8, true, dt));
+        let first = on - ride.unwrap().at;
+        assert!(first > 0.15, "all at once: {first} m short");
+        for _ in 0..6 {
+            ride = Some(ride_floor(ride, on, 0.0, true, 1.8, true, dt));
+        }
+        assert!(on - ride.unwrap().at < 0.05, "{} m short", on - ride.unwrap().at);
     }
 
     #[test]
