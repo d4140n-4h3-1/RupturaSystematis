@@ -339,6 +339,9 @@ const RIDE_BELOW: f32 = 0.3;
 /// like a rate, the hips come after a change any faster.
 const RIDE_CARRIED: f32 = 3.0;
 const RIDE_RATE: f32 = 15.0;
+/// How far up off the step under it, in meters, an ankle has gone from where it is standing on it
+/// to be swinging, carrying no weight.
+const PLANTED: f32 = 0.08;
 /// The pistol in its right hand, which everything on it hangs off, as long as [`MOTION`] does not
 /// say otherwise.
 const PISTOL: &str = "pistol";
@@ -1511,6 +1514,8 @@ pub struct Avatar {
     ride: Option<Ride>,
     /// The floor it stood on last frame, in meters across the world.
     last_floor: Option<f32>,
+    /// How high its ankles are standing at rest, in the model's own meters.
+    rest_ankle: f32,
     /// The hips at rest, in the model's own terms.
     rest_hips: Bone,
     /// The highest bones the animations move, each with where the bone it hangs off is in the
@@ -1826,6 +1831,7 @@ impl Avatar {
             .map(|bone| (bone, Bone::of(&graph[bone])))
             .collect::<FxHashMap<_, _>>();
         let rest_hips = place(&skeleton.hips, |bone| rest[&bone]);
+        let rest_ankle = place(&skeleton.feet[0], |bone| rest[&bone]).position.y;
         let find = |name: &str| graph.find_by_name(root, name).map(|(node, _)| node);
         let legs = (|| {
             let [left, right] = THIGHS.map(find);
@@ -2342,6 +2348,7 @@ impl Avatar {
             lifted: 0.0,
             ride: None,
             last_floor: None,
+            rest_ankle,
             rest_hips,
             tops,
             playing: None,
@@ -2421,9 +2428,13 @@ impl Avatar {
         if !along || self.stair_cycles.is_empty() {
             return None;
         }
+        // From the ground under it, not the body, which is lifted onto each step going up as it
+        // reaches it, a tread and more ahead of where it stands: from there the step a tread
+        // behind can be further down than a step is looked for, and the stairs read as going down.
         let at = graph[self.root].global_position();
+        let ground = at.y + step_under(graph, at, at.y);
         let ahead = self.ahead(graph) * STAIR_LOOK;
-        let rise = step_under(graph, at + ahead, at.y) - step_under(graph, at - ahead, at.y);
+        let rise = step_under(graph, at + ahead, ground) - step_under(graph, at - ahead, ground);
         let slope = rise / (2.0 * STAIR_LOOK);
         let steep = match self.stairs {
             Some(_) => STAIR_SLOPE.1,
@@ -3068,23 +3079,47 @@ impl Avatar {
                 *footing -= moved;
             }
         }
-        let mut lowest = 0.0_f32;
-        for ((footing, chain), made_on) in self.footing.iter_mut().zip(&self.skeleton.feet).zip(made_on) {
+        // How far each foot is planted, as the pose has it: 1 down on its step, 0 a little way up
+        // off it, swinging.
+        let planted: [f32; 2] = std::array::from_fn(|side| {
+            let chain = &self.skeleton.feet[side];
+            if !chain.iter().all(|bone| target.contains_key(bone)) {
+                return 0.0;
+            }
+            let lifted = (place(chain, |bone| target[&bone]).position.y - self.rest_ankle) * SCALE - made_on[side];
+            (1.0 - lifted / PLANTED).clamp(0.0, 1.0)
+        });
+        // The steps under the feet are looked for from the ground under the droid, not from the
+        // body, which is lifted onto each step ahead of the feet: a step under a swinging foot
+        // that was out of reach would come into reach all at once as it is, and the foot jump up.
+        let ground = floor + step_under(graph, graph[self.root].global_position(), floor);
+        let (mut on, mut weight) = (0.0, 0.0);
+        for (((footing, chain), made_on), planted) in
+            self.footing.iter_mut().zip(&self.skeleton.feet).zip(made_on).zip(planted)
+        {
             let wanted = match (grounded, chain.last()) {
                 (true, Some(&foot)) => {
-                    step_under(graph, graph[foot].global_position(), floor) - made_on
+                    ground + step_under(graph, graph[foot].global_position(), ground) - floor - made_on
                 }
                 _ => 0.0,
             };
-            lowest = lowest.min(wanted);
+            on += wanted * planted;
+            weight += planted;
             *footing += (wanted - *footing) * follow;
         }
-        // The hips go down as far as the lower foot needs: they ride on its step, where it is
-        // across the world - not on the body, which is lifted onto each step as it reaches it,
-        // a step or more ahead of the feet, and which the feet put back down on their steps
-        // already.
+        // The hips ride on the step under the foot they stand on, where it is across the world:
+        // not on the body, which is lifted onto each step as it reaches it, a step or more ahead
+        // of the feet, and which the feet put back down on their steps already; nor on the step a
+        // swinging foot is over, which changes all at once at each edge. Going from one foot to
+        // the other, from one step to the other as the weight goes over. With neither foot down,
+        // on the step they last stood on.
+        let on = if weight >= 0.05 {
+            floor + (on / weight).min(0.0)
+        } else {
+            self.ride.filter(|_| grounded).map_or(floor, |ride| ride.on + self.lifted)
+        };
         let climbing = self.stair_cycles.iter().any(|stair| Some(stair.index) == self.playing);
-        let ride = ride_floor(self.ride, floor + lowest, self.lifted, grounded, self.speed, climbing, dt);
+        let ride = ride_floor(self.ride, on, self.lifted, grounded, self.speed, climbing, dt);
         self.ride = Some(ride);
         let drop = (ride.at - floor) / SCALE;
         if self.footing.iter().all(|footing| footing.abs() < 1.0e-3) && drop.abs() < 1.0e-3 {

@@ -128,6 +128,8 @@ pub struct Player {
     /// How fast the floor it last stood on was going, in meters per second: nothing, unless that
     /// was a ferry. The body moves along with it, on it and in the air off it.
     carried: Vector3<f32>,
+    /// Whether it has stopped on its feet, and is held where it stopped (see `Player::drive`).
+    holding: bool,
     /// Whether this press of Space has been jumped on already: it has to be let go to jump again.
     jump_spent: bool,
     /// How long ago the body pushed off, in seconds, while Space is still held from it and it
@@ -218,6 +220,7 @@ impl Default for Player {
             grounded: false,
             fall_speed: 0.0,
             carried: Vector3::zeros(),
+            holding: false,
             jump_spent: false,
             since_jump: None,
             stride: 0.0,
@@ -402,6 +405,7 @@ impl Player {
         self.winded = false;
         self.fall_speed = 0.0;
         self.carried = Vector3::zeros();
+        self.holding = false;
         self.since_jump = None;
         self.landing = 0.0;
         self.stepped = 0.0;

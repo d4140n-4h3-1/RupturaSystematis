@@ -49,6 +49,10 @@ const ANKLE: f32 = 0.05;
 const OVER_STEP: f32 = 1.5;
 /// Below this speed along the floor, in meters per second, the body has stopped on the edge.
 const STOPPED: f32 = 0.05;
+/// How far up, at least, what the body touches has to push it - the up of the way it pushes,
+/// from 0 sideways to 1 straight up - for the body to rest on it: a floor, or the edge of a step
+/// under its round bottom, and not a wall.
+const RESTS_ON: f32 = 0.3;
 
 /// The share of the usual acceleration the player has in the air. Feet push against a floor, not
 /// against air; but a jump that cannot be steered at all feels like being on rails, so not zero.
@@ -106,6 +110,17 @@ impl Player {
         self.distance_to_hit(graph, feet, -Vector3::y(), reach) < reach
     }
 
+    /// Whether the bottom of the body rests on something: the floor under it, or the edge of a
+    /// step its round bottom sits on, which a ray straight down from its middle misses.
+    fn rests_on_something(&self, graph: &Graph) -> bool {
+        graph[self.collider].contacts(&graph.physics).any(|pair| {
+            // Each pair's normal points from its first collider to its second.
+            let toward = if pair.collider1 == self.collider { -1.0 } else { 1.0 };
+            pair.has_any_active_contact
+                && pair.manifolds.iter().any(|manifold| manifold.normal.y * toward > RESTS_ON)
+        })
+    }
+
     /// Pushes the body the way the keys ask for this frame, and jumps if they ask for that.
     /// `forward` and `right` are the body's own. A droid's `skid` under way carries the body
     /// instead, at its own speed, while the feet are on the ground. All of it is on top of how
@@ -160,6 +175,7 @@ impl Player {
                 .unwrap_or_default();
         }
         let carried = self.carried;
+        let resting = self.grounded && self.rests_on_something(graph);
 
         let body = &mut graph[self.body];
         self.fall_speed = (-velocity.y).max(0.0);
@@ -214,7 +230,24 @@ impl Player {
             self.jump_spent = true;
             self.since_jump = Some(0.0);
         }
+        // Stopped on its feet, it stays where it stopped, its weight off. Nothing holds it on the
+        // edge of a step: its round bottom would slide back off it, and its legs, braking, walk it
+        // back into the step and up onto it again, over and over.
+        let hold = resting
+            && !jumped
+            && skid.is_none()
+            && self.stepping.is_none()
+            && self.since_jump.is_none()
+            && target == Vector3::zeros()
+            && horizontal.norm() < STOPPED;
+        if hold {
+            velocity = Vector3::zeros();
+        }
         body.set_lin_vel(velocity + carried);
+        if hold != self.holding && self.stepping.is_none() {
+            body.set_gravity_scale(if hold { 0.0 } else { 1.0 });
+        }
+        self.holding = hold;
         if jumped {
             self.stepping = None;
             graph[self.body].set_gravity_scale(1.0);
@@ -484,6 +517,39 @@ mod tests {
         let off = ride(Vector3::new(4.0, 0.0, 0.0), 3.0, true);
         assert!(Vector3::new(off.x, 0.0, off.z).norm() < 0.2, "left behind by {off:?}");
         assert!(off.y.abs() < 0.05, "not back on it: {off:?}");
+    }
+
+    #[test]
+    fn stopped_on_the_stairs_it_stays_where_it_stopped() {
+        // Jogging up the flight from `it_walks_up_stairs`, stopping part way at points along a
+        // step or two.
+        for walk in [1.0, 1.05, 1.1, 1.15, 1.2, 1.25, 1.3, 1.35, 1.4] {
+            let mut graph = Graph::new();
+            block(&mut graph, Vector3::new(-5.0, -1.0, -5.0), Vector3::new(5.0, 0.0, 20.0));
+            for n in 0..12 {
+                let z = 1.0 + n as f32 * 0.35;
+                block(&mut graph, Vector3::new(-1.25, 0.0, z), Vector3::new(1.25, 0.25 * (n + 1) as f32, 20.0));
+            }
+            let mut player = Player::spawn(&mut graph);
+            player.teleport(&mut graph, Vector3::new(0.0, -FEET + 0.01, 0.0), 0.0);
+            crate::player::press(&mut player, fyrox::keyboard::KeyCode::CapsLock);
+            let dt = 1.0 / 60.0;
+            let mut stopped = None;
+            let mut furthest = 0.0_f32;
+            for frame in 0..((walk + 4.0) / dt) as usize {
+                let t = frame as f32 * dt;
+                player.on_key(fyrox::keyboard::KeyCode::KeyW, t < walk);
+                player.update(&mut graph, dt, true);
+                graph.update(Vector2::new(800.0, 600.0), dt, GraphUpdateSwitches::default());
+                // Once it has had a second to stop.
+                if t > walk + 1.0 {
+                    let at = *stopped.get_or_insert(player.feet(&graph));
+                    furthest = furthest.max(player.feet(&graph).metric_distance(&at));
+                }
+            }
+            assert!(player.feet(&graph).y > 0.2, "{walk} s: onto the stairs: {:?}", player.feet(&graph));
+            assert!(furthest < 0.01, "{walk} s: crept {furthest} m from where it stopped");
+        }
     }
 
     #[test]
