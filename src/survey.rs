@@ -5,8 +5,8 @@
 //!
 //! A cell's floor is the highest in it with headroom over it, under a ceiling, and room around:
 //! the ground, or a stair, or a floor up above. A cell holds one floor, so ground under a floor
-//! up above is left out. A level out in the open, with no ceiling over it, has its floors under
-//! the sky instead: a cell's floor there is the first surface down. Of those, the walkable cells are the ground and whatever can be climbed
+//! up above is left out. A level out in the open, with no ceiling over it, has the sky for its
+//! ceiling: a cell's floor there is the first surface down. Of those, the walkable cells are the ground and whatever can be climbed
 //! to from it a stair's step at a time ([`hydroxus_ai::grid::MAX_CLIMB`]) - not the tops of
 //! crates or walls, which no stairs lead up to.
 
@@ -60,11 +60,13 @@ pub fn survey(
     let depth = ((max.z - min.z) / CELL_SIZE).ceil() as usize;
     let mut grid = WalkGrid::new(width, depth, CELL_SIZE);
     let origin = Vector3::new(min.x, 0.0, min.z);
-    // Each cell's floor, if it has one.
+    // Each cell's floor, if it has one: looked for from over everything down to under it all,
+    // and never less far down than a meter under the ground.
+    let bottom = (min.y - 1.0).min(-1.0);
     let mut floors = vec![None; width * depth];
     for z in 0..depth {
         for x in 0..width {
-            floors[z * width + x] = top_floor(graph, maze, cell_center(origin, x, z), max.y + 1.0, open_sky);
+            floors[z * width + x] = top_floor(graph, maze, cell_center(origin, x, z), (max.y + 1.0, bottom), open_sky);
         }
     }
     // Out from the ground, onto every floor a step from one already walkable.
@@ -171,15 +173,15 @@ pub fn draw_map(grid: &WalkGrid, start: (usize, usize), exit: (usize, usize)) ->
 }
 
 /// How high the highest floor at `spot` is that has headroom over it, under a ceiling, with room
-/// around: a ray is dropped from `top`, over everything, through all of the maze, surface by
+/// around: a ray is dropped from `top`, over everything, down to `bottom`, under everything, through all of the maze, surface by
 /// surface - a cast meets only the first surface of a collider - and the floor is the first it
-/// meets with [`HEADROOM`] or more of open air above it. Under `open_sky`, failing that, the
-/// first surface the ray meets is the floor, with all the sky over it.
+/// meets with [`HEADROOM`] or more of open air above it. Under `open_sky`, the sky is the
+/// ceiling.
 fn top_floor(
     graph: &Graph,
     maze: Handle<Collider>,
     spot: Vector3<f32>,
-    top: f32,
+    (top, bottom): (f32, f32),
     open_sky: bool,
 ) -> Option<f32> {
     /// Below a surface, to cast on from past it; and the most surfaces a cell is looked through.
@@ -189,7 +191,7 @@ fn top_floor(
     let mut from = top;
     while heights.len() < MOST {
         let below = Vector3::new(spot.x, from, spot.z);
-        let Some((hit, collider)) = first_hit(graph, below, -Vector3::y(), from + 1.0) else {
+        let Some((hit, collider)) = first_hit(graph, below, -Vector3::y(), from - bottom) else {
             break;
         };
         if collider == maze {
@@ -206,15 +208,17 @@ fn top_floor(
 }
 
 /// The floor among `heights`, the surfaces a ray dropped from over everything meets, top down:
-/// the first with [`HEADROOM`] over it. The first surface down is the top of the roof, with open
-/// sky over it - or, under `open_sky`, with no roof, the floor, unless something hangs over it
-/// with headroom under, a lamp, say.
+/// the first with [`HEADROOM`] under the surface over it. That is never the first surface down,
+/// the top of the roof, which has nothing over it - unless the level is under `open_sky`, with no
+/// roof, when the sky is the ceiling and the first surface down is the floor. Only the gap under
+/// a ceiling is sure to be open air: the gaps further down may be the inside of something solid.
 fn floor_of(heights: &[f32], open_sky: bool) -> Option<f32> {
+    let sky = open_sky.then_some(f32::INFINITY);
+    let heights: Vec<f32> = sky.into_iter().chain(heights.iter().copied()).collect();
     heights
         .windows(2)
         .find(|pair| pair[0] - pair[1] >= HEADROOM)
         .map(|pair| pair[1])
-        .or_else(|| heights.first().copied().filter(|_| open_sky))
 }
 
 fn first_hit(
@@ -246,7 +250,6 @@ mod tests {
         // roof top, roof underside, floor, floor underside
         let hall = [7.3, 7.0, 0.0, -0.2];
         assert_eq!(floor_of(&hall, false), Some(0.0));
-        assert_eq!(floor_of(&hall, true), Some(0.0), "the open sky changes nothing under a roof");
     }
 
     #[test]
@@ -259,10 +262,11 @@ mod tests {
     }
 
     #[test]
-    fn a_street_light_over_the_floor_is_not_it() {
-        // the head's top and glass, then the walkway under it
-        let under_a_lamp = [4.65, 4.36, 0.0, -1.0];
-        assert_eq!(floor_of(&under_a_lamp, true), Some(0.0));
+    fn in_the_open_something_solid_is_floored_on_top() {
+        // a tower standing over the void, and a platform over the rock hanging under it: the
+        // gaps below their tops are the inside of them, and the void under them
+        assert_eq!(floor_of(&[3.0, -1.0], true), Some(3.0));
+        assert_eq!(floor_of(&[0.0, -1.0, -15.0], true), Some(0.0));
     }
 
     #[test]
