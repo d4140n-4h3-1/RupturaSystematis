@@ -12,29 +12,49 @@
 use fyrox::core::algebra::Vector3;
 
 /// A map it can be played on: what the main menu calls it, its model, and a line about it.
+/// `void` is for one in open space, with nothing under it: no floor catches whoever goes over an
+/// edge, and the sky is [`VOID_SKY`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Map {
     pub name: &'static str,
     pub path: &'static str,
     pub about: &'static str,
+    pub void: bool,
+}
+
+/// The sky round a map in the void, each face of it.
+pub const VOID_SKY: &str = "data/skybox.png";
+
+/// The map whose model is at `path`, if one is.
+pub fn map_at(path: &str) -> Option<&'static Map> {
+    MAPS.iter().find(|map| map.path == path)
 }
 
 /// The maps it can be played on, picked from in the main menu.
-pub const MAPS: [Map; 3] = [
+pub const MAPS: [Map; 4] = [
     Map {
         name: "Lanes",
         path: "data/arena/ctf_map.glb",
         about: "Walled bases joined by three lanes, all on one floor.",
+        void: false,
     },
     Map {
         name: "Balconies",
         path: "data/arena/ctf_balconies.glb",
         about: "Two floors: each flag in a well under a balcony, catwalks along the walls, a raised hub.",
+        void: false,
     },
     Map {
         name: "Hybrid",
         path: "data/arena/ctf_hybrid.glb",
         about: "The walled bases and lanes of Lanes, the two floors of Balconies, and a maze in the middle.",
+        void: false,
+    },
+    Map {
+        name: "Void",
+        path: "data/arena/ctf_void.glb",
+        about: "Platforms in the void, joined by bridges, lit by street lights. Mind the edges.",
+        void: true,
     },
 ];
 
@@ -107,6 +127,7 @@ mod tests {
         for map in MAPS {
             assert!(dir.join(map.path).is_file(), "{} has no model at {}", map.name, map.path);
         }
+        assert!(dir.join(VOID_SKY).is_file(), "no sky for the void at {VOID_SKY}");
     }
 
     #[test]

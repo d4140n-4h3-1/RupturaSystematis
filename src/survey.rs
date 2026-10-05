@@ -5,7 +5,8 @@
 //!
 //! A cell's floor is the highest in it with headroom over it, under a ceiling, and room around:
 //! the ground, or a stair, or a floor up above. A cell holds one floor, so ground under a floor
-//! up above is left out. Of those, the walkable cells are the ground and whatever can be climbed
+//! up above is left out. A level out in the open, with no ceiling over it, has its floors under
+//! the sky instead: a cell's floor there is the first surface down. Of those, the walkable cells are the ground and whatever can be climbed
 //! to from it a stair's step at a time ([`hydroxus_ai::grid::MAX_CLIMB`]) - not the tops of
 //! crates or walls, which no stairs lead up to.
 
@@ -35,11 +36,12 @@ const GROUND: f32 = 0.5;
 
 /// Samples the maze for walkable ground, returning the grid and the world position of its corner.
 /// `maze` is the level's collider, which must exist already, and `ignore` a mesh that is not part
-/// of the maze.
+/// of the maze. `open_sky` is for a level with no ceiling over it.
 pub fn survey(
     graph: &Graph,
     maze: Handle<Collider>,
     ignore: Handle<Node>,
+    open_sky: bool,
 ) -> Option<(WalkGrid, Vector3<f32>)> {
     // The footprint of every mesh in the scene is the footprint of the maze.
     let mut min = Vector3::repeat(f32::MAX);
@@ -62,7 +64,7 @@ pub fn survey(
     let mut floors = vec![None; width * depth];
     for z in 0..depth {
         for x in 0..width {
-            floors[z * width + x] = top_floor(graph, maze, cell_center(origin, x, z), max.y + 1.0);
+            floors[z * width + x] = top_floor(graph, maze, cell_center(origin, x, z), max.y + 1.0, open_sky);
         }
     }
     // Out from the ground, onto every floor a step from one already walkable.
@@ -171,8 +173,15 @@ pub fn draw_map(grid: &WalkGrid, start: (usize, usize), exit: (usize, usize)) ->
 /// How high the highest floor at `spot` is that has headroom over it, under a ceiling, with room
 /// around: a ray is dropped from `top`, over everything, through all of the maze, surface by
 /// surface - a cast meets only the first surface of a collider - and the floor is the first it
-/// meets with [`HEADROOM`] or more of open air above it.
-fn top_floor(graph: &Graph, maze: Handle<Collider>, spot: Vector3<f32>, top: f32) -> Option<f32> {
+/// meets with [`HEADROOM`] or more of open air above it. Under `open_sky`, failing that, the
+/// first surface the ray meets is the floor, with all the sky over it.
+fn top_floor(
+    graph: &Graph,
+    maze: Handle<Collider>,
+    spot: Vector3<f32>,
+    top: f32,
+    open_sky: bool,
+) -> Option<f32> {
     /// Below a surface, to cast on from past it; and the most surfaces a cell is looked through.
     const PAST: f32 = 0.01;
     const MOST: usize = 32;
@@ -188,16 +197,24 @@ fn top_floor(graph: &Graph, maze: Handle<Collider>, spot: Vector3<f32>, top: f32
         }
         from = hit.y - PAST;
     }
-    // The first surface down is the top of the roof, with open sky over it.
-    let floor = heights
-        .windows(2)
-        .find(|pair| pair[0] - pair[1] >= HEADROOM)
-        .map(|pair| pair[1])?;
+    let floor = floor_of(&heights, open_sky)?;
     let chest = Vector3::new(spot.x, floor + 1.0, spot.z);
     [Vector3::x(), -Vector3::x(), Vector3::z(), -Vector3::z()]
         .iter()
         .all(|dir| first_hit(graph, chest, *dir, 0.45).is_none())
         .then_some(floor)
+}
+
+/// The floor among `heights`, the surfaces a ray dropped from over everything meets, top down:
+/// the first with [`HEADROOM`] over it. The first surface down is the top of the roof, with open
+/// sky over it - or, under `open_sky`, with no roof, the floor, unless something hangs over it
+/// with headroom under, a lamp, say.
+fn floor_of(heights: &[f32], open_sky: bool) -> Option<f32> {
+    heights
+        .windows(2)
+        .find(|pair| pair[0] - pair[1] >= HEADROOM)
+        .map(|pair| pair[1])
+        .or_else(|| heights.first().copied().filter(|_| open_sky))
 }
 
 fn first_hit(
@@ -218,4 +235,38 @@ fn first_hit(
         &mut hits,
     );
     hits.first().map(|hit| (hit.position.coords, hit.collider))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_floor_under_a_roof_is_the_one_with_headroom() {
+        // roof top, roof underside, floor, floor underside
+        let hall = [7.3, 7.0, 0.0, -0.2];
+        assert_eq!(floor_of(&hall, false), Some(0.0));
+        assert_eq!(floor_of(&hall, true), Some(0.0), "the open sky changes nothing under a roof");
+    }
+
+    #[test]
+    fn in_the_open_the_floor_is_the_first_surface_down() {
+        let platform = [0.0, -1.0];
+        assert_eq!(floor_of(&platform, false), None, "with no roof, no floor");
+        assert_eq!(floor_of(&platform, true), Some(0.0));
+        let hub = [1.5, 0.0, -1.0];
+        assert_eq!(floor_of(&hub, true), Some(1.5));
+    }
+
+    #[test]
+    fn a_street_light_over_the_floor_is_not_it() {
+        // the head's top and glass, then the walkway under it
+        let under_a_lamp = [4.65, 4.36, 0.0, -1.0];
+        assert_eq!(floor_of(&under_a_lamp, true), Some(0.0));
+    }
+
+    #[test]
+    fn nothing_under_the_void_is_a_floor() {
+        assert_eq!(floor_of(&[], true), None);
+    }
 }

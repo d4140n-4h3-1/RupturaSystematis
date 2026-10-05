@@ -193,9 +193,10 @@ impl Level {
     }
 
     /// Finishes readying the level once its colliders exist: surveys it for walkable ground and
-    /// hangs its lamps. `ignore` is a mesh in the scene that is not part of the maze.
-    pub fn finish(&mut self, graph: &mut Graph, ignore: Handle<Node>) {
-        self.grid = survey::survey(graph, self.collider, ignore);
+    /// hangs its lamps. `ignore` is a mesh in the scene that is not part of the maze, and
+    /// `open_sky` is for a level with no ceiling over it.
+    pub fn finish(&mut self, graph: &mut Graph, ignore: Handle<Node>, open_sky: bool) {
+        self.grid = survey::survey(graph, self.collider, ignore, open_sky);
         let fixtures = std::mem::take(&mut self.fixtures);
         let lamps = fixtures::place_lamps(graph, &fixtures, self.lamp_sharing);
         if let Some(culling) = self.culling.as_mut() {

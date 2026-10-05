@@ -11,7 +11,7 @@ use fyrox::{
 use crate::{
     credits::Credits,
     computer::{self, Beeps, Computer, ScreenTerminal, Terminal, COMPUTER_MODEL},
-    ctf::{Bases, Side, MAPS, PLAYERS},
+    ctf::{self, Bases, Side, MAPS, PLAYERS},
     firewall::{self, Firewalls},
     drone::{self, Drone, DroneLines, State, Target, DRONE_LINES, DRONE_MODEL},
     drone_shot::{Shots, SHOT_MODEL},
@@ -57,7 +57,10 @@ use fyrox::{
     keyboard::{KeyCode, PhysicalKey},
     material::{Material, MaterialResource},
     plugin::{error::GameResult, Plugin, PluginContext},
-    resource::model::{Model, ModelResource},
+    resource::{
+        model::{Model, ModelResource},
+        texture::{Texture, TextureResource},
+    },
     scene::{
         base::BaseBuilder,
         collider::{ColliderBuilder, ColliderShape},
@@ -69,6 +72,7 @@ use fyrox::{
         },
         node::Node,
         rigidbody::{RigidBodyBuilder, RigidBodyType},
+        skybox::{SkyBoxBuilder, SkyBoxKind},
         sound::{Sound, SoundBuilder, Status as SoundStatus},
         transform::TransformBuilder,
         EnvironmentLightingSource, Scene,
@@ -110,6 +114,12 @@ const EXIT_NOT_FAR: f32 = 60.0;
 const DARK_AMBIENT: Color = Color::opaque(3, 3, 5);
 /// How long the player is shown they were deleted before the next maze, in seconds.
 const DELETED_FOR: f32 = 4.0;
+/// How high the floor under everything is: a little below the level's own, or, in the void, far
+/// enough down to be out of sight, where it catches only what falls - the limp and the loose.
+const UNDER_FLOOR: f32 = -0.55;
+const VOID_FLOOR: f32 = -60.0;
+/// How far below the ground the player can fall before the void has them.
+const VOID_DEPTH: f32 = -12.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum Phase {
@@ -247,6 +257,12 @@ pub struct MazeGame {
     inhabitants: Inhabitants,
     exit: Handle<Node>,
     sun: Handle<Node>,
+    /// The floor under everything (see [`UNDER_FLOOR`]).
+    under_floor: Handle<Node>,
+    /// The sky of the map being loaded, if it has one of its own (see [`ctf::Map::void`]).
+    #[visit(skip)]
+    #[reflect(hidden)]
+    sky: Option<TextureResource>,
     /// Whether the player has switched the maze's lights off, leaving the flashlight to see by.
     /// It stays that way from one maze to the next.
     lights_off: bool,
@@ -533,18 +549,21 @@ impl MazeGame {
         // A floor under everything, in case a level leaves gaps at ground level. It sits a little
         // below the level's own floor: level with it, rays dropped onto the floor would hit this
         // one as often as the level's, and the survey would find no floor that is the maze's.
-        let floor = ColliderBuilder::new(
-            BaseBuilder::new().with_local_transform(
-                TransformBuilder::new()
-                    .with_local_position(Vector3::new(0.0, -0.55, 0.0))
-                    .build(),
-            ),
-        )
-        .with_shape(ColliderShape::cuboid(500.0, 0.5, 500.0))
-        .build(&mut scene.graph);
-        RigidBodyBuilder::new(BaseBuilder::new().with_child(floor))
-            .with_body_type(RigidBodyType::Static)
+        let floor = ColliderBuilder::new(BaseBuilder::new())
+            .with_shape(ColliderShape::cuboid(500.0, 0.5, 500.0))
             .build(&mut scene.graph);
+        self.under_floor = RigidBodyBuilder::new(
+            BaseBuilder::new()
+                .with_local_transform(
+                    TransformBuilder::new()
+                        .with_local_position(Vector3::new(0.0, UNDER_FLOOR, 0.0))
+                        .build(),
+                )
+                .with_child(floor),
+        )
+        .with_body_type(RigidBodyType::Static)
+        .build(&mut scene.graph)
+        .to_base();
 
         self.player = Player::spawn(&mut scene.graph);
         self.scene = ctx.scenes.add(scene);
@@ -567,6 +586,9 @@ impl MazeGame {
         match model {
             Some(path) => {
                 self.model = Some(resources.request::<Model>(&path));
+                self.sky = ctf::map_at(&path)
+                    .filter(|map| map.void)
+                    .map(|_| resources.request::<Texture>(ctf::VOID_SKY));
                 self.firewalls = Firewalls::request(resources);
                 self.model_path = path;
             }
@@ -576,6 +598,32 @@ impl MazeGame {
         self.main_menu.set_open(ctx.user_interfaces.first(), false);
         self.phase = Phase::Loading;
         self.want_mouse = true;
+    }
+
+    /// Whether the level is out in the void (see [`ctf::Map::void`]).
+    fn in_void(&self) -> bool {
+        ctf::map_at(&self.model_path).is_some_and(|map| map.void)
+    }
+
+    /// Puts round the level the sky it has, and the floor under it: a map in the void has a sky
+    /// of its own and nothing close under it; any other the engine's sky and a floor just below.
+    fn set_surroundings(&mut self, scene: &mut Scene) {
+        let sky = self.sky.take().and_then(|texture| {
+            if !texture.is_ok() {
+                Log::err(format!("Could not load {}; using the usual sky", ctf::VOID_SKY));
+                return None;
+            }
+            SkyBoxBuilder::from_texture(&texture)
+                .build()
+                .inspect_err(|error| Log::err(format!("No sky from {}: {error:?}", ctf::VOID_SKY)))
+                .ok()
+        });
+        let void = self.in_void();
+        scene.set_skybox(Some(sky.unwrap_or_else(|| SkyBoxKind::built_in_skybox().clone())));
+        let depth = if void { VOID_FLOOR } else { UNDER_FLOOR };
+        scene.graph[self.under_floor]
+            .local_transform_mut()
+            .set_position(Vector3::new(0.0, depth, 0.0));
     }
 
     /// Leaves the game under way for the main menu: everything in it is taken out, and the
@@ -2574,7 +2622,11 @@ impl Plugin for MazeGame {
                     Log::err(&text);
                     self.set_banner(ctx, &text);
                     self.phase = Phase::Broken;
-                } else if !models.is_empty() && models.iter().all(|(_, m)| m.is_ok()) {
+                } else if !models.is_empty()
+                    && models.iter().all(|(_, m)| m.is_ok())
+                    && self.sky.as_ref().is_none_or(|sky| !sky.is_loading())
+                {
+                    self.set_surroundings(&mut ctx.scenes[self.scene]);
                     match self.place_level(&mut ctx.scenes[self.scene]) {
                         Ok(()) => self.phase = Phase::Settling(2),
                         Err(error) => {
@@ -2592,7 +2644,7 @@ impl Plugin for MazeGame {
                 } else {
                     let graph = &mut ctx.scenes[self.scene].graph;
                     let exit_mesh = self.exit_mesh(graph);
-                    self.level.finish(graph, exit_mesh);
+                    self.level.finish(graph, exit_mesh, self.in_void());
                     // A new level's lamps start out on; they follow the player's choice.
                     self.apply_lights(ctx);
                     self.start_round(ctx);
@@ -2613,11 +2665,16 @@ impl Plugin for MazeGame {
                     ctx.dt,
                     self.focused && !talking && !self.hacking,
                 );
+                // Over an edge and down into the void.
+                if self.player.feet(&scene.graph).y < VOID_DEPTH {
+                    self.delete_player(ctx, "the void");
+                }
                 self.land_shots(ctx);
                 if !talking {
                     self.threaten(ctx);
                 }
-                if !self.move_inhabitants(ctx) {
+                // Not won from the void, however close under the flag they fall.
+                if !self.move_inhabitants(ctx) && self.phase == Phase::Playing {
                     let scene = &mut ctx.scenes[self.scene];
                     let exit = scene.graph[self.exit].global_position();
                     let player = self.player.position(&scene.graph);
