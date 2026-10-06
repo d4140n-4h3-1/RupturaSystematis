@@ -179,6 +179,8 @@ pub enum Game {
     Maze,
     /// Capture the flag, on the map of [`MAPS`] at this index.
     CaptureTheFlag(usize),
+    /// Battle royale: everyone against everyone in the town, the last one standing winning.
+    BattleRoyale,
 }
 
 /// What the player picked in the main menu.
@@ -198,6 +200,7 @@ pub struct MainMenu {
     screen: Handle<Screen>,
     maze: Handle<Button>,
     ctf: Handle<Button>,
+    royale: Handle<Button>,
     quit: Handle<Button>,
     /// The menu's own page, and the maps'.
     main_page: Handle<UiNode>,
@@ -215,8 +218,9 @@ impl MainMenu {
         let heading = title(ctx, "Ruptura Systematis");
         let maze_button = button(ctx, "Maze");
         let ctf_button = button(ctx, "Capture the Flag");
+        let royale_button = button(ctx, "Battle Royale");
         let quit_button = button(ctx, "Quit");
-        let ((maze, _), (ctf, _), (quit, _)) = (maze_button, ctf_button, quit_button);
+        let ((maze, _), (ctf, _), (royale, _), (quit, _)) = (maze_button, ctf_button, royale_button, quit_button);
         let about = TextBuilder::new(
             WidgetBuilder::new()
                 .with_margin(Thickness::top(24.0))
@@ -225,12 +229,14 @@ impl MainMenu {
         .with_text(
             "Maze: find the way out of a new maze each round.\n\
              Capture the Flag: hack red's firewall, take their flag and bring it home,\n\
-             with blue's droids and drone on your side, on the map of your choice.",
+             with blue's droids and drone on your side, on the map of your choice.\n\
+             Battle Royale: everyone against everyone in a town, inside a closing ring;\n\
+             the last one standing wins.",
         )
         .with_font_size(16.0.into())
         .with_horizontal_text_alignment(HorizontalAlignment::Center)
         .build(ctx);
-        let items = [heading.to_base(), maze.to_base(), ctf.to_base(), quit.to_base(), about.to_base()];
+        let items = [heading.to_base(), maze.to_base(), ctf.to_base(), royale.to_base(), quit.to_base(), about.to_base()];
         let main_page = page(ctx, true, items);
         let maps_title = title(ctx, "Capture the Flag");
         let map_buttons: Vec<_> = MAPS.iter().map(|map| button(ctx, map.name)).collect();
@@ -264,6 +270,7 @@ impl MainMenu {
             screen,
             maze,
             ctf,
+            royale,
             quit,
             main_page,
             maps_page,
@@ -271,7 +278,7 @@ impl MainMenu {
             back,
             picking: Picking {
                 pages: vec![
-                    vec![maze_button, ctf_button, quit_button],
+                    vec![maze_button, ctf_button, royale_button, quit_button],
                     map_buttons.into_iter().chain([back_button]).collect(),
                 ],
                 ..Picking::default()
@@ -311,6 +318,7 @@ impl MainMenu {
         [
             (self.maze, Start::Play(Game::Maze)),
             (self.ctf, Start::Maps),
+            (self.royale, Start::Play(Game::BattleRoyale)),
             (self.back, Start::Back),
             (self.quit, Start::Quit),
         ]
@@ -615,6 +623,7 @@ mod tests {
         assert_eq!(menu.choice(&click(menu.ctf)), Some(Start::Maps));
         assert_eq!(menu.choice(&click(menu.back)), Some(Start::Back));
         assert_eq!(menu.choice(&click(menu.maze)), Some(Start::Play(Game::Maze)));
+        assert_eq!(menu.choice(&click(menu.royale)), Some(Start::Play(Game::BattleRoyale)));
         for (n, &map) in menu.maps.iter().enumerate() {
             assert_eq!(menu.choice(&click(map)), Some(Start::Play(Game::CaptureTheFlag(n))));
         }

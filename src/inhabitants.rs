@@ -530,6 +530,9 @@ pub struct Inhabitants {
     alarmed: Vec<usize>,
     /// Whether they have been put into this round's maze yet.
     populated: bool,
+    /// In battle royale, the ring everyone has to keep inside: its middle and how far it reaches,
+    /// in meters (see [`crate::royale`]).
+    ring: Option<(Vector3<f32>, f32)>,
     /// Where the player could be, since they were last seen, shared by everyone searching for
     /// them (see [`hydroxus_ai::search`]); and where and which way they were going when last seen,
     /// while a droid after them can see them.
@@ -1006,6 +1009,102 @@ impl Inhabitants {
         Log::info(format!("Capture the flag: {} droids", self.droids.len()));
     }
 
+    /// Puts `count` droids into `scene` for battle royale, each on a side of its own - side
+    /// `Lone(1)` and on - one at each of `spots` (where, and which way it faces), on the floor of
+    /// `grid` whose corner is at `origin`. Each is the kind of droid of `liveries` its number
+    /// says, round them all in turn, and watches for everyone from the start.
+    pub fn populate_lone(
+        &mut self,
+        scene: &mut Scene,
+        liveries: Vec<Livery>,
+        (grid, origin): (&WalkGrid, Vector3<f32>),
+        spots: &[(Vector3<f32>, f32)],
+        rng: &mut Rng,
+    ) {
+        self.clear(&mut scene.graph);
+        self.populated = true;
+        self.liveries = liveries;
+        if self.liveries.is_empty() {
+            return;
+        }
+        ragdoll::prepare(&mut scene.graph);
+        for (n, &(at, heading)) in spots.iter().enumerate() {
+            let side = Side::Lone(n as u8 + 1);
+            if !self.spawn_lone((grid, origin), scene, side, at, heading, rng) {
+                break;
+            }
+        }
+        Log::info(format!("Battle royale: {} droids", self.droids.len()));
+    }
+
+    /// Puts one droid of `side` into `scene` for battle royale, at `at` on the floor of `grid`,
+    /// facing `heading`, watching for everyone: a new one, for a side whose droid went down and
+    /// has a life left, while the old one lies where it fell. Whether it could.
+    pub fn spawn_lone(
+        &mut self,
+        (grid, origin): (&WalkGrid, Vector3<f32>),
+        scene: &mut Scene,
+        side: Side,
+        at: Vector3<f32>,
+        heading: f32,
+        rng: &mut Rng,
+    ) -> bool {
+        if self.liveries.is_empty() {
+            return false;
+        }
+        let feet = spot_near((grid, origin), at, SPAWN_REACH, rng).unwrap_or(at);
+        let number = match side {
+            Side::Lone(n) => n as usize,
+            _ => 0,
+        };
+        let character = number % self.liveries.len();
+        if !self.spawn_one(scene, feet, heading, between(rng, (0.5, 2.0)), character, rng) {
+            return false;
+        }
+        let droid = self.droids.last_mut().expect("just put down");
+        droid.side = Some(side);
+        droid.alert = Some(Alert::Caution);
+        droid.search_left = CAUTION;
+        true
+    }
+
+    /// The sides that have a droid standing, in battle royale.
+    pub fn sides_standing(&self) -> Vec<Side> {
+        let mut sides: Vec<Side> = self.droids.iter().filter(|droid| !droid.down).filter_map(|droid| droid.side).collect();
+        sides.dedup();
+        sides
+    }
+
+    /// In battle royale, the ring everyone has to keep inside: its middle, and how far it reaches.
+    pub fn set_ring(&mut self, ring: Option<(Vector3<f32>, f32)>) {
+        self.ring = ring;
+    }
+
+    /// The droids standing outside `ring`, its middle and reach, as which they are.
+    pub fn outside(&self, (middle, reach): (Vector3<f32>, f32)) -> Vec<usize> {
+        self.droids
+            .iter()
+            .enumerate()
+            .filter(|(_, droid)| !droid.down && flat(droid.feet - middle).norm() > reach)
+            .map(|(n, _)| n)
+            .collect()
+    }
+
+    /// Hurts the `n`th droid as a bolt would, but from nowhere and with no knock: the ring's
+    /// doing. Whether it went down.
+    pub fn hurt(&mut self, graph: &mut Graph, n: usize) -> bool {
+        let Some(droid) = self.droids.get(n).filter(|droid| !droid.down) else {
+            return false;
+        };
+        let strike = Strike {
+            collider: droid.collider,
+            at: droid.feet + Vector3::new(0.0, CHEST, 0.0),
+            way: -Vector3::y(),
+        };
+        let feet = droid.feet;
+        self.shot(graph, strike, feet) == Some(n)
+    }
+
     /// Has the `n`th droid speak to the player for `seconds`: it turns its head to them, as far
     /// as a head turns, without turning round.
     pub fn speak_to_player(&mut self, n: usize, seconds: f32) {
@@ -1093,8 +1192,8 @@ impl Inhabitants {
                     return (None, false);
                 };
                 let enemy = |foe: Foe| match foe {
-                    Foe::Droid(n) => !self.droids[n].down && self.droids[n].side == Some(side.other()),
-                    Foe::Rival(body) => rivals.iter().any(|r| r.collider == body && r.side == side.other()),
+                    Foe::Droid(n) => !self.droids[n].down && self.droids[n].side.is_some_and(|them| side.against(them)),
+                    Foe::Rival(body) => rivals.iter().any(|r| r.collider == body && side.against(r.side)),
                 };
                 let candidates = (0..self.droids.len())
                     .map(Foe::Droid)
@@ -1276,6 +1375,15 @@ impl Inhabitants {
                 };
                 droid.enter(me, next, &mut alerts);
             }
+            // In battle royale, going about its business, it gives up on anywhere outside the
+            // ring, for somewhere inside it.
+            if let Some((middle, reach)) = self.ring.filter(|_| droid.alert != Some(Alert::Alert) && droid.foe.is_none()) {
+                let out = |at: Vector3<f32>| flat(at - middle).norm() > reach;
+                if droid.trip.is_none() && droid.route.first().map_or(out(droid.feet), |&end| out(end)) {
+                    droid.route.clear();
+                    droid.resting = 0.0;
+                }
+            }
             // Taking a ferry, it does as the trip says until it is across, whatever else it is
             // about: on its way to the ferry, it still works out its way again as it goes.
             let mut on_trip = false;
@@ -1414,7 +1522,13 @@ impl Inhabitants {
                         Some(post) => spot_near((grid, origin), post, POST_REACH, rng)
                             .map(|to| go_to(droid.feet, to))
                             .unwrap_or_default(),
-                        None => (plan((grid, origin), droid.feet, TRIP, rng), None),
+                        // In battle royale, somewhere inside the ring, well in from its edge.
+                        None => match self.ring {
+                            Some((middle, reach)) => spot_near((grid, origin), middle, reach * 0.7, rng)
+                                .map(|to| go_to(droid.feet, to))
+                                .unwrap_or_default(),
+                            None => (plan((grid, origin), droid.feet, TRIP, rng), None),
+                        },
                     };
                     if droid.route.is_empty() {
                         droid.resting = REST.0;

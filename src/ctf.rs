@@ -20,14 +20,29 @@ pub struct Map {
     pub path: &'static str,
     pub about: &'static str,
     pub void: bool,
+    /// Whether it is out in the open, with the sky over it rather than a ceiling - as a map in
+    /// the void is.
+    pub open_sky: bool,
+    /// Whether it is night there: the void's black sky over it and no sun, lit only by its lamps.
+    pub night: bool,
 }
+
+/// The town battle royale is played in.
+pub const TOWN: Map = Map {
+    name: "Town",
+    path: "data/arena/br_town.glb",
+    about: "A walled town of streets, its buildings up to four floors, every one open to go into.",
+    void: false,
+    open_sky: true,
+    night: true,
+};
 
 /// The sky round a map in the void, each face of it.
 pub const VOID_SKY: &str = "data/skybox.png";
 
 /// The map whose model is at `path`, if one is.
 pub fn map_at(path: &str) -> Option<&'static Map> {
-    MAPS.iter().find(|map| map.path == path)
+    MAPS.iter().chain(std::iter::once(&TOWN)).find(|map| map.path == path)
 }
 
 /// The maps it can be played on, picked from in the main menu.
@@ -37,24 +52,32 @@ pub const MAPS: [Map; 4] = [
         path: "data/arena/ctf_map.glb",
         about: "Walled bases joined by three lanes, all on one floor.",
         void: false,
+        open_sky: false,
+        night: false,
     },
     Map {
         name: "Balconies",
         path: "data/arena/ctf_balconies.glb",
         about: "Two floors: each flag in a well under a balcony, catwalks along the walls, a raised hub.",
         void: false,
+        open_sky: false,
+        night: false,
     },
     Map {
         name: "Hybrid",
         path: "data/arena/ctf_hybrid.glb",
         about: "The walled bases and lanes of Lanes, the two floors of Balconies, and a maze in the middle.",
         void: false,
+        open_sky: false,
+        night: false,
     },
     Map {
         name: "Void",
         path: "data/arena/ctf_void.glb",
         about: "Platforms in the void, joined by bridges, lit by street lights. Mind the edges.",
         void: true,
+        open_sky: true,
+        night: false,
     },
 ];
 
@@ -68,6 +91,8 @@ pub const DROIDS: usize = 3;
 pub enum Side {
     Red,
     Blue,
+    /// A side of one, in battle royale (see [`crate::royale`]): everyone else is the enemy.
+    Lone(u8),
 }
 
 impl Side {
@@ -77,14 +102,22 @@ impl Side {
         match self {
             Side::Red => "red",
             Side::Blue => "blue",
+            Side::Lone(_) => "a lone droid",
         }
     }
 
+    /// The other side, of red and blue; a side of one has none.
     pub const fn other(self) -> Side {
         match self {
             Side::Red => Side::Blue,
             Side::Blue => Side::Red,
+            Side::Lone(n) => Side::Lone(n),
         }
+    }
+
+    /// Whether `them` are the enemy: of another side.
+    pub fn against(self, them: Side) -> bool {
+        self != them
     }
 
     /// Whether it is the player's side.
@@ -103,9 +136,10 @@ pub struct Bases {
 }
 
 impl Bases {
+    /// Where `side`'s flag is: red's, for a side of one, which has none.
     pub fn flag(&self, side: Side) -> Vector3<f32> {
         match side {
-            Side::Red => self.red,
+            Side::Red | Side::Lone(_) => self.red,
             Side::Blue => self.blue,
         }
     }
@@ -127,6 +161,7 @@ mod tests {
         for map in MAPS {
             assert!(dir.join(map.path).is_file(), "{} has no model at {}", map.name, map.path);
         }
+        assert!(dir.join(TOWN.path).is_file(), "no town at {}", TOWN.path);
         assert!(dir.join(VOID_SKY).is_file(), "no sky for the void at {VOID_SKY}");
     }
 

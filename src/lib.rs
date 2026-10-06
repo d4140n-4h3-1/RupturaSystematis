@@ -50,6 +50,7 @@ mod notes;
 pub mod platform;
 pub mod player;
 pub mod ragdoll;
+mod royale;
 mod survey;
 mod tiles;
 mod trip;

@@ -258,15 +258,19 @@ pub fn glass_fixtures(graph: &Graph, root: Handle<Node>) -> Vec<AxisAlignedBound
 /// by it. Fixtures in the same stretch of corridor share one lamp - each pane still has light
 /// right behind it, and a deferred renderer pays for every light on screen, so fewer of them for
 /// the same look is worth it.
+/// How far above or below another fixture one can be and still be on the same floor, in meters.
+const SAME_FLOOR: f32 = 1.0;
+
 fn lamp_positions(fixtures: &[AxisAlignedBoundingBox], share_within: f32) -> Vec<Vector3<f32>> {
     let mut groups: Vec<Vec<Vector3<f32>>> = Vec::new();
     for fixture in fixtures {
         let center = fixture.center();
         let position = Vector3::new(center.x, fixture.min.y - 0.15, center.z);
+        // Only on the same floor: a lamp shared with the one over it, a floor up, lights neither.
         match groups.iter_mut().find(|group| {
-            group
-                .iter()
-                .any(|other| other.metric_distance(&position) < share_within)
+            group.iter().any(|other| {
+                (other.y - position.y).abs() < SAME_FLOOR && other.metric_distance(&position) < share_within
+            })
         }) {
             Some(group) => group.push(position),
             None => groups.push(vec![position]),
@@ -330,6 +334,14 @@ mod tests {
 
     fn strength(material: &MaterialResource) -> Option<MaterialProperty> {
         glow_strength(&material.data_ref())
+    }
+
+    #[test]
+    fn fixtures_share_a_lamp_on_the_same_floor_only() {
+        let fixture = |x: f32, y: f32| AxisAlignedBoundingBox::from_min_max(Vector3::new(x, y, 0.0), Vector3::new(x + 1.0, y + 0.1, 0.5));
+        // Two side by side share one; one a floor over them, 3.5 m up, has its own.
+        let lamps = lamp_positions(&[fixture(0.0, 3.4), fixture(2.0, 3.4), fixture(0.0, 6.9)], 4.0);
+        assert_eq!(lamps.len(), 2, "{lamps:?}");
     }
 
     #[test]

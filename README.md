@@ -106,6 +106,23 @@ their animations; the crate decides what they make of what is round them.
 
 ### The game
 
+6 October 2026:
+
+- **Battle royale.** Battle Royale in the main menu: you and up to 15 droids - 16 in all - in a
+  walled town at night, every one against every other. Each has three lives: shot down, you come
+  back a few seconds later at a start inside the ring, and the third time you are out, told how
+  you placed. The last one in wins. A ring of glowing posts closes in on the town in five stages,
+  each somewhere new inside the last, hurting anyone caught outside it. `MAZE_ROYALE` sets how
+  many play.
+- **The town**, `data/arena/br_town.glb`, 188 m across, built by `data/arena/br_town.py` in
+  Blender from a seed: a five-by-five grid of blocks between streets, an open square in the
+  middle, and on each other block a house, an office, an apartment block or a warehouse - none
+  over four floors - every one open to go into, with doors, windows on every floor to see and
+  shoot through, switchback stairs inside up to each floor and to the roofs of the tallest, and a
+  light on every floor. Street lights stand along every street under a black sky.
+- **Lamps on floors over one another** each get their own: fixtures share a lamp only on the
+  same floor.
+
 1 October 2026:
 
 - **A choice of maps for capture the flag.** Capture the Flag in the main menu opens a page of
@@ -647,6 +664,7 @@ logs goes to the browser's console there.
 | `MAZE_SEED=<n>`          | Makes every maze and round the same, for comparing two runs.            |
 | `MAZE_MODEL=<path>`      | Plays a fixed maze model (`.glb`, `.gltf` or `.fbx`) instead of random mazes. |
 | `MAZE_INHABITANTS=<n>`   | How many droids live in the maze. The default is 6.                     |
+| `MAZE_ROYALE=<n>`        | How many play battle royale, you included, from 2 to 16. The default is 16. |
 | `MAZE_DEBUG=1`           | Logs the walkable map of each level, and rendering statistics once a second. |
 | `MAZE_WINDOWED=1`        | Opens the game in a window instead of filling the screen.               |
 | `MAZE_VSYNC=0`           | Uncaps the frame rate, for measuring what a frame costs.                |

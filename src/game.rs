@@ -12,6 +12,7 @@ use crate::{
     credits::Credits,
     computer::{self, Beeps, Computer, ScreenTerminal, Terminal, COMPUTER_MODEL},
     ctf::{self, Bases, Side, MAPS, PLAYERS},
+    royale::{self, RingNews, RingPosts, Royale, Who},
     firewall::{self, Firewalls},
     drone::{self, Drone, DroneLines, State, Target, DRONE_LINES, DRONE_MODEL},
     drone_shot::{Shots, SHOT_MODEL},
@@ -352,9 +353,16 @@ pub struct MazeGame {
     #[visit(skip)]
     #[reflect(hidden)]
     ctf: Option<Bases>,
+    /// In battle royale, the match under way; and the posts that show the ring.
     #[visit(skip)]
     #[reflect(hidden)]
-    side_bolts: Option<[Bolts; 2]>,
+    royale: Option<Royale>,
+    #[visit(skip)]
+    #[reflect(hidden)]
+    ring_posts: RingPosts,
+    #[visit(skip)]
+    #[reflect(hidden)]
+    side_bolts: Vec<(Side, Bolts)>,
     /// In capture the flag, which of its chatter the droid talked to last said.
     #[visit(skip)]
     #[reflect(hidden)]
@@ -581,13 +589,14 @@ impl MazeGame {
         let resources = &ctx.resource_manager;
         let model = match game {
             Game::CaptureTheFlag(map) => Some(MAPS[map].path.to_string()),
+            Game::BattleRoyale => Some(ctf::TOWN.path.to_string()),
             Game::Maze => platform::var("MAZE_MODEL"),
         };
         match model {
             Some(path) => {
                 self.model = Some(resources.request::<Model>(&path));
                 self.sky = ctf::map_at(&path)
-                    .filter(|map| map.void)
+                    .filter(|map| map.void || map.night)
                     .map(|_| resources.request::<Texture>(ctf::VOID_SKY));
                 self.firewalls = Firewalls::request(resources);
                 self.model_path = path;
@@ -603,6 +612,16 @@ impl MazeGame {
     /// Whether the level is out in the void (see [`ctf::Map::void`]).
     fn in_void(&self) -> bool {
         ctf::map_at(&self.model_path).is_some_and(|map| map.void)
+    }
+
+    /// Whether it is night in the level (see [`ctf::Map::night`]).
+    fn night(&self) -> bool {
+        ctf::map_at(&self.model_path).is_some_and(|map| map.night)
+    }
+
+    /// Whether the level is out in the open, with the sky over it (see [`ctf::Map::open_sky`]).
+    fn open_sky(&self) -> bool {
+        ctf::map_at(&self.model_path).is_some_and(|map| map.open_sky)
     }
 
     /// Puts round the level the sky it has, and the floor under it: a map in the void has a sky
@@ -646,14 +665,17 @@ impl MazeGame {
         if let Some(shots) = self.shots.as_mut() {
             shots.clear(&mut scene.graph);
         }
-        for bolts in self.side_bolts.iter_mut().flatten() {
+        for (_, bolts) in &mut self.side_bolts {
             bolts.clear(&mut scene.graph);
         }
+        self.ring_posts.hide(&mut scene.graph);
         self.level.clear(scene);
         self.model = None;
         self.prefabs = None;
         self.model_path.clear();
         self.ctf = None;
+        self.royale = None;
+        self.inhabitants.set_ring(None);
         self.set_banner(ctx, "");
         self.phase = Phase::Title;
         self.main_menu.set_open(ctx.user_interfaces.first(), true);
@@ -755,8 +777,8 @@ impl MazeGame {
         if script != self.script_path {
             self.use_script(&ctx.resource_manager, script);
         }
-        if let (Some(bolts), Ok(scene)) = (self.side_bolts.as_mut(), ctx.scenes.try_get_mut(self.scene)) {
-            for bolts in bolts {
+        if let Ok(scene) = ctx.scenes.try_get_mut(self.scene) {
+            for (_, bolts) in &mut self.side_bolts {
                 bolts.clear(&mut scene.graph);
             }
         }
@@ -829,6 +851,164 @@ impl MazeGame {
         self.knocked_down = false;
         self.phase = Phase::Playing;
         self.set_banner(ctx, "");
+        self.start_royale(ctx);
+    }
+
+    /// A map with starts for everyone, and no flags, is played as battle royale: the player at
+    /// one start picked at random, and a droid at each of as many others as make up the match -
+    /// [`royale::MOST`] in all, or as MAZE_ROYALE says - the ring round all the town.
+    fn start_royale(&mut self, ctx: &mut PluginContext) {
+        let mut starts: Vec<(u32, Vector3<f32>)> = self
+            .level
+            .markers
+            .iter()
+            .filter_map(|m| Some((m.name.strip_prefix("spawn_")?.parse().ok()?, m.position)))
+            .collect();
+        starts.sort_by_key(|&(n, _)| n);
+        let graph = &mut ctx.scenes[self.scene].graph;
+        if starts.is_empty() || self.ctf.is_some() {
+            self.royale = None;
+            self.inhabitants.set_ring(None);
+            self.ring_posts.hide(graph);
+            return;
+        }
+        let Some((grid, origin)) = self.level.grid.as_ref() else {
+            return;
+        };
+        // The town's middle, and how far its corners are from it.
+        let size = Vector3::new(grid.width as f32, 0.0, grid.depth as f32) * grid.cell_size;
+        let middle = origin + size * 0.5;
+        let reach = 0.5 * size.norm();
+        // Each start facing the town's middle.
+        let starts: Vec<(Vector3<f32>, f32)> = starts
+            .into_iter()
+            .map(|(_, at)| {
+                let to = middle - at;
+                (at, to.x.atan2(to.z))
+            })
+            .collect();
+        let players = platform::var("MAZE_ROYALE")
+            .and_then(|n| n.trim().parse::<usize>().ok())
+            .unwrap_or(royale::MOST)
+            .clamp(2, royale::MOST)
+            .min(starts.len());
+        let rng = self.rng.get_or_insert_with(|| Rng::new(platform::nanos_now()));
+        let mut pick = || rng.below(1 << 16) as f32 / (1 << 16) as f32;
+        let mut royale = Royale::new(players, starts, middle, reach, &mut pick);
+        let mine = rng.below(royale.starts.len());
+        let (at, facing) = royale.starts[mine];
+        // The droids at the starts after the player's, round the town.
+        royale.first_starts = (1..players).map(|k| royale.starts[(mine + k) % royale.starts.len()]).collect();
+        self.player.teleport(graph, at + Vector3::new(0.0, 1.2, 0.0), facing);
+        // Nothing to find: the exit's marker out of the way.
+        graph[self.exit].local_transform_mut().set_position(Vector3::new(0.0, -1000.0, 0.0));
+        if self.ring_posts == RingPosts::default() {
+            self.ring_posts = RingPosts::build(graph);
+        }
+        self.ring_posts.place(graph, royale.ring.now());
+        self.inhabitants.set_ring(Some(royale.ring.now()));
+        Log::info(format!("Battle royale: {players} in the match, {} lives each", royale::LIVES));
+        self.hud.show_note(format!("Battle royale: {players} in, {} lives each. Last one standing wins.", royale::LIVES));
+        self.royale = Some(royale);
+    }
+
+    /// Moves battle royale on: the ring closes and hurts whoever is outside it, droids down with
+    /// a life left come back, those down for the last time are out - and once only one is left,
+    /// the match is over.
+    fn update_royale(&mut self, ctx: &mut PluginContext) {
+        let Some(mut royale) = self.royale.take() else {
+            return;
+        };
+        let dt = ctx.dt;
+        royale.time += dt;
+        let rng = self.rng.get_or_insert_with(|| Rng::new(platform::nanos_now()));
+        let mut pick = || rng.below(1 << 16) as f32 / (1 << 16) as f32;
+        match royale.ring.update(dt, &mut pick) {
+            Some(RingNews::ClosesIn(seconds)) => self.hud.show_note(format!("The ring closes in {seconds:.0} seconds")),
+            Some(RingNews::Closing) => self.hud.show_note("The ring is closing".to_string()),
+            None => (),
+        }
+        let ring = royale.ring.now();
+        self.inhabitants.set_ring(Some(ring));
+        let scene = &mut ctx.scenes[self.scene];
+        self.ring_posts.place(&mut scene.graph, ring);
+        // Outside the ring, it hurts.
+        let mut player_down = false;
+        if royale.hurts_now(dt) {
+            let player = self.player.feet(&scene.graph);
+            if self.phase == Phase::Playing && !royale.ring.holds(player) {
+                let last = self.health.hit();
+                self.health_sounds.play(&mut scene.graph, Heard::Hit, player);
+                self.hud.show_note("Outside the ring!".to_string());
+                player_down = last;
+            }
+            for n in self.inhabitants.outside(ring) {
+                self.inhabitants.hurt(&mut scene.graph, n);
+            }
+        }
+        // Each droid down: one life less; out, or back in a moment.
+        if self.inhabitants.is_populated() {
+            let standing = self.inhabitants.sides_standing();
+            for who in 1..royale.players() as Who {
+                let side = Royale::side(who);
+                let gone = royale.lives(who) > 0
+                    && !standing.contains(&side)
+                    && !royale.coming_back.iter().any(|&(back, _)| back == who);
+                if gone && !royale.went_down(who) {
+                    self.hud.show_note(format!("Droid {who} is out: {} left", royale.still_in()));
+                    Log::info(format!("Battle royale: droid {who} is out, {} left", royale.still_in()));
+                }
+            }
+            // And back, at a start inside the ring, away from everyone.
+            for who in royale.back_now(dt) {
+                let mut others: Vec<Vector3<f32>> = self.inhabitants.standing().iter().map(|d| d.2).collect();
+                others.push(self.player.feet(&scene.graph));
+                if let (Some((at, facing)), Some((grid, origin)), Some(rng)) =
+                    (royale.start_for(&others), self.level.grid.as_ref(), self.rng.as_mut())
+                {
+                    if self.inhabitants.spawn_lone((grid, *origin), scene, Royale::side(who), at, facing, rng) {
+                        Log::info(format!("Battle royale: droid {who} is back, {} lives left", royale.lives(who)));
+                    }
+                }
+            }
+        }
+        let over = self.phase == Phase::Playing && royale.lives(0) > 0 && royale.still_in() == 1;
+        self.royale = Some(royale);
+        if player_down {
+            self.delete_player(ctx, "the ring");
+        }
+        if over {
+            self.phase = Phase::Won;
+            let text = format!(
+                "Last one standing! You won in {}\nPress N for another match",
+                hud::format_time(self.round_time)
+            );
+            self.set_banner(ctx, &text);
+            Log::info("Battle royale: the player won");
+        }
+    }
+
+    /// In battle royale, back in after going down with a life left: at a start inside the ring,
+    /// away from everyone, whole again.
+    fn bring_player_back(&mut self, ctx: &mut PluginContext) {
+        let Some(royale) = self.royale.as_ref() else {
+            return;
+        };
+        let others: Vec<Vector3<f32>> = self.inhabitants.standing().iter().map(|d| d.2).collect();
+        let Some((at, facing)) = royale.start_for(&others) else {
+            return;
+        };
+        let lives = royale.lives(0);
+        let graph = &mut ctx.scenes[self.scene].graph;
+        self.player.teleport(graph, at + Vector3::new(0.0, 1.2, 0.0), facing);
+        self.health = Health::default();
+        self.knocked_down = false;
+        self.phase = Phase::Playing;
+        self.set_banner(ctx, "");
+        self.hud.show_note(match lives {
+            1 => "Back in: your last life".to_string(),
+            n => format!("Back in: {n} lives left"),
+        });
     }
 
     fn set_banner(&self, ctx: &mut PluginContext, text: &str) {
@@ -1017,7 +1197,9 @@ impl MazeGame {
         let on = !self.lights_off;
         let scene = &mut ctx.scenes[self.scene];
         scene.rendering_options.ambient_lighting_color = if on { AMBIENT } else { DARK_AMBIENT };
-        scene.graph[self.sun].set_visibility(on);
+        // No sun at night.
+        let sun = on && !self.night();
+        scene.graph[self.sun].set_visibility(sun);
         self.level.set_lights(&mut scene.graph, on);
         self.menu.set_lights(ctx.user_interfaces.first(), on);
     }
@@ -1130,9 +1312,13 @@ impl MazeGame {
                     },
                     rng,
                 ),
-                None => self
-                    .inhabitants
-                    .populate(scene, liveries, (grid, *origin), player, self.player.yaw(), rng),
+                None => match &self.royale {
+                    // In battle royale, a droid on a side of its own at each of the others' starts.
+                    Some(royale) => self.inhabitants.populate_lone(scene, liveries, (grid, *origin), &royale.first_starts, rng),
+                    None => self
+                        .inhabitants
+                        .populate(scene, liveries, (grid, *origin), player, self.player.yaw(), rng),
+                },
             }
         }
         let graph = &scene.graph;
@@ -1189,10 +1375,10 @@ impl MazeGame {
         let mut provoked = Vec::new();
         let mut droid_shot = false;
         // In capture the flag, each side's droids' bolts, which harm only the other side.
-        if let Some(bolts) = self.side_bolts.as_mut() {
+        if !self.side_bolts.is_empty() {
             let mut landed = Vec::new();
-            for (index, bolts) in bolts.iter_mut().enumerate() {
-                let side = if index == 0 { Side::Red } else { Side::Blue };
+            for (side, bolts) in &mut self.side_bolts {
+                let side = *side;
                 // Through its own side, the droid that fired among them.
                 let own: Vec<Handle<Collider>> = self
                     .inhabitants
@@ -1309,9 +1495,18 @@ impl MazeGame {
             return;
         }
         if let Some(n) = self.inhabitants.shot(graph, strike, from) {
-            Log::info(format!("Capture the flag: droid {n} is down"));
-            let whose = self.inhabitants.side(n).map_or("A", |s| if s.is_players() { "One of yours" } else { "One of the enemy's" });
-            self.hud.show_note(format!("{whose} droids is down"));
+            match self.inhabitants.side(n) {
+                // In battle royale, each by its number.
+                Some(Side::Lone(who)) => {
+                    Log::info(format!("Battle royale: droid {who} is down"));
+                    self.hud.show_note(format!("Droid {who} is down"));
+                }
+                side => {
+                    Log::info(format!("Capture the flag: droid {n} is down"));
+                    let whose = side.map_or("A", |s| if s.is_players() { "One of yours" } else { "One of the enemy's" });
+                    self.hud.show_note(format!("{whose} droids is down"));
+                }
+            }
         }
     }
 
@@ -1471,15 +1666,26 @@ impl MazeGame {
         // In capture the flag, a droid going after one of the other side says so, and the
         // droids' shots leave their pistols.
         for n in engaged {
-            let side = self.inhabitants.side(n).map_or("", Side::name);
-            Log::info(format!("Capture the flag: {side}'s droid {n} goes after one of the other side"));
+            match self.inhabitants.side(n) {
+                Some(Side::Lone(who)) => Log::info(format!("Battle royale: droid {who} goes after someone")),
+                side => {
+                    let side = side.map_or("", Side::name);
+                    Log::info(format!("Capture the flag: {side}'s droid {n} goes after one of the other side"));
+                }
+            }
             self.bark(n, "engaged", Mood::Hostile);
         }
         if !shots.is_empty() {
             let graph = &mut ctx.scenes[self.scene].graph;
-            let bolts = self.side_bolts.get_or_insert_with(|| [Bolts::new(graph), Bolts::new(graph)]);
             for (from, way, side) in shots {
-                bolts[side_index(side)].fire(graph, from, way);
+                let n = match self.side_bolts.iter().position(|(of, _)| *of == side) {
+                    Some(n) => n,
+                    None => {
+                        self.side_bolts.push((side, Bolts::new(graph)));
+                        self.side_bolts.len() - 1
+                    }
+                };
+                self.side_bolts[n].1.fire(graph, from, way);
             }
         }
         for (n, alert) in alerts {
@@ -1629,9 +1835,26 @@ impl MazeGame {
     /// until the next maze.
     fn delete_player(&mut self, ctx: &mut PluginContext, name: &str) {
         self.stop_talking(ctx);
+        if self.phase != Phase::Playing {
+            return;
+        }
         self.phase = Phase::Deleted;
         self.deleted = 0.0;
         self.set_banner(ctx, &format!("Deleted by {name}"));
+        // In battle royale, a life less: back in a moment, or out of the match.
+        if let Some(royale) = self.royale.as_mut() {
+            if !royale.went_down(0) {
+                let place = royale.still_in() + 1;
+                let players = royale.players();
+                self.phase = Phase::Won;
+                let text = format!(
+                    "Deleted by {name}: you are out of the match, {place}{} of {players}\nPress N for another match",
+                    ordinal(place)
+                );
+                self.set_banner(ctx, &text);
+                Log::info(format!("Battle royale: the player is out, {place} of {players}"));
+            }
+        }
     }
 
     /// Opens the pause menu and stops the world, or closes it and carries on.
@@ -2040,6 +2263,15 @@ impl MazeGame {
         if self.computers.is_empty() {
             return;
         }
+        // In battle royale, nothing to hack.
+        if !self.computer_placed && self.phase == Phase::Playing && self.royale.is_some() {
+            let graph = &mut ctx.scenes[self.scene].graph;
+            for computer in &mut self.computers {
+                computer.hide(graph);
+            }
+            self.computer_placed = true;
+            return;
+        }
         if !self.computer_placed && self.phase == Phase::Playing {
             self.rng();
             if let (Some((grid, origin)), Some(start), Some(rng)) =
@@ -2280,6 +2512,8 @@ impl MazeGame {
                     drone.hide(graph);
                 }
                 match &self.ctf {
+                    // In battle royale, no drones: it is droid against droid.
+                    _ if self.royale.is_some() => (),
                     // One for each side, by its flag; the rest wait to be called in.
                     Some(bases) => {
                         for (drone, side) in self.drones.iter_mut().zip(Side::BOTH) {
@@ -2654,7 +2888,7 @@ impl Plugin for MazeGame {
                 } else {
                     let graph = &mut ctx.scenes[self.scene].graph;
                     let exit_mesh = self.exit_mesh(graph);
-                    self.level.finish(graph, exit_mesh, self.in_void());
+                    self.level.finish(graph, exit_mesh, self.open_sky());
                     // A new level's lamps start out on; they follow the player's choice.
                     self.apply_lights(ctx);
                     self.start_round(ctx);
@@ -2669,6 +2903,7 @@ impl Plugin for MazeGame {
                 }
                 self.keep_talking(ctx);
                 self.keep_hacking(ctx);
+                self.update_royale(ctx);
                 let scene = &mut ctx.scenes[self.scene];
                 self.player.update(
                     &mut scene.graph,
@@ -2742,7 +2977,13 @@ impl Plugin for MazeGame {
                 self.land_shots(ctx);
                 self.move_inhabitants(ctx);
                 self.deleted += ctx.dt;
-                if self.deleted > DELETED_FOR {
+                if self.royale.is_some() {
+                    // Back in, with a life left: the match goes on meanwhile.
+                    self.update_royale(ctx);
+                    if self.deleted > royale::BACK_IN && self.phase == Phase::Deleted {
+                        self.bring_player_back(ctx);
+                    }
+                } else if self.deleted > DELETED_FOR {
                     self.restart(ctx);
                 }
             }
@@ -3015,14 +3256,6 @@ const NOBODY: Target = Target {
     in_the_dark: true,
 };
 
-/// Which of the sides' bolts `side`'s are.
-fn side_index(side: Side) -> usize {
-    match side {
-        Side::Red => 0,
-        Side::Blue => 1,
-    }
-}
-
 /// What a bolt from `from` along `way` hits first within `reach`, but for anything `passed`, if
 /// anything: how far along, and what.
 fn first_hit(
@@ -3046,4 +3279,15 @@ fn first_hit(
     hits.iter()
         .find(|hit| !passed.contains(&hit.collider))
         .map(|hit| (hit.toi, hit.collider))
+}
+
+/// The ending for an ordinal number: "st" for 1, "nd" for 2, and so on.
+fn ordinal(n: usize) -> &'static str {
+    match (n % 10, n % 100) {
+        (_, 11..=13) => "th",
+        (1, _) => "st",
+        (2, _) => "nd",
+        (3, _) => "rd",
+        _ => "th",
+    }
 }
