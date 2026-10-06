@@ -1609,6 +1609,7 @@ mod tests {
             date: None,
             text: text.into(),
             group: None,
+            maps: Vec::new(),
         }
     }
 

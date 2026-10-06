@@ -1,6 +1,7 @@
 //! The notes and diary entries on the maze's computers, read once one is hacked: loaded from
 //! [`NOTES`], whose `about` says what everything in it means, and shared out among the computers
-//! afresh each maze by [`share_out`]. Entries of a group - a diary, a run of logs - stay together
+//! afresh each maze by [`share_out`] - each level its own: the maze's, or a capture-the-flag
+//! map's (see [`Notes::for_map`]). Entries of a group - a diary, a run of logs - stay together
 //! on one computer, in order; the rest go wherever they fall.
 
 use crate::layout::Rng;
@@ -22,6 +23,10 @@ pub struct Entry {
     /// The entries it is kept together with, if any.
     #[serde(default)]
     pub group: Option<String>,
+    /// The maps it is found on, by their names in the main menu (see [`crate::ctf::Map`]); none
+    /// for the maze's own.
+    #[serde(default)]
+    pub maps: Vec<String>,
 }
 
 /// Every entry, as the file has them.
@@ -35,6 +40,18 @@ impl Notes {
     pub fn load(path: &str) -> Result<Self, String> {
         let text = crate::platform::read_to_string(path)?;
         serde_json::from_str(&text).map_err(|error| format!("{path}: {error}"))
+    }
+
+    /// The entries found on the map called `map` - or, for none, in the maze: those of no map.
+    pub fn for_map(&self, map: Option<&str>) -> Vec<Entry> {
+        self.entries
+            .iter()
+            .filter(|entry| match map {
+                Some(map) => entry.maps.iter().any(|m| m == map),
+                None => entry.maps.is_empty(),
+            })
+            .cloned()
+            .collect()
     }
 }
 
@@ -111,6 +128,7 @@ mod tests {
             date: None,
             text: String::new(),
             group: group.map(Into::into),
+            maps: Vec::new(),
         }
     }
 
@@ -150,6 +168,24 @@ mod tests {
     fn text_wraps_between_words_and_keeps_its_paragraphs() {
         let lines = wrap("one two three\n\nfour abcdefghijkl", 9);
         assert_eq!(lines, ["one two", "three", "", "four", "abcdefghi", "jkl"]);
+    }
+
+    #[test]
+    fn each_map_has_notes_of_its_own_and_the_maze_keeps_its() {
+        let notes = Notes::load(NOTES).unwrap();
+        let maze = notes.for_map(None);
+        assert!(maze.iter().any(|e| e.title == "admin_diary_01"), "the maze's own");
+        for map in crate::ctf::MAPS {
+            let own = notes.for_map(Some(map.name));
+            assert!(own.len() >= 6, "{} has {} entries", map.name, own.len());
+            assert!(own.iter().all(|e| !maze.contains(e)), "{}: none of the maze's", map.name);
+        }
+        // Every map an entry names is one there is.
+        for entry in &notes.entries {
+            for map in &entry.maps {
+                assert!(crate::ctf::MAPS.iter().any(|m| &m.name == map), "{}: no map {map}", entry.title);
+            }
+        }
     }
 
     #[test]

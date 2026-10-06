@@ -2328,8 +2328,10 @@ impl MazeGame {
                     Log::warn("Maze: found no wall near the start to put a computer against");
                 }
                 // The notes, among those put somewhere.
-                let entries = self.notes.as_ref().map_or(&[][..], |notes| &notes.entries);
-                let shares = notes::share_out(entries, placed.len(), rng);
+                // The level's own: a capture-the-flag map's, or the maze's.
+                let map = ctf::map_at(&self.model_path).map(|map| map.name);
+                let entries = self.notes.as_ref().map_or_else(Vec::new, |notes| notes.for_map(map));
+                let shares = notes::share_out(&entries, placed.len(), rng);
                 for (&n, share) in placed.iter().zip(shares) {
                     let files = share.into_iter().map(|e| entries[e].clone()).collect();
                     self.computers[n].set_files(files);

@@ -1,5 +1,5 @@
 {
-  "about": "The notes and diary entries on the maze's computers, read once a computer is hacked: see src/notes.rs. Each has a 'title', the file's name in the computer's listing; its 'kind', shown beside it ('diary', 'log' or 'note', or any other word); a 'date', if it has one, shown above it as it is read; and its 'text', in English, wrapped to the screen, with a blank line between paragraphs where it has '\\n\\n'. Entries with the same 'group' are kept together, in the order they are here, on one computer picked at random each maze; each without a group goes on a computer of its own picking. Every computer gets its share before any gets more.",
+  "about": "The notes and diary entries on the maze's computers, read once a computer is hacked: see src/notes.rs. Each has a 'title', the file's name in the computer's listing; its 'kind', shown beside it ('diary', 'log' or 'note', or any other word); a 'date', if it has one, shown above it as it is read; and its 'text', in English, wrapped to the screen, with a blank line between paragraphs where it has '\\n\\n'. Entries with the same 'group' are kept together, in the order they are here, on one computer picked at random each maze; each without a group goes on a computer of its own picking. Every computer gets its share before any gets more. An entry's 'maps', if it has any, are the capture-the-flag maps it is found on, by their names in the main menu; entries without are the maze's.",
   "entries": [
     {
       "group": "administrator",
@@ -87,6 +87,299 @@
       "kind": "note",
       "title": "read_me",
       "text": "If you are reading this, you got further than most.\n\nThe droids believe what you tell them, some of the time. Keep your pistol down near the sentries. Keep your light off when you can. And do not trust a straight line: the path never is one."
+    },
+    {
+      "title": "warden_diary_01",
+      "kind": "diary",
+      "date": "DAY 1",
+      "text": "Our base is walled on three sides and the fourth is the firewall. The flag stands behind it. Blue's stands behind theirs.\n\nBetween us run three lanes and nothing else. No floors above, no tunnels below. Whatever comes, comes down a lane.",
+      "group": "warden",
+      "maps": [
+        "Lanes"
+      ]
+    },
+    {
+      "title": "warden_diary_02",
+      "kind": "diary",
+      "date": "DAY 6",
+      "text": "Blue took the left lane today and we did not see them until they were at the wall. The left lane bends. The guards watched the middle because the middle is straight.\n\nI have put a sentry at every bend. A lane you cannot see down is a lane you do not hold.",
+      "group": "warden",
+      "maps": [
+        "Lanes"
+      ]
+    },
+    {
+      "title": "warden_diary_03",
+      "kind": "diary",
+      "date": "DAY 9",
+      "text": "They hacked the terminal. The firewall dropped for a heartbeat and that was enough.\n\nThe terminal is inside our walls. Someone let them reach it. I want to know which lane they came by, and I want it closed.",
+      "group": "warden",
+      "maps": [
+        "Lanes"
+      ]
+    },
+    {
+      "title": "warden_diary_04",
+      "kind": "diary",
+      "date": "DAY 15",
+      "text": "Three lanes, three sentries, one flag. I have done the sums again and again.\n\nThere is no fourth lane. There never was. So why does the flag keep leaving?",
+      "group": "warden",
+      "maps": [
+        "Lanes"
+      ]
+    },
+    {
+      "title": "lane_rota",
+      "kind": "log",
+      "text": "LEFT: sentry 4, sentry 9. Watch the bend.\nMIDDLE: sentry 2. Long sight, short cover.\nRIGHT: sentry 7. Report anything blue.\n\nThe drone flies all three. Do not shoot the drone.",
+      "maps": [
+        "Lanes"
+      ]
+    },
+    {
+      "title": "firewall_note",
+      "kind": "note",
+      "text": "The firewall holds until a terminal is hacked. Then it does not.\n\nIf the wall goes dark, fall back to the flag. Do not chase into the lanes. The lanes belong to whoever is already in them.",
+      "maps": [
+        "Lanes"
+      ]
+    },
+    {
+      "title": "lane_survey",
+      "kind": "log",
+      "date": "SCOUT 12",
+      "text": "SURVEY OF THE LANES\n\nAll on one floor. Three lanes from wall to wall, joined at the middle. Cover is low and spaced. A runner on the middle lane is in sight of both bases the whole way.\n\nRecommendation: do not run the middle lane.",
+      "maps": [
+        "Lanes"
+      ]
+    },
+    {
+      "title": "sticky_lanes",
+      "kind": "note",
+      "text": "Red goes first, blue goes second, and the lanes don't care.\n\n(someone wrote 'Sta' under this. Very funny.)",
+      "maps": [
+        "Lanes"
+      ]
+    },
+    {
+      "title": "keeper_diary_01",
+      "kind": "diary",
+      "date": "DAY 1",
+      "text": "Our flag sits at the bottom of a well, under the balcony. Anyone above can look straight down on it. Anyone below can only look up.\n\nI asked for the flag to be put on the balcony instead. The answer was no.",
+      "group": "keeper",
+      "maps": [
+        "Balconies"
+      ]
+    },
+    {
+      "title": "keeper_diary_02",
+      "kind": "diary",
+      "date": "DAY 4",
+      "text": "Blue came along the catwalk by the wall, dropped into the well and was gone with the flag before the balcony guard turned round.\n\nThe catwalks run the whole way round. I had not thought of them as roads. They are roads.",
+      "group": "keeper",
+      "maps": [
+        "Balconies"
+      ]
+    },
+    {
+      "title": "keeper_diary_03",
+      "kind": "diary",
+      "date": "DAY 11",
+      "text": "Whoever holds the hub holds the map. It stands above both floors and sees both wells.\n\nWe held it all morning. Then we came down to guard the flag, and blue walked up and took the hub instead. Up is better than down. Down is where the flag is.",
+      "group": "keeper",
+      "maps": [
+        "Balconies"
+      ]
+    },
+    {
+      "title": "keeper_diary_04",
+      "kind": "diary",
+      "date": "DAY 20",
+      "text": "Two floors. Two wells. Two balconies. Catwalks along every wall. A hub in the middle, higher than all of it.\n\nI have stopped asking where blue will come from. Up. They always come from up.",
+      "group": "keeper",
+      "maps": [
+        "Balconies"
+      ]
+    },
+    {
+      "title": "catwalk_log",
+      "kind": "log",
+      "date": "UNIT 31 / SHIFT 2",
+      "text": "Catwalk east: rail loose at the third post. Do not lean.\nCatwalk west: clear.\nHub stairs: one tread chipped. Watch your step running.\n\nA droid that falls off a catwalk lands on the floor below. It is not far. It is far enough.",
+      "maps": [
+        "Balconies"
+      ]
+    },
+    {
+      "title": "well_orders",
+      "kind": "log",
+      "text": "ORDERS FOR THE WELL\n\nOne guard in the well, one on the balcony above it. Neither leaves.\n\nIf the firewall falls, the balcony guard drops into the well. The well guard does not climb out.",
+      "maps": [
+        "Balconies"
+      ]
+    },
+    {
+      "title": "hub_note",
+      "kind": "note",
+      "text": "from the hub you can see everything\n\nand everything can see you",
+      "maps": [
+        "Balconies"
+      ]
+    },
+    {
+      "title": "sticky_balconies",
+      "kind": "note",
+      "text": "Whoever designed the stairs to the hub: the stairs are too narrow for two droids going opposite ways. We have tried.",
+      "maps": [
+        "Balconies"
+      ]
+    },
+    {
+      "title": "architect_diary_01",
+      "kind": "diary",
+      "date": "CYCLE 5002",
+      "text": "They gave me the walls and lanes of one map and the floors and balconies of another, and asked me to fill the space between.\n\nI put a maze there. I know mazes.",
+      "group": "architect",
+      "maps": [
+        "Hybrid"
+      ]
+    },
+    {
+      "title": "architect_diary_02",
+      "kind": "diary",
+      "date": "CYCLE 5009",
+      "text": "The lanes lead into the maze and the maze leads out again, somewhere. Our droids learned the lanes in a day. They have not learned the maze.\n\nNeither has blue. That is the point.",
+      "group": "architect",
+      "maps": [
+        "Hybrid"
+      ]
+    },
+    {
+      "title": "architect_diary_03",
+      "kind": "diary",
+      "date": "CYCLE 5014",
+      "text": "An old administrator would not let the scouts have the map of their maze. I have given mine to every droid on the side.\n\nThe difference between a maze and a wall is who has the map.",
+      "group": "architect",
+      "maps": [
+        "Hybrid"
+      ]
+    },
+    {
+      "title": "architect_diary_04",
+      "kind": "diary",
+      "date": "CYCLE 5021",
+      "text": "Blue went round the maze by the upper floor and came down on the far side. I had built the maze tall enough to stop a droid. Not tall enough to stop a floor.\n\nA maze with a balcony over it is not a maze. It is a room.",
+      "group": "architect",
+      "maps": [
+        "Hybrid"
+      ]
+    },
+    {
+      "title": "crossing_log",
+      "kind": "log",
+      "date": "SCOUT 3 / SCOUT 8",
+      "text": "Lane left to maze: 41 s walking.\nLane right to maze: 38 s.\nMaze to blue's wall, by the middle: unknown. Scout 3 did not come back.\nBalcony over the maze to blue's wall: 22 s. Use the balcony.",
+      "maps": [
+        "Hybrid"
+      ]
+    },
+    {
+      "title": "hybrid_orders",
+      "kind": "log",
+      "text": "STANDING ORDERS\n\n1. Guard the lanes as on the Lanes.\n2. Guard the floors as on the Balconies.\n3. Do not follow anyone into the maze.\n4. If you are in the maze, stop reading this and find the way out.",
+      "maps": [
+        "Hybrid"
+      ]
+    },
+    {
+      "title": "it_notice_hybrid",
+      "kind": "note",
+      "text": "NOTICE: the maze in the middle does not change its walls. That was another maze. Please stop filing reports.",
+      "maps": [
+        "Hybrid"
+      ]
+    },
+    {
+      "title": "sticky_hybrid",
+      "kind": "note",
+      "text": "left lane, right at the wall, up the stairs, along the balcony, down by the flag well\n\ndon't go in the middle",
+      "maps": [
+        "Hybrid"
+      ]
+    },
+    {
+      "title": "lightkeeper_diary_01",
+      "kind": "diary",
+      "date": "NIGHT 1",
+      "text": "There is no ground here. There are platforms, and bridges between them, and street lights along the bridges, and under all of it, nothing.\n\nI keep the lights. Without them you cannot see where the bridge ends.",
+      "group": "lightkeeper",
+      "maps": [
+        "Void"
+      ]
+    },
+    {
+      "title": "lightkeeper_diary_02",
+      "kind": "diary",
+      "date": "NIGHT 4",
+      "text": "A droid stepped off the stepping stones today. It did not fall the way things fall. It went down past the lights and then it was not anywhere.\n\nThe void does not keep what it takes. It deletes it.",
+      "group": "lightkeeper",
+      "maps": [
+        "Void"
+      ]
+    },
+    {
+      "title": "lightkeeper_diary_03",
+      "kind": "diary",
+      "date": "NIGHT 9",
+      "text": "Blue came across on the ferry. We watched it from the watchtower all the way over and thought it was empty.\n\nIt was not empty. Watch the ferries. Watch what stands still on them.",
+      "group": "lightkeeper",
+      "maps": [
+        "Void"
+      ]
+    },
+    {
+      "title": "lightkeeper_diary_04",
+      "kind": "diary",
+      "date": "NIGHT 17",
+      "text": "From the sky islands you can see every light on every bridge, and the dark between them where no bridge goes.\n\nI have counted the lights. One more is out every night. I do not think it is the bulbs.",
+      "group": "lightkeeper",
+      "maps": [
+        "Void"
+      ]
+    },
+    {
+      "title": "ferry_log",
+      "kind": "log",
+      "date": "UNIT 44 / SHIFT 7",
+      "text": "FERRY 1: on time. Stops at each end. Do not step off before it stops.\nFERRY 2: on time.\nFERRY 3: ran on with a droid half aboard. Droid lost.\n\nRide in the middle. Stand still. The ferry carries you; you do not carry the ferry.",
+      "maps": [
+        "Void"
+      ]
+    },
+    {
+      "title": "route_survey",
+      "kind": "log",
+      "date": "SCOUT 29",
+      "text": "ROUTES ACROSS\n\nHigh road: fast, open, no rails. Seen from both watchtowers.\nUnder the catwalk: the sunken plazas. Slow, out of sight.\nStepping stones: quickest of all, for droids that can jump.\nFerries: for droids that can wait.",
+      "maps": [
+        "Void"
+      ]
+    },
+    {
+      "title": "void_warning",
+      "kind": "note",
+      "text": "DO NOT LOOK DOWN\n\nthere is nothing to see\n\nthat is the problem",
+      "maps": [
+        "Void"
+      ]
+    },
+    {
+      "title": "sticky_void",
+      "kind": "note",
+      "text": "If you are reading this you made it to the terminal without falling. Well done. Now go back the same way.",
+      "maps": [
+        "Void"
+      ]
     }
   ]
 }
