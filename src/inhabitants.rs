@@ -6,6 +6,12 @@
 //! again. It walks at the droid's own walking pace, so its feet keep to the floor, and slows down
 //! to turn.
 //!
+//! It keeps to floor it can walk: up and down stairs a step at a time, never off the edge of a
+//! platform or a walkway, and where one floor is over another, on the one it is on - a point it
+//! is going to is on the floor at that point's own height (see [`crate::trip`]). Where a ferry
+//! gets it there sooner than walking - or there is no way round - it takes the ferry: waits for it
+//! at one end, gets on as it waits, rides it across and gets off at the other end.
+//!
 //! They have bodies, so the player cannot walk through them, and they make way for each other.
 //! One walking veers to its right round anyone ahead of it, so that two meeting head on pass
 //! each other on the left, and to the left instead if a wall is in the way; one standing about
@@ -66,6 +72,10 @@
 
 pub use hydroxus_ai::alert::{Alert, CAUTION, EVASION};
 pub(crate) use hydroxus_ai::route::{between, plan, route_to};
+use crate::{
+    ferry::Crossing,
+    trip::{self, Doing, Trip},
+};
 use hydroxus_ai::{
     flat, forward, heading_of,
     hearing::Heard,
@@ -192,6 +202,9 @@ const ALARM_RANGE: f32 = 40.0;
 const REPLAN: f32 = 0.4;
 /// How far it looks for a way to the player, in steps across the grid's half-meter cells.
 const CHASE_REACH: f32 = 200.0;
+/// How far above or below where a droid is the floor can be and still be the floor it is on, in
+/// meters: a stair's step, and a little more for its feet still coming down onto it.
+const ON_FLOOR: f32 = 0.7;
 /// In capture the flag: how far from its post a droid wanders, and is put down, in meters; how long it keeps after one of the other side it has lost sight of, and
 /// how long it keeps its pistol out once there is no one to shoot at, in seconds.
 const POST_REACH: f32 = 3.0;
@@ -295,6 +308,8 @@ struct Inhabitant {
     heading: f32,
     /// The rest of its route, as points on the floor, the next one last.
     route: Vec<Vector3<f32>>,
+    /// Its way across by ferry, if it is taking one (see [`crate::trip`]).
+    trip: Option<Trip>,
     /// How long it has left to stand still, in seconds.
     resting: f32,
     /// How long it has been kept waiting by someone in its way, in seconds.
@@ -902,6 +917,7 @@ impl Inhabitants {
             speed: 0.0,
             heading,
             route: Vec::new(),
+            trip: None,
             resting,
             waiting: 0.0,
             last_seen: None,
@@ -1014,14 +1030,17 @@ impl Inhabitants {
             .collect()
     }
 
-    /// Moves everyone along for another `dt`, over `grid` whose corner is at `origin`, making
-    /// way for each other and - unless they are after them - for the `player`'s feet, sentries
-    /// as `sentry` says of their kind with more breath than the rest. Whether anyone caught the
-    /// player, and whose phase changed.
+    /// Moves everyone along for another `dt`, over `grid` whose corner is at `origin` - and across
+    /// on the `crossings`, the ferries, where that is quicker - making way for each other and -
+    /// unless they are after them - for the `player`'s feet, sentries as `sentry` says of their
+    /// kind with more breath than the rest. Whether anyone caught the player, and whose phase
+    /// changed.
+    #[allow(clippy::too_many_arguments)]
     pub fn update(
         &mut self,
         graph: &mut Graph,
         (grid, origin): (&WalkGrid, Vector3<f32>),
+        crossings: &[Crossing],
         player: Vector3<f32>,
         rivals: &[Rival],
         rng: &mut Rng,
@@ -1032,9 +1051,13 @@ impl Inhabitants {
         let mut alerts = std::mem::take(&mut self.alerts);
         let heard = std::mem::take(&mut self.heard);
         let alarmed = std::mem::take(&mut self.alarmed);
+        // Floor that can be walked at the height of `spot`: not a drop off the edge, nor the floor
+        // under a walkway, nor the walkway over it.
         let floor_at = |spot: Vector3<f32>| {
-            survey::cell_at(grid, origin, spot).is_some_and(|(x, z)| grid.is_walkable(x, z))
+            survey::cell_at(grid, origin, spot)
+                .is_some_and(|(x, z)| grid.is_walkable(x, z) && (grid.floor(x, z) - spot.y).abs() <= ON_FLOOR)
         };
+        let go_to = |feet: Vector3<f32>, to: Vector3<f32>| trip::go_to((grid, origin), feet, to, CHASE_REACH, crossings);
         // Where everyone is, and which way those walking are going; the player last.
         let everyone: Vec<(Vector3<f32>, Option<Vector3<f32>>)> = self
             .droids
@@ -1253,9 +1276,41 @@ impl Inhabitants {
                 };
                 droid.enter(me, next, &mut alerts);
             }
+            // Taking a ferry, it does as the trip says until it is across, whatever else it is
+            // about: on its way to the ferry, it still works out its way again as it goes.
+            let mut on_trip = false;
+            if let Some(trip) = droid.trip.as_mut().filter(|_| !droid.down) {
+                match trip.step(droid.feet, &droid.route, crossings) {
+                    Doing::Go(route) => {
+                        if trip.stage != trip::Stage::ToDock {
+                            droid.route = route;
+                            on_trip = true;
+                        }
+                    }
+                    Doing::Across => {
+                        let to = trip.to;
+                        droid.trip = None;
+                        droid.route = route_to((grid, origin), droid.feet, to, CHASE_REACH);
+                        on_trip = !droid.route.is_empty();
+                    }
+                    Doing::GiveUp => {
+                        droid.trip = None;
+                        droid.route.clear();
+                    }
+                }
+            }
             // Stopped, it stays where it went down.
             if droid.down {
                 droid.route.clear();
+                droid.trip = None;
+            } else if on_trip {
+                // Waiting for the ferry, it faces where it will come.
+                if let Some(crossing) = droid.trip.filter(|trip| trip.stage == trip::Stage::Waiting).and_then(|trip| crossings.get(trip.ferry).map(|c| c.ends[trip.from])) {
+                    let to = flat(crossing - droid.feet);
+                    if to.norm() > 1.0e-3 {
+                        droid.heading = to.x.atan2(to.z);
+                    }
+                }
             // Talking, or warning them off, it stands and faces the player, and rests a moment
             // once they are done.
             } else if droid.talking || droid.warned > 0 {
@@ -1280,21 +1335,21 @@ impl Inhabitants {
                         .and_then(|going| going.try_normalize(1.0e-3))
                         .map(|going| player + going * (away * 0.6).min(CUT_OFF))
                         .filter(|&ahead| (1..=4).all(|i| floor_at(player + (ahead - player) * (i as f32 / 4.0))));
-                    droid.route = route_to((grid, origin), droid.feet, cut_off.unwrap_or(player), CHASE_REACH);
+                    (droid.route, droid.trip) = go_to(droid.feet, cut_off.unwrap_or(player));
                 }
             } else if let Some((feet, _)) = fighting.and_then(foe_place) {
                 // After one of the other side, the way to it worked out again every so often.
                 droid.replan -= dt;
                 if droid.replan <= 0.0 || droid.route.is_empty() {
                     droid.replan = REPLAN;
-                    droid.route = route_to((grid, origin), droid.feet, feet, CHASE_REACH);
+                    (droid.route, droid.trip) = go_to(droid.feet, feet);
                 }
             } else if let Some((from, _)) = droid.shot_from.filter(|_| droid.side.is_some()) {
                 // Shot at by someone it did not see: after them, where the shot came from.
                 droid.replan -= dt;
                 if droid.replan <= 0.0 || droid.route.is_empty() {
                     droid.replan = REPLAN;
-                    droid.route = route_to((grid, origin), droid.feet, from, CHASE_REACH);
+                    (droid.route, droid.trip) = go_to(droid.feet, from);
                 }
             } else if droid.alert == Some(Alert::Evasion) {
                 if droid.route.is_empty() {
@@ -1320,9 +1375,9 @@ impl Inhabitants {
                             let next = cell_of(droid.feet).filter(|_| !search.is_empty()).and_then(|from| {
                                 search.best(grid, from, &taken, SEARCH_APART / grid.cell_size, CHASE_REACH)
                             });
-                            droid.route = match next {
-                                Some(cell) => route_to((grid, origin), droid.feet, grid.on_floor(origin, cell), CHASE_REACH),
-                                None => Vec::new(),
+                            (droid.route, droid.trip) = match next {
+                                Some(cell) => go_to(droid.feet, grid.on_floor(origin, cell)),
+                                None => (Vec::new(), None),
                             };
                             if droid.route.is_empty() {
                                 droid.route = plan((grid, origin), droid.feet, SEARCH_TRIP, rng);
@@ -1341,7 +1396,7 @@ impl Inhabitants {
                                     (1..=4).all(|i| floor_at(from + way * (i as f32 / 4.0)))
                                 })
                                 .unwrap_or(droid.lost_at);
-                            droid.route = route_to((grid, origin), droid.feet, guess, CHASE_REACH);
+                            (droid.route, droid.trip) = go_to(droid.feet, guess);
                         }
                         // Got there, or has nowhere to go: it looks about.
                         None => {
@@ -1354,12 +1409,12 @@ impl Inhabitants {
                 if let Some(aside) = step_aside(droid.feet, others.clone(), floor_at) {
                     droid.route = vec![aside];
                 } else if droid.resting == 0.0 {
-                    droid.route = match droid.post {
+                    (droid.route, droid.trip) = match droid.post {
                         // In capture the flag, about where it keeps to.
                         Some(post) => spot_near((grid, origin), post, POST_REACH, rng)
-                            .map(|to| route_to((grid, origin), droid.feet, to, CHASE_REACH))
+                            .map(|to| go_to(droid.feet, to))
                             .unwrap_or_default(),
-                        None => plan((grid, origin), droid.feet, TRIP, rng),
+                        None => (plan((grid, origin), droid.feet, TRIP, rng), None),
                     };
                     if droid.route.is_empty() {
                         droid.resting = REST.0;
@@ -1375,7 +1430,9 @@ impl Inhabitants {
             }
             // Running after the player, and jogging to where it lost them.
             let after = droid.alert == Some(Alert::Alert) || fighting.is_some();
-            let hurrying = after || (droid.alert == Some(Alert::Evasion) && droid.searched <= 1);
+            let hurrying = after
+                || (droid.alert == Some(Alert::Evasion) && droid.searched <= 1)
+                || droid.trip.is_some_and(|trip| trip.hurrying());
             // After the player, it sprints now and then, when it is not to be told.
             let chasing = droid.alert == Some(Alert::Alert) && droid.windup == 0.0 && !droid.down;
             (droid.sprint_in, droid.sprinting) =
@@ -1458,11 +1515,40 @@ impl Inhabitants {
             }
             let step = ACCELERATION * dt;
             droid.speed += (wanted - droid.speed).clamp(-step, step);
-            droid.feet += forward(droid.heading) * (droid.speed * dt);
-            if let Some((x, z)) = survey::cell_at(grid, origin, droid.feet) {
-                if grid.is_walkable(x, z) {
-                    let floor = grid.floor(x, z);
-                    droid.feet.y += (floor - droid.feet.y) * (1.0 - (-FLOOR_EASING * dt).exp());
+            // On a ferry, it goes along with it.
+            let carried = crossings
+                .iter()
+                .find(|crossing| crossing.carries(droid.feet))
+                .map_or(Vector3::zeros(), |crossing| crossing.velocity);
+            droid.feet += carried * dt;
+            // It keeps to floor it can walk: never off an edge, nor up or down more than a stair's
+            // step - along the edge instead, if it can, or not at all. Getting on a ferry or off
+            // it, it goes where the trip takes it.
+            let step = forward(droid.heading) * (droid.speed * dt);
+            let off_the_grid = droid.trip.is_some_and(|trip| trip.off_the_grid());
+            let fits = |step: Vector3<f32>| off_the_grid || trip::can_step(grid, origin, droid.feet, droid.feet + step);
+            match [step, Vector3::new(step.x, 0.0, 0.0), Vector3::new(0.0, 0.0, step.z)].into_iter().find(|&step| fits(step)) {
+                Some(step) => droid.feet += step,
+                // Nowhere to go from here: kept waiting, as by someone in its way, it goes
+                // somewhere else in the end.
+                None => {
+                    droid.speed = 0.0;
+                    droid.waiting += dt;
+                    if droid.waiting > PATIENCE && droid.trip.is_none() {
+                        droid.route.clear();
+                        droid.waiting = 0.0;
+                    }
+                }
+            }
+            match crossings.iter().find(|crossing| crossing.carries(droid.feet)) {
+                Some(crossing) => droid.feet.y = crossing.deck.y,
+                None => {
+                    if let Some((x, z)) = survey::cell_at(grid, origin, droid.feet) {
+                        if grid.is_walkable(x, z) {
+                            let floor = grid.floor(x, z);
+                            droid.feet.y += (floor - droid.feet.y) * (1.0 - (-FLOOR_EASING * dt).exp());
+                        }
+                    }
                 }
             }
 
@@ -1520,7 +1606,7 @@ impl Inhabitants {
                 jumped: false,
                 low: false,
                 falling: 0.0,
-                lifted: 0.0,
+                lifted: carried.y * dt,
                 cover: None,
                 corner: false,
                 peeking: false,

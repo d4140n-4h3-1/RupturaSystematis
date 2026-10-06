@@ -5,8 +5,10 @@
 //! named after it - `<name>_1`, `<name>_2` and on - at the places it goes through, in order, the
 //! last its other end. The ferry is taken out of the level's static collider and put on a body of
 //! its own, moved by its velocity, which the player reads to be carried along with it (see
-//! `Player::drive`). The survey of the level counts only the level's own collider, so the droids
-//! never take a ferry: they keep to the ground that stays where it is.
+//! `Player::drive`). The survey of the level counts only the level's own collider, so the ferries
+//! are no part of the droids' grid: they take one as a way across of its own, from one end to the
+//! other, waiting for it to come and getting on and off it as it waits (see [`Crossing`] and
+//! [`crate::inhabitants`]).
 
 use fyrox::{
     core::{algebra::Vector3, log::Log, pool::Handle},
@@ -40,6 +42,34 @@ pub struct Ferries {
 struct Ferry {
     body: Handle<Node>,
     route: Route,
+    /// Half as wide across as its deck is, the narrower way, in meters.
+    half: f32,
+}
+
+/// A ferry as the droids go by it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Crossing {
+    /// The middle of its deck where it waits at each end.
+    pub ends: [Vector3<f32>; 2],
+    /// The middle of its deck now, and how fast it is going.
+    pub deck: Vector3<f32>,
+    pub velocity: Vector3<f32>,
+    /// Half as wide across as its deck is, the narrower way, in meters: within that of the
+    /// middle, someone is on it.
+    pub half: f32,
+    /// The end it is waiting at, if it is, and for how much longer, in seconds.
+    pub waiting: Option<(usize, f32)>,
+    /// How long it takes to get from one end to the other, at worst: waiting for it to come back
+    /// from the other end, and the crossing.
+    pub longest: f32,
+}
+
+impl Crossing {
+    /// Whether `at` is on its deck.
+    pub fn carries(&self, at: Vector3<f32>) -> bool {
+        let off = at - self.deck;
+        off.x.abs() < self.half && off.z.abs() < self.half && off.y.abs() < 0.5
+    }
 }
 
 /// The places a ferry goes through, from one end to the other.
@@ -67,6 +97,20 @@ impl Route {
     /// gently to a stop, at [`TOP_SPEED`] half way.
     fn crossing(&self) -> f32 {
         1.5 * self.length() / TOP_SPEED
+    }
+
+    /// Which end the ferry is waiting at `time` seconds into its round trip, and for how much
+    /// longer, if it is waiting.
+    fn waiting(&self, time: f32) -> Option<(usize, f32)> {
+        let leg = WAIT + self.crossing();
+        let time = time.rem_euclid(2.0 * leg);
+        if time < WAIT {
+            Some((0, WAIT - time))
+        } else if (leg..leg + WAIT).contains(&time) {
+            Some((1, leg + WAIT - time))
+        } else {
+            None
+        }
     }
 
     /// Where the ferry is `time` seconds into its round trip, which repeats: waiting at the start,
@@ -110,6 +154,8 @@ impl Ferries {
                 Log::warn(format!("Maze: ferry {name} has nowhere to go"));
                 continue;
             }
+            let bounds = graph[*mesh].world_bounding_box();
+            let half = 0.5 * (bounds.max.x - bounds.min.x).min(bounds.max.z - bounds.min.z);
             let collider = ColliderBuilder::new(BaseBuilder::new())
                 .with_shape(ColliderShape::trimesh(vec![GeometrySource(*mesh)]))
                 .build(graph);
@@ -130,10 +176,29 @@ impl Ferries {
                 route.length(),
                 route.crossing()
             ));
-            ferries.push(Ferry { body, route });
+            ferries.push(Ferry { body, route, half });
         }
         let bodies = ferries.iter().map(|ferry| ferry.body).collect();
         (Self { ferries, clock: 0.0 }, bodies)
+    }
+
+    /// Each ferry, as the droids go by it.
+    pub fn crossings(&self, graph: &Graph) -> Vec<Crossing> {
+        self.ferries
+            .iter()
+            .filter_map(|ferry| {
+                let body = graph.try_get_of_type::<RigidBody>(ferry.body).ok()?;
+                let ends = [ferry.route.0[0], *ferry.route.0.last()?];
+                Some(Crossing {
+                    ends,
+                    deck: body.global_position(),
+                    velocity: body.lin_vel(),
+                    half: ferry.half,
+                    waiting: ferry.route.waiting(self.clock),
+                    longest: 2.0 * ferry.route.crossing() + 3.0 * WAIT,
+                })
+            })
+            .collect()
     }
 
     /// Puts every ferry back where it starts, standing still, as a round begins.
@@ -184,6 +249,18 @@ mod tests {
         assert!(route.at(2.0 * WAIT + crossing).metric_distance(&there) < 1e-4, "waiting there");
         let round = 2.0 * (WAIT + crossing);
         assert!(route.at(round).norm() < 1e-4, "back again");
+    }
+
+    #[test]
+    fn it_says_which_end_it_waits_at_and_for_how_long() {
+        let route = route();
+        let crossing = route.crossing();
+        assert_eq!(route.waiting(1.0), Some((0, WAIT - 1.0)));
+        assert_eq!(route.waiting(WAIT + 0.5 * crossing), None, "on its way");
+        let (end, left) = route.waiting(2.0 * WAIT + crossing - 1.0).unwrap();
+        assert_eq!(end, 1);
+        assert!((left - 1.0).abs() < 1e-4);
+        assert_eq!(route.waiting(2.0 * (WAIT + crossing) + 1.0), Some((0, WAIT - 1.0)), "round again");
     }
 
     #[test]

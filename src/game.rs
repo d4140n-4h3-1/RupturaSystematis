@@ -1159,9 +1159,12 @@ impl MazeGame {
                 Some(Rival { side: drone.side()?, feet: body.feet, middle: body.middle, collider: body.collider })
             })
             .collect();
+        // The ferries, for the droids to cross on.
+        let crossings = self.level.ferries.crossings(&scene.graph);
         self.inhabitants.update(
             &mut scene.graph,
             (grid, *origin),
+            &crossings,
             player,
             &rivals,
             rng,

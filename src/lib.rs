@@ -52,3 +52,4 @@ pub mod player;
 pub mod ragdoll;
 mod survey;
 mod tiles;
+mod trip;
