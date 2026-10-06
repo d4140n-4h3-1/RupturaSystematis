@@ -44,6 +44,13 @@ use serde::Deserialize;
 pub const CHARACTERS: u32 = 1 << 31;
 /// How many frames the bodies are laid out in the rest pose for the engine to join them.
 const BIND_FRAMES: u32 = 3;
+/// How slowly every body has to be going to be still, in meters per second, and for how many
+/// frames in a row, for the droid to be laid to rest.
+const STILL: f32 = 0.15;
+const STILL_FOR: u32 = 45;
+/// How many frames after it was let go a droid is laid to rest however it lies, its joints never
+/// quite still on an uneven floor: long enough to have fallen.
+const REST_AFTER: u32 = 360;
 /// How hard the bolt that stops a droid knocks it, and one that hits it lying there shoves it,
 /// in newton seconds.
 pub const STOPPING_BLOW: f32 = 15.0;
@@ -326,6 +333,8 @@ enum State {
     },
     /// Falling, or lying there.
     Limp,
+    /// Lying still, its bodies standing still for the physics: see [`Ragdoll::follow`].
+    Resting,
 }
 
 /// A droid gone limp, or about to.
@@ -338,6 +347,8 @@ pub struct Ragdoll {
     state: State,
     /// Frames since it was let go; and whether to log how it falls (MAZE_KNOCKDOWN).
     frames: u32,
+    /// How many frames in a row every body has been barely moving, while it lies there.
+    still: u32,
     report: bool,
 }
 
@@ -492,6 +503,7 @@ impl Ragdoll {
             root,
             limbs,
             frames: 0,
+            still: 0,
             report: crate::platform::var("MAZE_KNOCKDOWN").is_some(),
             state: State::Joining {
                 frames: BIND_FRAMES,
@@ -503,7 +515,7 @@ impl Ragdoll {
 
     /// Whether it has been let go, and has the droid's bones.
     pub fn is_limp(&self) -> bool {
-        self.state == State::Limp
+        matches!(self.state, State::Limp | State::Resting)
     }
 
     /// Where the pelvis is, across the world.
@@ -599,7 +611,7 @@ impl Ragdoll {
 
     /// Shoves the body that `collider` belongs to with `impulse` at `point`.
     pub fn shove(
-        &self,
+        &mut self,
         graph: &mut Graph,
         collider: Handle<Collider>,
         impulse: Vector3<f32>,
@@ -612,7 +624,12 @@ impl Ragdoll {
         else {
             return;
         };
-        if let Ok(body) = graph.try_get_mut_of_type::<RigidBody>(limb.body.to_base()) {
+        let body = limb.body;
+        // Laid to rest, it is turned loose again first.
+        if self.state == State::Resting {
+            self.set_resting(graph, false);
+        }
+        if let Ok(body) = graph.try_get_mut_of_type::<RigidBody>(body.to_base()) {
             body.apply_impulse_at_point(impulse, point);
             body.wake_up();
         }
@@ -638,7 +655,21 @@ impl Ragdoll {
                 self.state = State::Limp;
             }
             State::Limp => self.follow(graph),
+            State::Resting => (),
         }
+    }
+
+    /// Lays it to rest - its bodies fixed where they are, out of the physics' way - or turns
+    /// it loose again.
+    fn set_resting(&mut self, graph: &mut Graph, resting: bool) {
+        let kind = if resting { RigidBodyType::Static } else { RigidBodyType::Dynamic };
+        for limb in &self.limbs {
+            if let Ok(body) = graph.try_get_mut_of_type::<RigidBody>(limb.body.to_base()) {
+                body.set_body_type(kind);
+            }
+        }
+        self.state = if resting { State::Resting } else { State::Limp };
+        self.still = 0;
     }
 
     /// Puts every body where its bone is now, going at `velocity`, knocks the one nearest the
@@ -685,6 +716,21 @@ impl Ragdoll {
     /// model's root, as the bones above it have just been put, since the engine only works out
     /// where everything is after the frame.
     fn follow(&mut self, graph: &mut Graph) {
+        // Still for a while - every body barely moving - it is laid to rest: its bodies stand
+        // still for the physics, and its bones stay where they are, at no cost, until a bolt
+        // shoves it again. A battle royale's worth of droids lying where they fell costs next to
+        // nothing.
+        let fastest = self
+            .limbs
+            .iter()
+            .filter_map(|limb| graph.try_get_of_type::<RigidBody>(limb.body.to_base()).ok())
+            .map(|body| body.lin_vel().norm())
+            .fold(0.0f32, f32::max);
+        self.still = if fastest < STILL { self.still + 1 } else { 0 };
+        if self.still > STILL_FOR || self.frames > REST_AFTER {
+            self.set_resting(graph, true);
+            return;
+        }
         let mut placed: Vec<(Handle<Node>, Matrix4<f32>)> = Vec::with_capacity(self.limbs.len());
         for limb in &self.limbs {
             let Ok(body) = graph.try_get_of_type::<RigidBody>(limb.body.to_base()) else {

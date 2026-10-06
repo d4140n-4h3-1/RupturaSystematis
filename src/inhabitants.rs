@@ -2133,7 +2133,7 @@ impl Inhabitants {
                 .as_ref()
                 .is_some_and(|ragdoll| ragdoll.owns(collider))
         }) {
-            let ragdoll = droid.ragdoll.as_ref()?;
+            let ragdoll = droid.ragdoll.as_mut()?;
             ragdoll.shove(graph, collider, strike.way * ragdoll::SHOVE, strike.at);
             let body = ragdoll.body_of(collider);
             let headshot = body

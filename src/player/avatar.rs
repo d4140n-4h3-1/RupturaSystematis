@@ -1299,6 +1299,15 @@ fn next_arms(arms: Arms, wants: Wants) -> Option<Arms> {
     }
 }
 
+/// What measuring each of the droid's animations found, by its name: how fast it carries the
+/// droid and how far through it the left foot is down - or, for a jump's push off, how far
+/// through it the hips are lowest. The same for every droid, so measured once.
+fn measured() -> &'static std::sync::Mutex<std::collections::HashMap<String, (Option<Vector3<f32>>, f32)>> {
+    static MEASURED: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, (Option<Vector3<f32>>, f32)>>> =
+        std::sync::OnceLock::new();
+    MEASURED.get_or_init(Default::default)
+}
+
 /// What [`MOTION`] has, read once for every droid; none if it cannot be read.
 fn motions() -> Option<&'static Motions> {
     static MOTIONS: std::sync::OnceLock<Option<Motions>> = std::sync::OnceLock::new();
@@ -2003,11 +2012,21 @@ impl Avatar {
         }
         // How fast an animation carries the droid along the ground, and which way, in meters per
         // second at its size in the game; and how far through it the left foot is down.
+        // Every droid's animations are the same, so each is measured once, by its name: sampling
+        // them all, pose by pose, is most of what putting a droid down costs.
         let measure = |animation: &mut Animation| {
+            let name = animation.name().to_string();
+            if let Some(&found) = measured().lock().ok().and_then(|cache| cache.get(&name).copied()).as_ref() {
+                return found;
+            }
             let timed = skeleton.stances(animation, &rest);
             let stances: Vec<Stance> = timed.iter().map(|&(_, stance)| stance).collect();
             let pace = pace_of(&stances, ground(&stances)).map(|pace| pace * SCALE);
-            (pace, left_step(&timed).unwrap_or(0.0))
+            let found = (pace, left_step(&timed).unwrap_or(0.0));
+            if let Ok(mut cache) = measured().lock() {
+                cache.insert(name, found);
+            }
+            found
         };
         // How fast it carries the droid forward.
         let speed_of = |animation: &mut Animation| measure(animation).0.map(|pace| pace.z);
@@ -2200,7 +2219,18 @@ impl Avatar {
                 // Pushing off and landing are played once through; flying, for as long as it lasts.
                 container[start.animation].set_loop(false);
                 container[land.animation].set_loop(false);
-                let push_off = lowest(&skeleton.stances(&mut container[start.animation], &rest))?;
+                let name = format!("{} push off", container[start.animation].name());
+                let cached = measured().lock().ok().and_then(|cache| cache.get(&name).map(|&(_, low)| low));
+                let push_off = match cached {
+                    Some(low) => low,
+                    None => {
+                        let low = lowest(&skeleton.stances(&mut container[start.animation], &rest))?;
+                        if let Ok(mut cache) = measured().lock() {
+                            cache.insert(name, (None, low));
+                        }
+                        low
+                    }
+                };
                 Some(Leap {
                     start,
                     flight,
