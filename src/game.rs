@@ -2643,10 +2643,7 @@ impl MazeGame {
             if let (Some((grid, origin)), Some(start), Some(rng)) =
                 (self.level.grid.as_ref(), self.start_cell, self.rng.as_mut())
             {
-                let floor = (0..grid.depth)
-                    .flat_map(|z| (0..grid.width).map(move |x| (x, z)))
-                    .filter(|&(x, z)| grid.is_walkable(x, z))
-                    .count();
+                let floor = grid.walkable_cells().count();
                 let spots = hearts::spots(grid, start, hearts::count(floor), rng);
                 let scene = &mut ctx.scenes[self.scene];
                 self.hearts.place(&model, scene, (grid, *origin), &spots);

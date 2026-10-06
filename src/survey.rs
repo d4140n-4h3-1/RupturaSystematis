@@ -33,6 +33,9 @@ pub(crate) const CELL_SIZE: f32 = 0.5;
 const HEADROOM: f32 = 2.0;
 /// How high a floor can be and still be the ground, which the climbing starts from.
 const GROUND: f32 = 0.5;
+/// The most floors over one another the grid keeps: a four-floor building with its roof, and
+/// some to spare.
+const MOST_STOREYS: usize = 6;
 
 /// Samples the maze for walkable ground, returning the grid and the world position of its corner.
 /// `maze` is the level's collider, which must exist already, and `ignore` a mesh that is not part
@@ -43,6 +46,7 @@ pub fn survey(
     ignore: Handle<Node>,
     open_sky: bool,
 ) -> Option<(WalkGrid, Vector3<f32>)> {
+    let started = crate::platform::nanos_now();
     // The footprint of every mesh in the scene is the footprint of the maze.
     let mut min = Vector3::repeat(f32::MAX);
     let mut max = Vector3::repeat(f32::MIN);
@@ -58,52 +62,85 @@ pub fn survey(
     }
     let width = ((max.x - min.x) / CELL_SIZE).ceil() as usize;
     let depth = ((max.z - min.z) / CELL_SIZE).ceil() as usize;
-    let mut grid = WalkGrid::new(width, depth, CELL_SIZE);
     let origin = Vector3::new(min.x, 0.0, min.z);
-    // Each cell's floor, if it has one: looked for from over everything down to under it all,
-    // and never less far down than a meter under the ground.
+    // Each cell's floors, if it has any, bottom up: looked for from over everything down to under
+    // it all, and never less far down than a meter under the ground.
     let bottom = (min.y - 1.0).min(-1.0);
-    let mut floors = vec![None; width * depth];
+    let mut floors: Vec<Vec<f32>> = Vec::with_capacity(width * depth);
     for z in 0..depth {
         for x in 0..width {
-            floors[z * width + x] = top_floor(graph, maze, cell_center(origin, x, z), (max.y + 1.0, bottom), open_sky);
+            let spot = cell_center(origin, x, z);
+            floors.push(floors_at(graph, maze, spot, (max.y + 1.0, bottom), open_sky));
         }
     }
-    // Out from the ground, onto every floor a step from one already walkable.
+    let storeys = floors.iter().map(Vec::len).max().unwrap_or(1).clamp(1, MOST_STOREYS);
+    let mut grid = WalkGrid::with_storeys(width, depth, storeys, CELL_SIZE);
+    for (i, cell) in floors.iter().enumerate() {
+        for (storey, &floor) in cell.iter().enumerate().take(storeys) {
+            let (x, row) = grid.on_storey((i % width, i / width), storey);
+            grid.set_floor(x, row, floor);
+        }
+    }
+    // Out from the ground, onto every floor a step from one already walkable: on whichever storey
+    // it is, up stairs to the floors up above.
+    // The climbing starts from the ground: where the first floor down - the one there is always
+    // open air over - is low enough to be ground. Floors further down, if they are any, are found
+    // by walking to them.
     let mut queue = VecDeque::new();
-    for (i, floor) in floors.iter().enumerate() {
-        if floor.is_some_and(|floor| floor <= GROUND) {
-            queue.push_back((i % width, i / width));
+    for (i, cell) in floors.iter().enumerate() {
+        if let Some((storey, &floor)) = cell.iter().enumerate().take(storeys).last() {
+            if floor <= GROUND {
+                queue.push_back(grid.on_storey((i % width, i / width), storey));
+            }
         }
     }
-    for &(x, z) in &queue {
-        grid.set(x, z, true);
-        grid.set_floor(x, z, floors[z * width + x].unwrap_or_default());
+    for &(x, row) in &queue {
+        grid.set(x, row, true);
     }
     let mut walkable = queue.len();
     let ground = walkable;
-    while let Some((x, z)) = queue.pop_front() {
+    let mut tried = vec![false; width * grid.rows()];
+    while let Some(cell) = queue.pop_front() {
+        let (x, z) = grid.plan(cell);
+        let here = grid.floor(cell.0, cell.1);
+        // The first floor down at each spot - the last, bottom up - has open air over it; only a
+        // floor under another could be the inside of something solid, and needs a clear way in.
+        let first = |plan: (usize, usize), storey: usize| storey + 1 == floors[plan.1 * width + plan.0].len().min(storeys);
+        let here_first = first((x, z), grid.storey(cell));
         let neighbours = [(x.wrapping_sub(1), z), (x + 1, z), (x, z.wrapping_sub(1)), (x, z + 1)];
         for (nx, nz) in neighbours {
-            if nx >= width || nz >= depth || grid.is_walkable(nx, nz) {
+            if nx >= width || nz >= depth {
                 continue;
             }
-            let Some(floor) = floors[nz * width + nx] else {
-                continue;
-            };
-            if (floor - grid.floor(x, z)).abs() <= MAX_CLIMB {
-                grid.set(nx, nz, true);
-                grid.set_floor(nx, nz, floor);
-                walkable += 1;
-                queue.push_back((nx, nz));
+            for (storey, &floor) in floors[nz * width + nx].iter().enumerate().take(storeys) {
+                let (cx, crow) = grid.on_storey((nx, nz), storey);
+                if !grid.is_walkable(cx, crow)
+                    && (floor - here).abs() <= MAX_CLIMB
+                    && !tried[crow * width + cx]
+                    && ((here_first && first((nx, nz), storey))
+                        || passage(graph, grid.on_floor(origin, cell), grid.on_floor(origin, (cx, crow))))
+                {
+                    // Room round it, asked once.
+                    tried[crow * width + cx] = true;
+                    if !roomy(graph, cell_center(origin, nx, nz), floor) {
+                        continue;
+                    }
+                    grid.set(cx, crow, true);
+                    walkable += 1;
+                    queue.push_back((cx, crow));
+                }
             }
         }
     }
+    let upper = grid.walkable_cells().filter(|&cell| grid.storey(cell) > 0).count();
     Log::info(format!(
-        "Maze: {width}x{depth} cells over {:.1}x{:.1} m, {walkable} walkable, {} of them up off the ground",
+        "Maze: {width}x{depth} cells over {:.1}x{:.1} m, {walkable} walkable, {} of them up off the ground, \
+         {upper} on {} storeys over others, in {:.1} s",
         max.x - min.x,
         max.z - min.z,
-        walkable - ground
+        walkable - ground,
+        storeys - 1,
+        crate::platform::nanos_now().saturating_sub(started) as f32 / 1.0e9
     ));
     Some((grid, origin))
 }
@@ -172,18 +209,21 @@ pub fn draw_map(grid: &WalkGrid, start: (usize, usize), exit: (usize, usize)) ->
     text
 }
 
-/// How high the highest floor at `spot` is that has headroom over it, under a ceiling, with room
-/// around: a ray is dropped from `top`, over everything, down to `bottom`, under everything, through all of the maze, surface by
-/// surface - a cast meets only the first surface of a collider - and the floor is the first it
-/// meets with [`HEADROOM`] or more of open air above it. Under `open_sky`, the sky is the
-/// ceiling.
-fn top_floor(
+/// The floors at `spot`, bottom up: every surface with headroom over it (see [`roomy`] for room
+/// round it, which is asked later), found
+/// by dropping a ray from `top`, over everything, down to `bottom`, under everything, through all
+/// of the maze, surface by surface - a cast meets only the first surface of a collider. The first
+/// floor down is the first surface with [`HEADROOM`] or more of open air above it - under
+/// `open_sky`, the sky is the ceiling - as it always was. Under that, a floor under a floor up
+/// above - the ground floor of a house under its first floor - is one too, but only where the
+/// air over it is open, not the inside of something solid (see [`floors_of`]).
+fn floors_at(
     graph: &Graph,
     maze: Handle<Collider>,
     spot: Vector3<f32>,
     (top, bottom): (f32, f32),
     open_sky: bool,
-) -> Option<f32> {
+) -> Vec<f32> {
     /// Below a surface, to cast on from past it; and the most surfaces a cell is looked through.
     const PAST: f32 = 0.01;
     const MOST: usize = 32;
@@ -191,20 +231,62 @@ fn top_floor(
     let mut from = top;
     while heights.len() < MOST {
         let below = Vector3::new(spot.x, from, spot.z);
-        let Some((hit, collider)) = first_hit(graph, below, -Vector3::y(), from - bottom) else {
+        // The maze's surfaces only: the floor under everything is solid, and a ray starting in
+        // it meets it where it starts - a centimeter at a time through it, before.
+        let Some(hit) = maze_hit(graph, maze, below, -Vector3::y(), from - bottom) else {
             break;
         };
-        if collider == maze {
-            heights.push(hit.y);
-        }
+        heights.push(hit.y);
         from = hit.y - PAST;
     }
-    let floor = floor_of(&heights, open_sky)?;
+    // The first floor down is the topmost with room round it, as it always was; those under it
+    // are asked for room only if the survey walks to them.
+    let mut floors = floors_of(&heights, open_sky);
+    let first = floors.iter().position(|&floor| roomy(graph, spot, floor)).unwrap_or(floors.len());
+    floors.drain(..first);
+    floors.reverse();
+    floors
+}
+
+/// Whether there is room round the middle of a cell at `spot` to stand on `floor`: nothing
+/// within reach at chest height. Asked only of floors the survey walks to - most are never.
+fn roomy(graph: &Graph, spot: Vector3<f32>, floor: f32) -> bool {
     let chest = Vector3::new(spot.x, floor + 1.0, spot.z);
     [Vector3::x(), -Vector3::x(), Vector3::z(), -Vector3::z()]
         .iter()
         .all(|dir| first_hit(graph, chest, *dir, 0.45).is_none())
-        .then_some(floor)
+}
+
+/// Whether someone can walk from the middle of the cell at `from` to the middle of its neighbour
+/// at `to`, each on its floor: nothing in the way at chest height. A floor inside something solid
+/// - the ground under stairs built solid down to it - has the solid's sides all round it.
+fn passage(graph: &Graph, from: Vector3<f32>, to: Vector3<f32>) -> bool {
+    let (from, to) = (from + Vector3::new(0.0, 1.0, 0.0), to + Vector3::new(0.0, 1.0, 0.0));
+    let way = to - from;
+    let length = way.norm();
+    length < 1.0e-4 || first_hit(graph, from, way / length, length).is_none()
+}
+
+/// The floors among `heights`, the surfaces a ray dropped from over everything meets, top down:
+/// the first with [`HEADROOM`] under the surface over it, as [`floor_of`] has it, and every one
+/// under that with as much headroom. Those further down may be the inside of something solid -
+/// stairs or a raised floor built solid down to the ground meet the ground in one surface - which
+/// the survey never walks into (see [`survey`]).
+fn floors_of(heights: &[f32], open_sky: bool) -> Vec<f32> {
+    let Some(first) = floor_of(heights, open_sky) else {
+        return Vec::new();
+    };
+    let Some(at) = heights.iter().position(|&h| h == first) else {
+        return vec![first];
+    };
+    let mut floors = vec![first];
+    floors.extend(
+        heights[at..]
+            .windows(2)
+            .filter(|pair| pair[0] - pair[1] >= HEADROOM)
+            .map(|pair| pair[1]),
+    );
+    floors
 }
 
 /// The floor among `heights`, the surfaces a ray dropped from over everything meets, top down:
@@ -221,24 +303,58 @@ fn floor_of(heights: &[f32], open_sky: bool) -> Option<f32> {
         .map(|pair| pair[1])
 }
 
+
+/// Where a ray from `origin` along `direction` first meets the maze, `maze`, within `length`, if
+/// it does: past anything else.
+fn maze_hit(
+    graph: &Graph,
+    maze: Handle<Collider>,
+    origin: Vector3<f32>,
+    direction: Vector3<f32>,
+    length: f32,
+) -> Option<Vector3<f32>> {
+    HITS.with(|hits| {
+        let mut hits = hits.borrow_mut();
+        graph.physics.cast_ray(
+            RayCastOptions {
+                ray_origin: Point3::from(origin),
+                ray_direction: direction,
+                max_len: length,
+                groups: Default::default(),
+                sort_results: true,
+            },
+            &mut *hits,
+        );
+        hits.iter().find(|hit| hit.collider == maze).map(|hit| hit.position.coords)
+    })
+}
+
+thread_local! {
+    /// One list of hits for every ray of the survey: a new one for each of its rays was much of
+    /// what the survey cost.
+    static HITS: std::cell::RefCell<Vec<fyrox::scene::graph::physics::Intersection>> = Default::default();
+}
+
 fn first_hit(
     graph: &Graph,
     origin: Vector3<f32>,
     direction: Vector3<f32>,
     length: f32,
 ) -> Option<(Vector3<f32>, Handle<Collider>)> {
-    let mut hits = Vec::new();
-    graph.physics.cast_ray(
-        RayCastOptions {
-            ray_origin: Point3::from(origin),
-            ray_direction: direction,
-            max_len: length,
-            groups: Default::default(),
-            sort_results: true,
-        },
-        &mut hits,
-    );
-    hits.first().map(|hit| (hit.position.coords, hit.collider))
+    HITS.with(|hits| {
+        let mut hits = hits.borrow_mut();
+        graph.physics.cast_ray(
+            RayCastOptions {
+                ray_origin: Point3::from(origin),
+                ray_direction: direction,
+                max_len: length,
+                groups: Default::default(),
+                sort_results: true,
+            },
+            &mut *hits,
+        );
+        hits.first().map(|hit| (hit.position.coords, hit.collider))
+    })
 }
 
 #[cfg(test)]
@@ -267,6 +383,26 @@ mod tests {
         // gaps below their tops are the inside of them, and the void under them
         assert_eq!(floor_of(&[3.0, -1.0], true), Some(3.0));
         assert_eq!(floor_of(&[0.0, -1.0, -15.0], true), Some(0.0));
+    }
+
+    #[test]
+    fn floors_over_one_another_are_each_a_floor() {
+        // A house of two floors under a roof, in the open: roof, first floor, ground.
+        let house = [7.3, 7.0, 3.5, 3.2, 0.0, -1.0];
+        assert_eq!(floors_of(&house, true), vec![7.3, 3.5, 0.0]);
+        // Under a ceiling, the roof is no floor.
+        assert_eq!(floors_of(&house, false), vec![3.5, 0.0]);
+    }
+
+    #[test]
+    fn under_something_solid_is_a_floor_only_to_look_at() {
+        // Stairs 2.5 m high built down to the ground, which they meet in one surface: the ground
+        // inside them has the headroom, and is only kept from being walked by their sides.
+        let stairs = [2.5, 0.0, -1.0];
+        assert_eq!(floors_of(&stairs, true), vec![2.5, 0.0]);
+        // A crate is too low to stand under.
+        let crate_ = [1.2, 0.0, -1.0];
+        assert_eq!(floors_of(&crate_, true), vec![1.2]);
     }
 
     #[test]

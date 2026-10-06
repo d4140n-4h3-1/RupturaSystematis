@@ -205,6 +205,9 @@ const CHASE_REACH: f32 = 200.0;
 /// How far above or below where a droid is the floor can be and still be the floor it is on, in
 /// meters: a stair's step, and a little more for its feet still coming down onto it.
 const ON_FLOOR: f32 = 0.7;
+/// In battle royale, how far from where it is a droid wanders, at most, in meters: near enough to
+/// find the way there, upstairs in another building as likely as not.
+const RING_WANDER: f32 = 35.0;
 /// In capture the flag: how far from its post a droid wanders, and is put down, in meters; how long it keeps after one of the other side it has lost sight of, and
 /// how long it keeps its pistol out once there is no one to shoot at, in seconds.
 const POST_REACH: f32 = 3.0;
@@ -634,6 +637,30 @@ pub(crate) fn spot_near(
         let spot = at + Vector3::new(angle.sin(), 0.0, angle.cos()) * away;
         if let Some(cell) = survey::cell_at(grid, origin, spot).filter(|&(x, z)| grid.is_walkable(x, z)) {
             return Some(grid.on_floor(origin, cell));
+        }
+    }
+    survey::nearest_walkable(grid, origin, at).map(|cell| grid.on_floor(origin, cell))
+}
+
+/// Somewhere on any floor of `grid` within `reach` of `at` as the crow flies - in a building, up
+/// on one of its floors as likely as on the ground - picked by `rng`; or, with nowhere there,
+/// the floor nearest `at`.
+pub(crate) fn spot_on_any_floor_near(
+    (grid, origin): (&WalkGrid, Vector3<f32>),
+    at: Vector3<f32>,
+    reach: f32,
+    rng: &mut Rng,
+) -> Option<Vector3<f32>> {
+    for _ in 0..24 {
+        let angle = between(rng, (-std::f32::consts::PI, std::f32::consts::PI));
+        let away = between(rng, (0.0, reach));
+        let spot = at + Vector3::new(angle.sin(), 0.0, angle.cos()) * away;
+        let Some(cell) = survey::cell_at(grid, origin, spot) else {
+            continue;
+        };
+        let floors: Vec<(usize, usize)> = grid.cells_over(grid.plan(cell)).collect();
+        if !floors.is_empty() {
+            return Some(grid.on_floor(origin, floors[rng.below(floors.len())]));
         }
     }
     survey::nearest_walkable(grid, origin, at).map(|cell| grid.on_floor(origin, cell))
@@ -1524,9 +1551,22 @@ impl Inhabitants {
                             .unwrap_or_default(),
                         // In battle royale, somewhere inside the ring, well in from its edge.
                         None => match self.ring {
-                            Some((middle, reach)) => spot_near((grid, origin), middle, reach * 0.7, rng)
-                                .map(|to| go_to(droid.feet, to))
-                                .unwrap_or_default(),
+                            // Not too far to find the way, up in a building as likely as not:
+                            // round where it is, if that is in the ring; or else on its way in.
+                            Some((middle, reach)) => {
+                                let to_middle = flat(middle - droid.feet);
+                                let off = to_middle.norm();
+                                let around = if off < reach * 0.8 {
+                                    droid.feet
+                                } else {
+                                    droid.feet + to_middle * ((off - reach * 0.5).min(RING_WANDER) / off)
+                                };
+                                (0..6)
+                                    .filter_map(|_| spot_on_any_floor_near((grid, origin), around, RING_WANDER, rng))
+                                    .find(|&to| flat(to - middle).norm() < reach * 0.9)
+                                    .map(|to| go_to(droid.feet, to))
+                                    .unwrap_or_default()
+                            }
                             None => (plan((grid, origin), droid.feet, TRIP, rng), None),
                         },
                     };

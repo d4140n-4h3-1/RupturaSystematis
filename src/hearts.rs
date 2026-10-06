@@ -82,16 +82,10 @@ pub fn count(floor: usize) -> usize {
 /// enough from the start - the first no further than [`NEAR_START`], where there is room - as far
 /// apart as there are cells for, picked by `rng`. Fewer if the maze has no room for them all.
 pub fn spots(grid: &WalkGrid, start: (usize, usize), count: usize, rng: &mut Rng) -> Vec<(usize, usize)> {
+    // Floor all round, on the same floor: a step up or down from it at most, on whichever storey.
     let open = |x: usize, z: usize| {
         (-ROOM..=ROOM).all(|dx| {
-            (-ROOM..=ROOM).all(|dz| {
-                let (x, z) = (x as i64 + dx, z as i64 + dz);
-                x >= 0
-                    && z >= 0
-                    && (x as usize) < grid.width
-                    && (z as usize) < grid.depth
-                    && grid.is_walkable(x as usize, z as usize)
-            })
+            (-ROOM..=ROOM).all(|dz| (dx, dz) == (0, 0) || grid.step_to((x, z), dx as isize, dz as isize).is_some())
         })
     };
     let distances = grid.distances_from(start);

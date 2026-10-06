@@ -43,6 +43,8 @@ pub fn floor_near(grid: &WalkGrid, origin: Vector3<f32>, point: Vector3<f32>) ->
     if let Some(cell) = grid.cell_at(origin, point).filter(|&cell| at_height(cell)) {
         return Some(Vector3::new(point.x, grid.floor(cell.0, cell.1), point.z));
     }
+    // Over each spot of the plan near it, the floor at its height, on whichever storey.
+    let at_height_over = |plan: (usize, usize)| grid.cells_over(plan).find(|&cell| at_height(cell));
     let reach = (NEAR / grid.cell_size).ceil() as isize;
     let (cx, cz) = cell_near(grid, origin, point);
     let mut best: Option<((usize, usize), f32)> = None;
@@ -51,13 +53,16 @@ pub fn floor_near(grid: &WalkGrid, origin: Vector3<f32>, point: Vector3<f32>) ->
             let (Some(x), Some(z)) = (cx.checked_add_signed(dx), cz.checked_add_signed(dz)) else {
                 continue;
             };
-            if x >= grid.width || z >= grid.depth || !at_height((x, z)) {
+            if x >= grid.width || z >= grid.depth {
                 continue;
             }
-            let off = grid.center(origin, (x, z)) - point;
+            let Some(cell) = at_height_over((x, z)) else {
+                continue;
+            };
+            let off = grid.center(origin, cell) - point;
             let distance = (off.x * off.x + off.z * off.z).sqrt();
             if distance <= NEAR && best.is_none_or(|(_, d)| distance < d) {
-                best = Some(((x, z), distance));
+                best = Some((cell, distance));
             }
         }
     }

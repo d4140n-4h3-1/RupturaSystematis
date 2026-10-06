@@ -1616,7 +1616,7 @@ dependencies = [
 [[package]]
 name = "fyrox-gfx"
 version = "0.1.0"
-source = "git+https://github.com/d4140n-4h3-1/fyrox-gfx.git?branch=main#c67f562a7b2124a1299b82d574552b00c5d08d72"
+source = "git+https://github.com/d4140n-4h3-1/fyrox-gfx.git?branch=main#0858effb72a3b3a668df8b93576567e8ae314f57"
 dependencies = [
  "fyrox",
  "fyrox-graphics-wgpu",
@@ -2100,7 +2100,7 @@ dependencies = [
 [[package]]
 name = "hydroxus-ai"
 version = "0.1.0"
-source = "git+https://github.com/d4140n-4h3-1/hydroxus-ai.git?branch=main#a390aeffa804fc745b3d410ce0d86c7f1b475f34"
+source = "git+https://github.com/d4140n-4h3-1/hydroxus-ai.git?branch=main#ca52064e484099d85c1bc5201b3489dda16fc977"
 dependencies = [
  "nalgebra 0.35.0",
 ]

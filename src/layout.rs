@@ -18,7 +18,7 @@ pub fn plan_round(
     // Stray samples (a ledge, a gap outside the walls) form small islands of their own; the
     // round is played in the biggest connected area.
     let mut best: Vec<(usize, usize)> = Vec::new();
-    let mut seen = vec![false; grid.width * grid.depth];
+    let mut seen = vec![false; grid.width * grid.rows()];
     for (x, z) in grid.walkable_cells() {
         if seen[z * grid.width + x] {
             continue;

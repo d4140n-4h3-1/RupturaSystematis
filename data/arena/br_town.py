@@ -257,7 +257,9 @@ def building(town, rng, kind, cx, cy, w, d, rot_quarter, name):
     for k in range(1, floors + 1):
         z = k * tall
         lane = (outer if (k - 1) % 2 == 0 else inner) if k - 1 < flights else None
-        hole = (sx - 0.1, sx + run + 0.1, lane[0], lane[1]) if lane else None
+        # Just as long as the flight under it: any longer, and between its top step and the
+        # landing there would be a strip with nothing to stand on.
+        hole = (sx, sx + run, lane[0], lane[1]) if lane else None
         roof = k == floors
         slab(town, f"{name}_Slab{k}", x0, x1, y0, y1, z + (SLAB if roof else 0.0), hole,
              town.roof if roof else town.floor_mat)
