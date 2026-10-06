@@ -321,6 +321,13 @@ const STAIRS: [(&str, &str, Gait); 2] = [
 /// to be taken as stairs - going onto them, and staying on them: a step up or down at either.
 const STAIR_LOOK: f32 = 0.35;
 const STAIR_SLOPE: (f32, f32) = (0.3, 0.15);
+/// How far a step up or down has to be to be the edge of a tread, in meters, and how far either
+/// way from the droid it is looked for: further than a tread is deep.
+const TREAD_EDGE: f32 = 0.1;
+const TREAD_LOOK: f32 = 0.6;
+/// How quickly a cycle on stairs is brought into step with the stairs under it, like a rate:
+/// after 1/IN_STEP_RATE seconds, about two thirds of the way.
+const IN_STEP_RATE: f32 = 6.0;
 /// How much faster than the run's stair cycle the droid takes stairs running, and sprinting.
 const STAIR_HURRY: (f32, f32) = (1.15, 1.3);
 /// How fast the hips follow the floor up or down a step - as many meters a second as the droid goes
@@ -342,6 +349,9 @@ const RIDE_RATE: f32 = 15.0;
 /// How far up off the step under it, in meters, an ankle has gone from where it is standing on it
 /// to be swinging, carrying no weight.
 const PLANTED: f32 = 0.08;
+/// How quickly a swinging foot goes after the step under it, as a share of how quickly one
+/// planted on it does.
+const SWINGING_FOLLOW: f32 = 0.15;
 /// The pistol in its right hand, which everything on it hangs off, as long as [`MOTION`] does not
 /// say otherwise.
 const PISTOL: &str = "pistol";
@@ -718,6 +728,8 @@ fn ground(stances: &[Stance]) -> f32 {
 struct Ride {
     at: f32,
     on: f32,
+    /// How fast where the feet need them was going up, in meters per second, climbing.
+    rising: f32,
 }
 
 /// The floor the hips ride on this frame, from `ride`, last frame's, and `on`, where the feet
@@ -745,7 +757,7 @@ fn ride_floor(ride: Option<Ride>, on: f32, lifted: f32, grounded: bool, speed: f
         }
         _ => on,
     };
-    Ride { at, on }
+    Ride { at, on, rising: 0.0 }
 }
 
 /// The bones from the droid's top down to the top of each leg and to each knee, left and right.
@@ -779,6 +791,34 @@ fn step_under(graph: &Graph, foot: Vector3<f32>, floor: f32) -> f32 {
     hits.iter()
         .find(|hit| fixed(hit.collider))
         .map_or(0.0, |hit| hit.position.y - floor)
+}
+
+/// Where `at`, on the floor of a flight of stairs, is in the tread it is on, going `way` along
+/// the floor: how far it is from the tread's back edge, as a share of how deep the tread is. None
+/// off stairs, with no edge either way.
+fn tread_under(graph: &Graph, at: Vector3<f32>, way: Vector3<f32>) -> Option<f32> {
+    let floor = at.y + step_under(graph, at, at.y);
+    let other = |along: f32| (step_under(graph, at + way * along, floor)).abs() > TREAD_EDGE;
+    // The nearest edge, `look` along: halving the gap between a point on this tread and one off
+    // it until it is found.
+    let edge = |look: f32| {
+        if !other(look) {
+            return None;
+        }
+        let (mut near, mut far) = (0.0, look);
+        for _ in 0..8 {
+            let middle = 0.5 * (near + far);
+            if other(middle) {
+                far = middle;
+            } else {
+                near = middle;
+            }
+        }
+        Some((0.5 * (near + far)).abs())
+    };
+    let back = edge(-TREAD_LOOK)?;
+    let front = edge(TREAD_LOOK)?;
+    Some(back / (back + front))
 }
 
 /// Bends the leg from `thigh` down through `shin` in `pose` to bring the end of `foot` to
@@ -916,6 +956,18 @@ struct Clip {
     /// model's own meters, each frame: the stairs the clip was made on.
     #[serde(default)]
     ground_m: Option<[Vec<f32>; 2]>,
+    /// On stairs, how far the root is along them from the back edge of a tread, in the model's
+    /// own meters, each frame; and how deep the treads it was made on are.
+    #[serde(default)]
+    tread_at_m: Option<Vec<f32>>,
+    #[serde(default)]
+    stairs: Option<MadeOn>,
+}
+
+/// The stairs a clip was made on.
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+struct MadeOn {
+    tread_m: f32,
 }
 
 /// A cycle on stairs.
@@ -928,6 +980,10 @@ struct StairCycle {
     up: bool,
     /// How high the step under each ankle is from the root as it was made, like [`Clip::ground_m`].
     ground: [Vec<f32>; 2],
+    /// How far the root is into the tread under it as it was made, as a share of the tread, from
+    /// its back edge, each frame - running on past 1 into the treads after - and how many treads
+    /// it goes up or down in a loop, if the clip says: see [`Avatar::keep_in_step`].
+    treads: Option<(Vec<f32>, f32)>,
 }
 
 #[derive(Debug, Clone, PartialEq, serde::Deserialize)]
@@ -2073,11 +2129,20 @@ impl Avatar {
                     way: 0.0,
                     phase,
                 });
+                let treads = clip.tread_at_m.as_ref().zip(clip.stairs.as_ref()).and_then(|(at, made)| {
+                    let at: Vec<f32> = at.iter().map(|at| at / made.tread_m).collect();
+                    let loop_treads = at.last()? - at.first()?;
+                    (loop_treads > 0.5).then_some((at, loop_treads))
+                });
+                if treads.is_none() {
+                    warn(format!("Droid: {MOTION} has no treads for {name}, so it is not kept in step with the stairs"));
+                }
                 stair_cycles.push(StairCycle {
                     index: cycles.len() - 1,
                     gait,
                     up,
                     ground,
+                    treads,
                 });
             }
         }
@@ -3103,8 +3168,15 @@ impl Avatar {
                 }
                 _ => 0.0,
             };
-            on += wanted * planted;
-            weight += planted;
+            // Only a foot well down on its step carries the hips: one coming down onto a step
+            // can be over its edge for a frame or two, the step under it the one below.
+            let carries = ((planted - 0.5) / 0.5).clamp(0.0, 1.0);
+            let carries = carries * carries * (3.0 - 2.0 * carries);
+            on += wanted * carries;
+            weight += carries;
+            // A swinging foot goes after the step under it slowly, and faster as it comes down on
+            // it: going over an edge, the step under it is the one it is leaving for a moment.
+            let follow = follow * planted.max(SWINGING_FOLLOW);
             *footing += (wanted - *footing) * follow;
         }
         // The hips ride on the step under the foot they stand on, where it is across the world:
@@ -3112,14 +3184,31 @@ impl Avatar {
         // of the feet, and which the feet put back down on their steps already; nor on the step a
         // swinging foot is over, which changes all at once at each edge. Going from one foot to
         // the other, from one step to the other as the weight goes over. With neither foot down,
-        // on the step they last stood on.
+        // on the step they last stood on - or, climbing or going down stairs in their cycle, going
+        // on up or down as fast as they were: running, the droid is in the air between steps.
+        let climbing = self.stair_cycles.iter().any(|stair| Some(stair.index) == self.playing);
+        let held = self.ride.filter(|_| grounded);
+        let carried = |ride: Ride| ride.on + self.lifted + if climbing { ride.rising * dt } else { 0.0 };
         let on = if weight >= 0.05 {
             floor + (on / weight).min(0.0)
         } else {
-            self.ride.filter(|_| grounded).map_or(floor, |ride| ride.on + self.lifted)
+            held.map_or(floor, carried)
         };
-        let climbing = self.stair_cycles.iter().any(|stair| Some(stair.index) == self.playing);
-        let ride = ride_floor(self.ride, on, self.lifted, grounded, self.speed, climbing, dt);
+        let rising = match held {
+            Some(ride) if climbing && dt > 0.0 => {
+                let change = on - ride.on - self.lifted;
+                if weight >= 0.05 && change.abs() <= RIDE_CARRIED * dt {
+                    change / dt
+                } else {
+                    ride.rising
+                }
+            }
+            _ => 0.0,
+        };
+        let ride = Ride {
+            rising,
+            ..ride_floor(self.ride, on, self.lifted, grounded, self.speed, climbing, dt)
+        };
         self.ride = Some(ride);
         let drop = (ride.at - floor) / SCALE;
         if self.footing.iter().all(|footing| footing.abs() < 1.0e-3) && drop.abs() < 1.0e-3 {
@@ -3142,6 +3231,40 @@ impl Avatar {
             let leg = (&legs.thighs[side], &legs.shins[side], &self.skeleton.feet[side]);
             reach(target, leg.0, leg.1, leg.2, wanted, feet[side].rotation);
         }
+    }
+
+    /// Playing a cycle on stairs, brings it into step with the stairs under it, so each foot
+    /// comes down on the middle of a tread as it did on the stairs it was made on, rather than on
+    /// an edge: how far into its tread the droid is, against how far into its own the cycle has
+    /// it, and the cycle moved on or back a little towards it - by less than half a tread, the
+    /// nearer way round, whichever foot that puts on which tread.
+    fn keep_in_step(&mut self, graph: &mut Graph, dt: f32) {
+        let Some((at, loop_treads)) = self
+            .stair_cycles
+            .iter()
+            .find(|stair| Some(stair.index) == self.playing)
+            .and_then(|stair| stair.treads.clone())
+        else {
+            return;
+        };
+        let root = graph[self.root].global_position();
+        let Some(here) = tread_under(graph, root, self.ahead(graph)) else {
+            return;
+        };
+        let Some(index) = self.playing else {
+            return;
+        };
+        let animation = self.cycles[index].animation;
+        let Some(container) = self.container(graph) else {
+            return;
+        };
+        let animation = &mut container[animation];
+        let (start, length) = (animation.time_slice().start, animation.length());
+        let through = ((animation.time_position() - start) / length).rem_euclid(1.0);
+        let made = ground_at(&at, through).rem_euclid(1.0);
+        let behind = (here - made + 0.5).rem_euclid(1.0) - 0.5;
+        let through = through + behind / loop_treads * (1.0 - (-IN_STEP_RATE * dt).exp());
+        animation.set_time_position(start + through.rem_euclid(1.0) * length);
     }
 
     /// Poses the droid for what the body is doing, turning it to face the way it is going.
@@ -3279,6 +3402,9 @@ impl Avatar {
 
         if turned_round && self.fade == 0.0 {
             turn_round(&mut self.from, &self.skeleton.hips);
+        }
+        if going.grounded {
+            self.keep_in_step(graph, dt);
         }
         let mut target = self.rest.clone();
         if let Some(index) = self.playing {
@@ -3871,6 +3997,8 @@ mod tests {
             left_m: vec![0.0, 0.0, 0.1],
             turn_left_deg: vec![0.0, 45.0, 90.0],
             ground_m: None,
+            tread_at_m: None,
+            stairs: None,
         };
         let skid = Skid::new(Handle::NONE, &clip).unwrap();
         assert!(
