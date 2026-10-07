@@ -114,6 +114,13 @@ their animations; the crate decides what they make of what is round them.
   you placed. The last one in wins. A ring of glowing posts closes in on the map in five stages,
   each somewhere new inside the last, hurting anyone caught outside it. `MAZE_ROYALE` sets how
   many play.
+- **Battle royale has its own dialogue**, `data/dialogue/royale.json`, not the maze droids'
+  talk of exits and codes: four kinds of competitor, each in a model and a voice of its own - the
+  proud Gladiator, the hunter Venator, the calculating Eliminator and the wary Vigilator. They
+  call out as they hunt the player and go after anyone, and in battle royale's own moments: when
+  they have shot someone down, when they come back after losing a life, and when the ring catches
+  them outside. Only those within 30 m are heard. Talked to, they taunt the player rather than
+  talk. Every line is checked by `data/system_latin/sl_parser.py`.
 - **The town is gone**: battle royale's first map, a walled town at night, was too dark to play,
   and the Grid and Nexus took its place. `data/arena/br_town.py`, which built it, stays: the
   Grid's buildings, and the helpers both new maps are made with, are its.

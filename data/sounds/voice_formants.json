@@ -54,6 +54,22 @@
     "Obstruator": {
       "pitch": 68.0, "speed": 0.82, "size": 0.84, "lilt": 0.04, "fall": 0.3, "rise": 0.25,
       "breath": 0.1, "volume": 0.85, "reach": 4.0
+    },
+    "Gladiator": {
+      "pitch": 76.0, "speed": 0.86, "size": 0.86, "lilt": 0.08, "fall": 0.32, "rise": 0.28,
+      "breath": 0.03, "volume": 0.9, "reach": 4.0
+    },
+    "Venator": {
+      "pitch": 94.0, "speed": 1.05, "size": 0.94, "lilt": 0.03, "fall": 0.22, "rise": 0.2,
+      "breath": 0.14, "volume": 0.8, "reach": 4.0
+    },
+    "Eliminator": {
+      "pitch": 142.0, "speed": 1.22, "size": 1.08, "lilt": 0.02, "fall": 0.1, "rise": 0.3,
+      "breath": 0.01, "volume": 0.78, "reach": 4.0
+    },
+    "Vigilator": {
+      "pitch": 120.0, "speed": 1.0, "size": 1.02, "lilt": 0.17, "fall": 0.18, "rise": 0.42,
+      "breath": 0.08, "volume": 0.75, "reach": 4.0
     }
   }
 }

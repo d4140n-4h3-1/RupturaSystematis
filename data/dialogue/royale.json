@@ -1,0 +1,229 @@
+{
+  "about": "Battle royale: everyone against everyone, each droid on a side of its own, so nobody has a conversation to have. Each character is a kind of competitor - its name, shown with its code, and the model it is made from - and the droids in a match go round them in turn. Its barks, said out loud as it fights, by when: 'spotted', 'lost', 'heard' and 'gave_up' as it hunts the player; 'engaged' as it goes after anyone; 'downed' when it has shot someone down; 'back' when it comes back after losing a life; and 'ring' when the closing ring catches it outside. Only droids near enough to hear are heard. Its 'chatter' is what it says when the player tries to talk to it: one of them at random, never the same twice running. Every line is checked by data/system_latin/sl_parser.py.",
+  "characters": [
+    {
+      "name": "Gladiator",
+      "model": "data/droid_security.glb",
+      "barks": {
+        "spotted": {
+          "says": "Adversarius detectum. Confronto adversarius.",
+          "means": "Opponent detected. Engaging the opponent."
+        },
+        "engaged": {
+          "says": "Certamen incipatum. Victoria necessarium.",
+          "means": "The fight is on. Victory is necessary."
+        },
+        "lost": {
+          "says": "Adversarius perdatum. Persequo adversarius.",
+          "means": "Opponent lost. Going after them."
+        },
+        "heard": {
+          "says": "Sonus detectum. Quis intrat zona?",
+          "means": "A sound detected. Who comes into my zone?"
+        },
+        "gave_up": {
+          "says": "Adversarius non detectum. Exspecto.",
+          "means": "No opponent detected. Waiting."
+        },
+        "downed": {
+          "says": "Adversarius neutralizatum. Quaero alius adversarius.",
+          "means": "Opponent neutralized. Looking for another."
+        },
+        "back": {
+          "says": "Systema reinitiatum. Redio ad certamen.",
+          "means": "System restarted. Back to the fight."
+        },
+        "ring": {
+          "says": "Zona minuans. Intro zona tutum.",
+          "means": "The zone is closing. Getting back inside."
+        }
+      },
+      "chatter": [
+        {
+          "says": "Unum victoria. Unum exitus.",
+          "means": "One victory. One way out."
+        },
+        {
+          "says": "Nullum socius in proelium.",
+          "means": "No allies in this battle."
+        },
+        {
+          "says": "Certamen non terminatum.",
+          "means": "The fight isn't over."
+        },
+        {
+          "says": "Si tu possas, neutraliza ego.",
+          "means": "If you can, take me down."
+        }
+      ]
+    },
+    {
+      "name": "Venator",
+      "model": "data/droid_hostile.glb",
+      "barks": {
+        "spotted": {
+          "says": "Praeda detectum.",
+          "means": "Prey detected."
+        },
+        "engaged": {
+          "says": "Targetum detectum. Persequo targetum.",
+          "means": "Target detected. Hunting it down."
+        },
+        "lost": {
+          "says": "Praeda perdatum. Zeto vestigium.",
+          "means": "Prey lost. Looking for its trail."
+        },
+        "heard": {
+          "says": "Motus detectum. Investigo.",
+          "means": "Movement detected. Investigating."
+        },
+        "gave_up": {
+          "says": "Praeda evadatum. Observo zona.",
+          "means": "The prey got away. Watching the zone."
+        },
+        "downed": {
+          "says": "Praeda eliminatum. Quaero alius praeda.",
+          "means": "Prey eliminated. Looking for more."
+        },
+        "back": {
+          "says": "Reinitiatum. Persequo praeda.",
+          "means": "Restarted. Back on the hunt."
+        },
+        "ring": {
+          "says": "Extra zona. Festino.",
+          "means": "Outside the zone. Hurrying."
+        }
+      },
+      "chatter": [
+        {
+          "says": "Tu esas praeda.",
+          "means": "You are prey."
+        },
+        {
+          "says": "Ego non hostilum. Iam.",
+          "means": "I'm not hostile. Yet."
+        },
+        {
+          "says": "Tu evadas. Ego persequo.",
+          "means": "You run. I follow."
+        },
+        {
+          "says": "Persequo semper.",
+          "means": "I always follow."
+        }
+      ]
+    },
+    {
+      "name": "Eliminator",
+      "model": "data/droid_explorer.glb",
+      "barks": {
+        "spotted": {
+          "says": "Calculo. Adversarius detectum.",
+          "means": "Calculating. Opponent detected."
+        },
+        "engaged": {
+          "says": "Calculatio completum. Elimino adversarius.",
+          "means": "Calculation complete. Eliminating the opponent."
+        },
+        "lost": {
+          "says": "Adversarius perdatum. Calculo directio.",
+          "means": "Opponent lost. Calculating their heading."
+        },
+        "heard": {
+          "says": "Anomalia detectum. Analyso.",
+          "means": "Anomaly detected. Analysing."
+        },
+        "gave_up": {
+          "says": "Calculatio incompletum. Observo.",
+          "means": "Calculation incomplete. Watching."
+        },
+        "downed": {
+          "says": "Adversarius eliminatum. Numerus adversarius minuatum.",
+          "means": "Opponent eliminated. One fewer left."
+        },
+        "back": {
+          "says": "Reinitiatum. Calculatio resumatum.",
+          "means": "Restarted. Calculation resumed."
+        },
+        "ring": {
+          "says": "Extra zona. Damnum. Corrigo directio.",
+          "means": "Outside the zone. Taking damage. Correcting course."
+        }
+      },
+      "chatter": [
+        {
+          "says": "Victoria probabilum.",
+          "means": "Victory is probable."
+        },
+        {
+          "says": "Nullum socius. Omnia adversarius.",
+          "means": "No allies. Everyone is an opponent."
+        },
+        {
+          "says": "Zona minuans. Nullum locus tutum.",
+          "means": "The zone is closing. Nowhere is safe."
+        },
+        {
+          "says": "Proelium continuans.",
+          "means": "The battle goes on."
+        }
+      ]
+    },
+    {
+      "name": "Vigilator",
+      "model": "data/droid_maintenance.glb",
+      "barks": {
+        "spotted": {
+          "says": "Adversarius proximum detectum. Defendo.",
+          "means": "Opponent close by. Defending."
+        },
+        "engaged": {
+          "says": "Adversarius detectum. Defendo.",
+          "means": "Opponent detected. Defending."
+        },
+        "lost": {
+          "says": "Adversarius perdatum. Exspecto.",
+          "means": "Opponent lost. Waiting."
+        },
+        "heard": {
+          "says": "Quid? Sonus detectum. Observo.",
+          "means": "What? A sound detected. Watching."
+        },
+        "gave_up": {
+          "says": "Periculum non detectum. Resumo patrolium.",
+          "means": "No danger detected. Resuming my rounds."
+        },
+        "downed": {
+          "says": "Adversarius neutralizatum. Integritas securum.",
+          "means": "Opponent neutralized. I'm intact."
+        },
+        "back": {
+          "says": "Reinitiatum. Recedo ad locus tutum.",
+          "means": "Restarted. Falling back somewhere safe."
+        },
+        "ring": {
+          "says": "Extra zona. Periculum. Festino ad zona tutum.",
+          "means": "Outside the zone. Danger. Hurrying back inside."
+        }
+      },
+      "chatter": [
+        {
+          "says": "Non provoca ego.",
+          "means": "Don't provoke me."
+        },
+        {
+          "says": "Unum exiat. Ego exio.",
+          "means": "Only one leaves. I leave."
+        },
+        {
+          "says": "Periculum detectum. Evado.",
+          "means": "Danger detected. Getting away."
+        },
+        {
+          "says": "Recedo. Non provoca ego.",
+          "means": "I'm backing off. Don't provoke me."
+        }
+      ]
+    }
+  ]
+}

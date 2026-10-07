@@ -48,6 +48,9 @@ use std::collections::{HashMap, HashSet};
 pub const SCRIPT: &str = "data/dialogue/droids.json";
 /// What the droids say in capture the flag, where they only call out, and are not talked to.
 pub const CTF_SCRIPT: &str = "data/dialogue/ctf.json";
+/// What the droids say in battle royale, where everyone is against everyone: they call out as
+/// they fight, and taunt the player who tries to talk to them.
+pub const ROYALE_SCRIPT: &str = "data/dialogue/royale.json";
 
 /// A skill check on a reply: which skill, and the chance it succeeds, in percent.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -160,7 +163,9 @@ pub struct Character {
     pub lines: HashMap<String, Line>,
     /// What it says by itself, by when: as it hunts the player, `spotted`, `lost`, `heard`,
     /// `alarmed` or `gave_up`; with the pistol pointed at it, `warned`, `warned_again`,
-    /// `provoked` or `calmed`.
+    /// `provoked` or `calmed`; as it goes after anyone, `engaged`; and in battle royale, `downed`
+    /// when it has shot someone down, `back` when it comes back after losing a life, and `ring`
+    /// when the closing ring catches it outside.
     #[serde(default)]
     pub barks: HashMap<String, Bark>,
     /// What it says when the player tries to talk to it, one at random each time, for one that
@@ -623,6 +628,32 @@ mod tests {
     fn the_droids_conversations_load() {
         let script = Script::load(SCRIPT).unwrap();
         assert!(!script.characters.is_empty());
+    }
+
+    /// What a competitor in battle royale says by itself: hunting the player, going after anyone,
+    /// having shot someone down, coming back after losing a life, and caught outside the ring.
+    const ROYALE_BARKS: [&str; 8] = ["spotted", "lost", "heard", "gave_up", "engaged", "downed", "back", "ring"];
+
+    #[test]
+    fn battle_royales_droids_call_out_and_taunt_each_in_a_voice_of_its_own() {
+        let script = Script::load(ROYALE_SCRIPT).unwrap();
+        let voices = crate::formants::speech::Voices::load(crate::formants::speech::VOICES).unwrap();
+        assert!(script.characters.len() >= 2, "more than one kind of competitor");
+        let mut pitches = Vec::new();
+        for character in &script.characters {
+            assert!(character.lines.is_empty() && character.start.is_empty(), "{} is not talked to", character.name);
+            for bark in ROYALE_BARKS {
+                let said = character.barks.get(bark);
+                assert!(said.is_some_and(|b| !b.says.is_empty() && !b.means.is_empty()), "{} says {bark}", character.name);
+            }
+            assert!(character.chatter.len() >= 2, "{} taunts", character.name);
+            assert!(character.model.is_some(), "{} looks like itself", character.name);
+            let voice = voices.voices.get(&character.name).expect("a voice of its own");
+            pitches.push(voice.pitch);
+        }
+        pitches.sort_by(f32::total_cmp);
+        pitches.dedup();
+        assert_eq!(pitches.len(), script.characters.len(), "every voice its own pitch");
     }
 
     #[test]

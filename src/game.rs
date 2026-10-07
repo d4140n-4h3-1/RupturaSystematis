@@ -23,7 +23,7 @@ use crate::{
     diagnostics::{self, FrameStats},
     dialogue::{
         screen::{self, DialogueScreen, Pointer, Subtitles},
-        Bark, Conversation, Facts, Mood, Provoked, Script, CTF_SCRIPT, SCRIPT,
+        Bark, Conversation, Facts, Mood, Provoked, Script, CTF_SCRIPT, ROYALE_SCRIPT, SCRIPT,
     },
     formants::{
         self,
@@ -91,6 +91,9 @@ const LOOP_CHANCE: f32 = 0.15;
 /// How long a droid in capture the flag keeps its head turned to the player it says something
 /// to, in seconds.
 const CHAT_LOOK: f32 = 3.5;
+/// In battle royale, how far from the player a droid can be and still be heard calling out, in
+/// meters.
+const ROYALE_HEARD_WITHIN: f32 = 30.0;
 
 /// In capture the flag, the side the player takes the flag from.
 const ENEMY: Side = PLAYERS.other();
@@ -261,6 +264,16 @@ pub struct MazeGame {
     #[visit(skip)]
     #[reflect(hidden)]
     inhabitants: Inhabitants,
+    /// Where the player is, as of this frame: in battle royale, only droids near enough to be
+    /// heard from there are (see [`ROYALE_HEARD_WITHIN`]).
+    #[visit(skip)]
+    #[reflect(hidden)]
+    heard_at: Vector3<f32>,
+    /// In battle royale, the droids the ring caught outside the last time it hurt anyone, which
+    /// have said so already.
+    #[visit(skip)]
+    #[reflect(hidden)]
+    ring_called: Vec<usize>,
     exit: Handle<Node>,
     sun: Handle<Node>,
     /// The floor under everything (see [`UNDER_FLOOR`]).
@@ -779,8 +792,15 @@ impl MazeGame {
             posts: [posts(Side::Red), posts(Side::Blue)],
         });
         self.carrying = false;
-        // Capture the flag has droids of its own, which say other things.
-        let script = if self.ctf.is_some() { CTF_SCRIPT } else { SCRIPT };
+        // Capture the flag and battle royale have droids of their own, which say other things. A
+        // map with starts for everyone and no flags is played as battle royale (see
+        // `start_royale`).
+        let royale = self.ctf.is_none() && self.level.markers.iter().any(|m| m.name.starts_with("spawn_"));
+        let script = match (self.ctf.is_some(), royale) {
+            (true, _) => CTF_SCRIPT,
+            (false, true) => ROYALE_SCRIPT,
+            (false, false) => SCRIPT,
+        };
         if script != self.script_path {
             self.use_script(&ctx.resource_manager, script);
         }
@@ -949,8 +969,15 @@ impl MazeGame {
                 self.hud.show_note("Outside the ring!".to_string());
                 player_down = last;
             }
-            for n in self.inhabitants.outside(ring) {
+            let outside = self.inhabitants.outside(ring);
+            for &n in &outside {
                 self.inhabitants.hurt(&mut scene.graph, n);
+            }
+            // Each says so as it is first caught outside.
+            let caught: Vec<usize> = outside.iter().copied().filter(|n| !self.ring_called.contains(n)).collect();
+            self.ring_called = outside;
+            for n in caught {
+                self.bark_near(n, "ring", Mood::Agitated);
             }
         }
         // Each droid down: one life less; out, or back in a moment.
@@ -966,7 +993,8 @@ impl MazeGame {
                     Log::info(format!("Battle royale: droid {who} is out, {} left", royale.still_in()));
                 }
             }
-            // And back, at a start inside the ring, away from everyone.
+            // And back, at a start inside the ring, away from everyone, saying so.
+            let mut came_back = Vec::new();
             for who in royale.back_now(dt) {
                 let mut others: Vec<Vector3<f32>> = self.inhabitants.standing().iter().map(|d| d.2).collect();
                 others.push(self.player.feet(&scene.graph));
@@ -975,7 +1003,13 @@ impl MazeGame {
                 {
                     if self.inhabitants.spawn_lone((grid, *origin), scene, Royale::side(who), at, facing, rng) {
                         Log::info(format!("Battle royale: droid {who} is back, {} lives left", royale.lives(who)));
+                        came_back.push(Royale::side(who));
                     }
+                }
+            }
+            for side in came_back {
+                if let Some(n) = self.standing_of(side) {
+                    self.bark_near(n, "back", Mood::Warning);
                 }
             }
         }
@@ -1485,6 +1519,7 @@ impl MazeGame {
             let at = self.player.position(graph);
             self.health_sounds.play(graph, Heard::Hit, at);
             if last {
+                self.gloat(side);
                 self.delete_player(ctx, &format!("{}'s side", side.name()));
             }
             return;
@@ -1507,6 +1542,7 @@ impl MazeGame {
                 Some(Side::Lone(who)) => {
                     Log::info(format!("Battle royale: droid {who} is down"));
                     self.hud.show_note(format!("Droid {who} is down"));
+                    self.gloat(side);
                 }
                 side => {
                     Log::info(format!("Capture the flag: droid {n} is down"));
@@ -1515,6 +1551,18 @@ impl MazeGame {
                 }
             }
         }
+    }
+
+    /// In battle royale, the droid of `side` that has just shot someone down says so.
+    fn gloat(&mut self, side: Side) {
+        if let (Side::Lone(_), Some(n)) = (side, self.standing_of(side)) {
+            self.bark_near(n, "downed", Mood::Hostile);
+        }
+    }
+
+    /// The droid standing for `side`, if one is.
+    fn standing_of(&self, side: Side) -> Option<usize> {
+        self.inhabitants.standing().into_iter().find(|droid| droid.1 == Some(side)).map(|droid| droid.0)
     }
 
     /// Sends the drones in the maze to search where the player's feet are, `at`, as the alarm
@@ -1732,6 +1780,25 @@ impl MazeGame {
     /// Has the `n`th droid say its bark called `name`, if its kind has one, feeling `mood`: out
     /// loud once the voice is made, and on screen straight away, as the player has subtitles.
     fn bark(&mut self, n: usize, name: &str, mood: Mood) {
+        // In battle royale everyone fights everyone all over the map: only those near enough to
+        // hear are heard, or the screen would be all their calls.
+        if self.royale.is_some() {
+            self.bark_near(n, name, mood);
+        } else {
+            self.bark_anyway(n, name, mood);
+        }
+    }
+
+    /// Has the `n`th droid say its bark `name`, as [`Self::bark`], if the player is near enough
+    /// to hear it (see [`ROYALE_HEARD_WITHIN`]).
+    fn bark_near(&mut self, n: usize, name: &str, mood: Mood) {
+        if self.inhabitants.feet(n).is_some_and(|feet| (feet - self.heard_at).norm() <= ROYALE_HEARD_WITHIN) {
+            self.bark_anyway(n, name, mood);
+        }
+    }
+
+    /// Has the `n`th droid say its bark `name`, however far off it is.
+    fn bark_anyway(&mut self, n: usize, name: &str, mood: Mood) {
         let bark = self
             .script
             .as_ref()
@@ -1743,10 +1810,15 @@ impl MazeGame {
     }
 
     /// Has the `n`th droid say one of the things it says when the player tries to talk to it,
-    /// in capture the flag, where there are no conversations: at random, but never the same
-    /// twice running. Only to one of the player's own side.
+    /// in capture the flag or battle royale, where there are no conversations: at random, but
+    /// never the same twice running. In capture the flag only one of the player's own side
+    /// answers; in battle royale, where nobody is, anyone taunts them.
     fn chat(&mut self, n: usize) {
-        if !self.inhabitants.side(n).is_some_and(Side::is_players) {
+        let answers = match self.inhabitants.side(n) {
+            Some(Side::Lone(_)) => true,
+            side => side.is_some_and(Side::is_players),
+        };
+        if !answers {
             return;
         }
         let Some(chatter) = self
@@ -2061,8 +2133,8 @@ impl MazeGame {
         let Some((droid, who)) = self.talkable.clone() else {
             return;
         };
-        // In capture the flag there is no conversation: it just says something.
-        if self.ctf.is_some() {
+        // In capture the flag and battle royale there is no conversation: it just says something.
+        if self.ctf.is_some() || self.royale.is_some() {
             self.chat(droid);
             return;
         }
@@ -2827,6 +2899,9 @@ impl Plugin for MazeGame {
     }
 
     fn update(&mut self, ctx: &mut PluginContext) -> GameResult {
+        if let Ok(scene) = ctx.scenes.try_get(self.scene) {
+            self.heard_at = self.player.position(&scene.graph);
+        }
         // The droid joins the player whenever it has loaded; the game goes on without it if it
         // cannot, seen through the player's own eyes.
         if let Some(droid) = self.droid.take_if(|droid| droid.is_ok()) {
