@@ -91,6 +91,14 @@ const LOOP_CHANCE: f32 = 0.15;
 /// How long a droid in capture the flag keeps its head turned to the player it says something
 /// to, in seconds.
 const CHAT_LOOK: f32 = 3.5;
+/// `samples` of a voice at `rate` a second, with `echo` added if there is one.
+fn echoed(samples: Vec<f32>, rate: u32, echo: Option<synth::Echo>) -> Vec<f32> {
+    match echo {
+        Some(echo) => synth::echo(samples, rate, &echo),
+        None => samples,
+    }
+}
+
 /// In battle royale, how far from the player a droid can be and still be heard calling out, in
 /// meters.
 const ROYALE_HEARD_WITHIN: f32 = 30.0;
@@ -632,6 +640,12 @@ impl MazeGame {
     /// Whether the level is out in the void (see [`ctf::Map::void`]).
     fn in_void(&self) -> bool {
         ctf::map_at(&self.model_path).is_some_and(|map| map.void)
+    }
+
+    /// The echo the droids' voices have in the level, if they echo there (see
+    /// [`ctf::Map::echoes`]).
+    fn voice_echo(&self) -> Option<synth::Echo> {
+        ctf::map_at(&self.model_path).filter(|map| map.echoes).map(|_| synth::CITY_ECHO)
     }
 
     /// Whether it is night in the level (see [`ctf::Map::night`]).
@@ -1866,7 +1880,8 @@ impl MazeGame {
         };
         let sound = voices.speak(&bark.says, voice, pitch(voices, code, mood));
         let (rate, reach) = (voices.sample_rate, sound.reach);
-        let receiver = platform::in_background(move || synth::make(&sound, rate));
+        let echo = self.voice_echo();
+        let receiver = platform::in_background(move || echoed(synth::make(&sound, rate), rate, echo));
         // A new one from the same droid cuts off whatever it had yet to say.
         self.barks.retain(|barking| barking.droid != n);
         self.barks.push(Barking {
@@ -2178,6 +2193,7 @@ impl MazeGame {
     /// [`MazeGame::keep_talking`].
     fn speak(&mut self, ctx: &mut PluginContext) {
         self.hush(ctx);
+        let echo = self.voice_echo();
         let (Some(talking), Some(script), Some(voices)) =
             (self.talking.as_mut(), &self.script, &self.voices)
         else {
@@ -2192,7 +2208,7 @@ impl MazeGame {
         let view = talking.conversation.view(script, &talking.facts, self.credits);
         let sound = voices.speak(&view.says, voice, pitch(voices, code, view.mood));
         let (rate, reach) = (voices.sample_rate, sound.reach);
-        let receiver = platform::in_background(move || synth::make(&sound, rate));
+        let receiver = platform::in_background(move || echoed(synth::make(&sound, rate), rate, echo));
         talking.making = Some(Making(receiver, reach));
     }
 

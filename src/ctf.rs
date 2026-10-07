@@ -25,6 +25,9 @@ pub struct Map {
     pub open_sky: bool,
     /// Whether it is night there: the void's black sky over it and no sun, lit only by its lamps.
     pub night: bool,
+    /// Whether voices echo there, off the buildings of a city in the open (see
+    /// [`crate::formants::synth::CITY_ECHO`]).
+    pub echoes: bool,
 }
 
 /// The Grid: a city traced in light on a platform in the void.
@@ -35,6 +38,7 @@ pub const GRID: Map = Map {
     void: true,
     open_sky: true,
     night: true,
+    echoes: true,
 };
 
 /// Nexus: a futuristic city traced in light, round a soaring spire, in the void.
@@ -45,6 +49,7 @@ pub const NEXUS: Map = Map {
     void: true,
     open_sky: true,
     night: true,
+    echoes: true,
 };
 
 /// The maps battle royale is played on, picked from in the main menu.
@@ -67,6 +72,7 @@ pub const MAPS: [Map; 4] = [
         void: false,
         open_sky: false,
         night: false,
+        echoes: false,
     },
     Map {
         name: "Balconies",
@@ -75,6 +81,7 @@ pub const MAPS: [Map; 4] = [
         void: false,
         open_sky: false,
         night: false,
+        echoes: false,
     },
     Map {
         name: "Hybrid",
@@ -83,6 +90,7 @@ pub const MAPS: [Map; 4] = [
         void: false,
         open_sky: false,
         night: false,
+        echoes: false,
     },
     Map {
         name: "Void",
@@ -91,6 +99,7 @@ pub const MAPS: [Map; 4] = [
         void: true,
         open_sky: true,
         night: false,
+        echoes: false,
     },
 ];
 

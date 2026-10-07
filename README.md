@@ -121,6 +121,10 @@ their animations; the crate decides what they make of what is round them.
   they have shot someone down, when they come back after losing a life, and when the ring catches
   them outside. Only those within 30 m are heard. Talked to, they taunt the player rather than
   talk. Every line is checked by `data/system_latin/sl_parser.py`.
+- **Voices echo on the Grid and in Nexus**, off the buildings of a city in the open: each line
+  comes back a quarter of a second later, again and again, fainter and duller each time, for
+  about a second and a half after it is said (`synth::CITY_ECHO`). A map says whether its voices
+  echo (`ctf::Map::echoes`); capture the flag's do not.
 - **The town is gone**: battle royale's first map, a walled town at night, was too dark to play,
   and the Grid and Nexus took its place. `data/arena/br_town.py`, which built it, stays: the
   Grid's buildings, and the helpers both new maps are made with, are its.

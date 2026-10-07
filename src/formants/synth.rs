@@ -127,10 +127,93 @@ pub fn make(sound: &Sound, sample_rate: u32) -> Vec<f32> {
     samples
 }
 
+/// An echo: what was said coming back off something far away, again and again, each time
+/// fainter and duller, as off the buildings of a city in the open.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Echo {
+    /// How long before it comes back, each time, in seconds.
+    pub delay: f32,
+    /// How loud each time it comes back is, as a share of the time before.
+    pub feedback: f32,
+    /// How much duller each time is: 0 for not at all, towards 1 for much.
+    pub damping: f32,
+    /// How many times it is heard coming back, at most.
+    pub repeats: u32,
+}
+
+/// The echo of a city of tall buildings in the void: a quarter of a second off the far walls,
+/// back three or four times before it fades.
+pub const CITY_ECHO: Echo = Echo {
+    delay: 0.26,
+    feedback: 0.42,
+    damping: 0.45,
+    repeats: 5,
+};
+
+/// `samples`, at `sample_rate` a second, with `echo` added after them - as long again as it takes
+/// to fade - and no louder at their loudest than they were.
+pub fn echo(samples: Vec<f32>, sample_rate: u32, echo: &Echo) -> Vec<f32> {
+    let delay = (echo.delay * sample_rate as f32).round() as usize;
+    if delay == 0 || echo.repeats == 0 || samples.is_empty() {
+        return samples;
+    }
+    let peak = samples.iter().fold(0.0_f32, |peak, s| peak.max(s.abs()));
+    let mut out = samples;
+    let dry = out.len();
+    out.resize(dry + delay * echo.repeats as usize, 0.0);
+    // Each time round the delay, fainter, and duller through a low-pass.
+    let mut dull = 0.0_f32;
+    for i in delay..out.len() {
+        dull += (1.0 - echo.damping.clamp(0.0, 0.99)) * (out[i - delay] - dull);
+        out[i] += dull * echo.feedback;
+    }
+    // Faded out at the very end, so it never stops with a click.
+    let tail = (sample_rate as usize / 20).min(out.len());
+    let start = out.len() - tail;
+    for (i, sample) in out[start..].iter_mut().enumerate() {
+        *sample *= 1.0 - i as f32 / tail.max(2) as f32;
+    }
+    let loudest = out.iter().fold(0.0_f32, |peak, s| peak.max(s.abs()));
+    if loudest > peak && loudest > 0.0 {
+        let scale = peak / loudest;
+        out.iter_mut().for_each(|s| *s *= scale);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::formants::{Curve, Formant, Sounds};
+
+    #[test]
+    fn an_echo_comes_back_after_its_delay_fainter_each_time() {
+        let rate = 1000;
+        // A click of a burst, and silence.
+        let mut samples = vec![0.0; 50];
+        samples[..10].iter_mut().enumerate().for_each(|(i, s)| *s = if i % 2 == 0 { 1.0 } else { -1.0 });
+        let echo_ = Echo { delay: 0.1, feedback: 0.5, damping: 0.0, repeats: 3 };
+        let out = echo(samples.clone(), rate, &echo_);
+        assert_eq!(out.len(), 50 + 300, "as long again as its repeats");
+        let loudness = |at: usize| out[at..at + 10].iter().map(|s| s.abs()).sum::<f32>();
+        let (first, second, third) = (loudness(100), loudness(200), loudness(300));
+        assert!(loudness(50) < 1.0e-6, "silent until it comes back");
+        assert!(first > 0.0 && second < first && third < second, "{first} {second} {third}");
+        assert!((first / loudness(0) - 0.5).abs() < 0.05, "half as loud the first time");
+        let peak = out.iter().fold(0.0_f32, |p, s| p.max(s.abs()));
+        assert!(peak <= 1.0 + 1.0e-6, "never louder than it was");
+    }
+
+    #[test]
+    fn damping_dulls_each_echo() {
+        let rate = 1000;
+        let mut samples = vec![0.0; 50];
+        samples[..10].iter_mut().enumerate().for_each(|(i, s)| *s = if i % 2 == 0 { 1.0 } else { -1.0 });
+        let bright = echo(samples.clone(), rate, &Echo { delay: 0.1, feedback: 0.5, damping: 0.0, repeats: 1 });
+        let dull = echo(samples, rate, &Echo { delay: 0.1, feedback: 0.5, damping: 0.8, repeats: 1 });
+        let back = |out: &[f32]| out[100..110].iter().map(|s| s.abs()).sum::<f32>();
+        assert!(back(&dull) < back(&bright) * 0.5, "the high buzz dulled");
+    }
 
     /// How strong `frequency` is in `samples`, at `rate`.
     fn strength(samples: &[f32], frequency: f32, rate: f32) -> f32 {
