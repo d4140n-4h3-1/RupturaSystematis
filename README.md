@@ -122,8 +122,9 @@ their animations; the crate decides what they make of what is round them.
   light on every floor. Street lights stand along every street under a black sky.
 - **The Grid**, `data/arena/br_grid.glb`, a city traced in light floating in the void, built by
   `data/arena/br_grid.py` with the town's buildings: black blocks on a black platform ruled with
-  a grid of light, every corner, floor, roof and door of every building lined in glowing cyan or
-  orange, and every crate, low wall and parked light cycle with a glowing edge. A barrier lit
+  a grid of light, every corner, floor, roof and door of every building lined in glowing colour -
+  each block a district of its own colour, cyan, orange, pink, yellow, green, violet or red - and
+  every crate, low wall and parked light cycle with a glowing edge. A barrier lit
   along its top runs round the platform's edge, but for a gap on each side where a bridge goes
   out over the void, no rail on it, to a pad with a tower: the highest ground there is. Light
   pylons stand at every other corner. The engine lights what a surface gives off by the surface's

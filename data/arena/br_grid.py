@@ -2,8 +2,11 @@
 Battle royale on the Grid: a city of dark blocks on a platform floating in the void, every edge
 of it traced in light. Its buildings are the town's (see br_town.py) - one to four floors, doors,
 windows, stairs up inside each and to the roofs of the tallest - but black, and trimmed: lines of
-light up every corner, round every floor, along every roof and round every door, in cyan or, on
-some, orange. Every coloured trim glows.
+light up every corner, round every floor, along every roof and round every door. Every coloured
+trim glows, in a colour of the PALETTE: each block a district of its own colour, its building
+and its outline alike; each pad and its bridge and tower another; the cover and the pylons all
+sorts; and the square's ring every colour in turn. The colours come from a stream of their own,
+so that the seed makes the same city whatever they are.
 
 Builds data/arena/br_grid.glb (and a .blend to look it over, wherever --out puts it):
 
@@ -56,6 +59,17 @@ SPAWNS = 16
 CYAN = (0.0, 0.85, 1.0)
 ORANGE = (1.0, 0.38, 0.02)
 WHITE = (0.75, 0.9, 1.0)
+# The lines of light come in these, cyan the commonest. Never pure magenta, which marks lamp glass.
+PALETTE = {
+    "cyan": CYAN,
+    "orange": ORANGE,
+    "pink": (1.0, 0.08, 0.55),
+    "yellow": (1.0, 0.82, 0.05),
+    "green": (0.15, 1.0, 0.3),
+    "violet": (0.5, 0.15, 1.0),
+    "red": (1.0, 0.05, 0.05),
+}
+SHADES = ("cyan", "cyan", "orange", "pink", "yellow", "green", "violet", "red")
 
 
 def material(name, rgb, roughness=0.35, metallic=0.4):
@@ -99,7 +113,7 @@ class Grid(br_town.Town):
         self.low = material("CoverLow", (0.05, 0.05, 0.065))
         self.high = material("CoverHigh", (0.04, 0.045, 0.06))
         self.grid_glow = glow("GridLine", CYAN, 1.0)
-        self.lines = {"cyan": glow("TrimCyan", CYAN, 3.0), "orange": glow("TrimOrange", ORANGE, 3.0)}
+        self.lines = {name: glow(f"Trim{name.title()}", rgb, 3.0) for name, rgb in PALETTE.items()}
         self.white = glow("TrimWhite", WHITE, 2.0)
         self.n_trim = 0
 
@@ -121,16 +135,16 @@ class Grid(br_town.Town):
         self.line(x0 - out - w, x0 - out, y0 - out, y1 + out, z0, z1, mat)
         self.line(x1 + out, x1 + out + w, y0 - out, y1 + out, z0, z1, mat)
 
-    def pylon(self, x, y, z=0.0):
-        """A light pylon: a dark mast, lit up two sides, a crossbar at the top, and under it the
-        lamp's glass."""
+    def pylon(self, x, y, z=0.0, colour="cyan"):
+        """A light pylon: a dark mast, lit up two sides in `colour`, a crossbar at the top, and
+        under it the lamp's glass."""
         name = f"Pylon_{self.n_lights}"
         self.n_lights += 1
         p, top = 0.12, z + PYLON
         add_box(f"{name}_Foot", x - 0.35, x + 0.35, y - 0.35, y + 0.35, z, z + 0.15, self.struct, self.rail)
         add_box(f"{name}_Mast", x - p, x + p, y - p, y + p, z + 0.15, top, self.struct, self.rail)
-        self.line(x - p - 0.03, x - p, y - 0.03, y + 0.03, z + 0.15, top, self.lines["cyan"])
-        self.line(x + p, x + p + 0.03, y - 0.03, y + 0.03, z + 0.15, top, self.lines["cyan"])
+        self.line(x - p - 0.03, x - p, y - 0.03, y + 0.03, z + 0.15, top, self.lines[colour])
+        self.line(x + p, x + p + 0.03, y - 0.03, y + 0.03, z + 0.15, top, self.lines[colour])
         add_box(f"{name}_Bar", x - 0.9, x + 0.9, y - 0.25, y + 0.25, top, top + 0.18, self.struct, self.roof)
         self.line(x - 0.9, x + 0.9, y - 0.27, y - 0.25, top, top + 0.18, self.white)
         self.line(x - 0.9, x + 0.9, y + 0.25, y + 0.27, top, top + 0.18, self.white)
@@ -182,20 +196,21 @@ def square(g, cx, cy, name):
         x, y = cx + 8.0 * math.cos(a), cy + 8.0 * math.sin(a)
         if i % 2:
             add_block(f"{name}_Pillar{i}", x, y, 1.2, 1.2, 3.0, 0, g.cover, g.high, "high")
-            g.outline(x - 0.6, x + 0.6, y - 0.6, y + 0.6, 2.9, 3.0, 0.04, g.lines["orange"])
+            g.outline(x - 0.6, x + 0.6, y - 0.6, y + 0.6, 2.9, 3.0, 0.04, g.lines["yellow"])
         else:
             add_block(f"{name}_Low{i}", x, y, 3.0, 0.6, RAIL, a + math.pi / 2, g.cover, g.low, "low")
-    # The ring on the floor, in short straight pieces.
+    # The ring on the floor, in short straight pieces, going round every colour there is.
+    shades = list(PALETTE)
     n, r = 48, 4.5
     for i in range(n):
         a = 2 * math.pi * (i + 0.5) / n
         length = 2 * math.pi * r / n + 0.02
         add_block(f"{name}_Ring{i}", cx + r * math.cos(a), cy + r * math.sin(a), 0.18, length, 0.012,
-                  a, g.trim, g.lines["orange"], "none")
+                  a, g.trim, g.lines[shades[i * len(shades) // n]], "none")
     g.keep_clear.append((cx - 10, cx + 10, cy - 10, cy + 10))
 
 
-def scatter_cover(g, rng, tries):
+def scatter_cover(g, rng, paint, tries):
     """Crates, low walls and parked light cycles - boxes of a car's size - in the yards and
     streets, clear of the buildings, each other and the spawns; each with a line of light along
     its top or its side."""
@@ -221,7 +236,7 @@ def scatter_cover(g, rng, tries):
             add_block(f"Cover_{kind}_{i}", x, y, w, d, h, math.pi / 2 if turned else 0.0, g.cover,
                       g.high if kind == "cycle" else g.low, "low")
             hw, hd = (d, w) if turned else (w, d)
-            colour = g.lines[rng.choice(("cyan", "cyan", "orange"))]
+            colour = g.lines[paint.choice(SHADES)]
             if kind == "cycle":
                 # A stripe along each side, halfway up.
                 g.outline(x - hw / 2, x + hw / 2, y - hd / 2, y + hd / 2, h * 0.45, h * 0.45 + 0.1, 0.03, colour)
@@ -234,6 +249,8 @@ def scatter_cover(g, rng, tries):
 def main():
     seed, glb, out = br_town.get_args()
     rng = random.Random(seed)
+    # The colours come from a stream of their own, so that the layout is the seed's whatever they are.
+    paint = random.Random(seed + 1)
     bpy.ops.wm.read_factory_settings(use_empty=True)
     br_town.BLOCK = BLOCK
     g = Grid()
@@ -264,6 +281,7 @@ def main():
     # The bridges, out over the void to the pads, each with a tower on it.
     length, width = BRIDGE
     for n, (dx, dy) in enumerate(((0, -1), (1, 0), (0, 1), (-1, 0))):
+        shade = ("orange", "pink", "green", "violet")[n]
         far = HALF + length
         if dx:
             bx0, bx1 = sorted((dx * HALF, dx * far))
@@ -273,23 +291,23 @@ def main():
             by0, by1 = sorted((dy * HALF, dy * far))
         add_box(f"Bridge_{n}", bx0, bx1, by0, by1, -0.5, -0.002, g.ground, g.road)
         if dx:
-            g.floor_line(bx0, bx1, by0, by0 + EDGE_LINE, g.lines["cyan"])
-            g.floor_line(bx0, bx1, by1 - EDGE_LINE, by1, g.lines["cyan"])
+            g.floor_line(bx0, bx1, by0, by0 + EDGE_LINE, g.lines[shade])
+            g.floor_line(bx0, bx1, by1 - EDGE_LINE, by1, g.lines[shade])
         else:
-            g.floor_line(bx0, bx0 + EDGE_LINE, by0, by1, g.lines["cyan"])
-            g.floor_line(bx1 - EDGE_LINE, bx1, by0, by1, g.lines["cyan"])
+            g.floor_line(bx0, bx0 + EDGE_LINE, by0, by1, g.lines[shade])
+            g.floor_line(bx1 - EDGE_LINE, bx1, by0, by1, g.lines[shade])
         px, py = dx * (far + PAD / 2), dy * (far + PAD / 2)
         add_box(f"Pad_{n}", px - PAD / 2, px + PAD / 2, py - PAD / 2, py + PAD / 2, -1.5, -0.002, g.ground, g.road)
         g.outline(px - PAD / 2 + EDGE_LINE, px + PAD / 2 - EDGE_LINE, py - PAD / 2 + EDGE_LINE, py + PAD / 2 - EDGE_LINE,
-                  0.0, 0.012, EDGE_LINE, g.lines["orange"])
-        g.outline(px - PAD / 2, px + PAD / 2, py - PAD / 2, py + PAD / 2, -0.35, -0.2, 0.0, g.lines["orange"])
+                  0.0, 0.012, EDGE_LINE, g.lines[shade])
+        g.outline(px - PAD / 2, px + PAD / 2, py - PAD / 2, py + PAD / 2, -0.35, -0.2, 0.0, g.lines[shade])
         # The tower: three floors and the roof, toward the pad's far side, its doors turned to the
         # bridge (they face -y and +x, so they are put where those face it, or face along it).
         floors = building(g, rng, "office", px + dx * 3.0, py + dy * 3.0, 12.0, 11.0, 0, f"Tower{n}")
-        trim_building(g, "office", px + dx * 3.0, py + dy * 3.0, 12.0, 11.0, floors, "orange")
+        trim_building(g, "office", px + dx * 3.0, py + dy * 3.0, 12.0, 11.0, floors, shade)
         for sx, sy in ((1, 1), (-1, -1)):
             g.pylon(px + sx * (PAD / 2 - 1.2) if dy else px - dx * (PAD / 2 - 1.2),
-                    py + sy * (PAD / 2 - 1.2) if dx else py - dy * (PAD / 2 - 1.2))
+                    py + sy * (PAD / 2 - 1.2) if dx else py - dy * (PAD / 2 - 1.2), colour=shade)
 
     pitch = BLOCK + ROAD
     first = -HALF + ROAD + BLOCK / 2
@@ -300,9 +318,10 @@ def main():
         for bj in range(BLOCKS):
             cx, cy = first + bi * pitch, first + bj * pitch
             name = f"Block{bi}{bj}"
-            # Each block outlined in light.
+            # Each block outlined in light, in its building's colour: a district of its own.
+            shade = "yellow" if (bi, bj) == (middle, middle) else paint.choice(SHADES)
             g.outline(cx - BLOCK / 2, cx + BLOCK / 2, cy - BLOCK / 2, cy + BLOCK / 2, 0.0, 0.012, EDGE_LINE,
-                      g.lines["cyan"])
+                      g.lines[shade])
             if bi == middle and bj == middle:
                 square(g, cx, cy, name)
                 continue
@@ -312,7 +331,7 @@ def main():
             ox = rng.uniform(-(BLOCK - w) / 2 + 2, (BLOCK - w) / 2 - 2)
             oy = rng.uniform(-(BLOCK - d) / 2 + 2, (BLOCK - d) / 2 - 2)
             floors = building(g, rng, kind, cx + ox, cy + oy, w, d, 0, name)
-            trim_building(g, kind, cx + ox, cy + oy, w, d, floors, rng.choice(("cyan", "cyan", "orange")))
+            trim_building(g, kind, cx + ox, cy + oy, w, d, floors, shade)
             tallest = max(tallest, floors)
 
     # Light pylons at every other street corner, and at the square's corners.
@@ -322,10 +341,10 @@ def main():
                 continue
             x = -HALF + ROAD / 2 + i * pitch
             y = -HALF + ROAD / 2 + j * pitch
-            g.pylon(x + 2.6, y + 2.6)
+            g.pylon(x + 2.6, y + 2.6, colour=paint.choice(SHADES))
     cx = cy = first + middle * pitch
     for sx, sy in ((1, 1), (1, -1), (-1, 1), (-1, -1)):
-        g.pylon(cx + sx * (BLOCK / 2 - 1.0), cy + sy * (BLOCK / 2 - 1.0))
+        g.pylon(cx + sx * (BLOCK / 2 - 1.0), cy + sy * (BLOCK / 2 - 1.0), colour="yellow")
 
     # The spawns: round the outer street, each facing in.
     for i in range(SPAWNS):
@@ -335,7 +354,7 @@ def main():
         y = max(-r, min(r, r * 1.5 * math.sin(a)))
         marker(f"spawn_{i + 1}", x, y, 0.0, math.atan2(-y, -x))
         g.keep_clear.append((x - 2, x + 2, y - 2, y + 2))
-    scatter_cover(g, rng, 140)
+    scatter_cover(g, rng, paint, 140)
 
     # A camera to look it over in Blender, in the dark.
     bpy.ops.object.camera_add(location=(0, -HALF * 2.4, HALF * 1.4), rotation=(math.radians(58), 0, 0))
