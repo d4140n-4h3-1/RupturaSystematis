@@ -1,13 +1,13 @@
 //! What is written on screen: a status line in the corner, a banner across the middle for the
 //! end of a round and for anything that went wrong, the droids' alert at the top in the middle,
-//! as in Metal Gear and Fallout, the player's stamina in the bottom left corner, their shield over
-//! their health in the bottom middle (see [`crate::shield`]), and, with the
+//! as in Metal Gear and Fallout, the player's stamina in the bottom left corner, and, with the
 //! pistol out, its ammo in the bottom right: the cyber pistol's is endless, shown as ∞. The
 //! player's credits are in the top right.
 //!
 //! The alert is coloured by its phase - ALERT red, EVASION amber, CAUTION yellow - and ALERT and
 //! CAUTION blink; EVASION and CAUTION count down the seconds they have left. The player's health
-//! is a red bar in the bottom middle, and the screen flashes red as they are hit. The stamina is a bar,
+//! is a red bar in the bottom middle, and the screen flashes red as they are hit; while their
+//! shield is up (see [`crate::shield`]) the same bar is the shield's, blue, named SHIELD ACTIVE. The stamina is a bar,
 //! green, yellow once it runs low, and red and blinking while the player is winded. Sentries have
 //! bars like these over their heads, their health above their stamina, and the drone its health
 //! (see [`Hud::show_overhead_bars`]).
@@ -43,8 +43,8 @@ const CAUTION_YELLOW: Color = Color::opaque(255, 225, 40);
 /// running low, and winded - and below how much it counts as running low.
 const BAR: (f32, f32) = (180.0, 10.0);
 const STAMINA_GREEN: Color = Color::opaque(90, 230, 120);
-/// The shield's bar, charged.
-const SHIELD_CYAN: Color = Color::opaque(60, 215, 255);
+/// The health bar's colour, and its name's, while it is the shield's.
+const SHIELD_BLUE: Color = Color::opaque(70, 150, 255);
 const STAMINA_LOW: f32 = 0.35;
 /// The health bar's colour, and below how much of it it blinks; and how red the screen goes as
 /// the player is hit, out of 255.
@@ -75,9 +75,9 @@ pub enum Status {
         alarm: Option<(Alert, f32)>,
         /// The player's credits.
         credits: Credits,
-        /// The shield's bar: how full, and its colour (see [`crate::shield::Charge::meter`]); how
-        /// many spare charges the player has; and whether it is up.
-        shield: (f32, Color, u32, bool),
+        /// While the shield is up, how much of its health it has left, from 0 to 1: the health
+        /// bar is its, then.
+        shield: Option<f32>,
     },
 }
 
@@ -89,17 +89,16 @@ pub struct Hud {
     alert: Handle<Text>,
     stamina: Handle<UiNode>,
     stamina_fill: Handle<Border>,
-    /// The shield's bar, under the stamina, its name over it - with the spares - and what they
-    /// last showed.
-    shield_fill: Handle<Border>,
-    shield_label: Handle<Text>,
-    shown_shield: Option<(f32, Color, u32, bool)>,
+    /// The health bar's name: HEALTH, or SHIELD ACTIVE while the shield is up.
+    health_label: Handle<Text>,
     /// The health bar - its panel and what fills it - and the red over the whole screen as the
     /// player is hit.
     health: Handle<UiNode>,
     health_fill: Handle<Border>,
     hurt: Handle<UiNode>,
-    shown_health: Option<(f32, f32)>,
+    /// What the health bar last showed: how full, how long is left of a hit's flash, and
+    /// whether it was the shield's.
+    shown_health: Option<(f32, f32, bool)>,
     /// The pistol's ammo, and whether it is showing.
     ammo: Handle<UiNode>,
     shown_ammo: bool,
@@ -187,38 +186,6 @@ impl Hud {
             .build(ctx)
         };
         let stamina_label = label(ctx, "STAMINA", HorizontalAlignment::Left);
-        // The shield's bar, under the stamina's, the key that raises it in its name.
-        let shield_fill = BorderBuilder::new(
-            WidgetBuilder::new()
-                .with_horizontal_alignment(HorizontalAlignment::Left)
-                .with_margin(Thickness::uniform(3.0))
-                .with_width(BAR.0)
-                .with_height(BAR.1)
-                .with_background(Brush::Solid(SHIELD_CYAN).into()),
-        )
-        .with_stroke_thickness(Thickness::zero().into())
-        .build(ctx);
-        let shield_frame = BorderBuilder::new(
-            WidgetBuilder::new()
-                .with_horizontal_alignment(HorizontalAlignment::Center)
-                .with_margin(Thickness::bottom(8.0))
-                .with_width(BAR.0 + 6.0)
-                .with_height(BAR.1 + 6.0)
-                .with_foreground(Brush::Solid(Color::opaque(200, 200, 200)).into())
-                .with_background(Brush::Solid(Color::from_rgba(0, 0, 0, 120)).into())
-                .with_child(shield_fill),
-        )
-        .with_stroke_thickness(Thickness::uniform(1.0).into())
-        .build(ctx);
-        let shield_label = TextBuilder::new(
-            WidgetBuilder::new()
-                .with_margin(Thickness::bottom(3.0))
-                .with_foreground(Brush::Solid(Color::WHITE).into()),
-        )
-        .with_font_size(16.0.into())
-        .with_horizontal_text_alignment(HorizontalAlignment::Center)
-        .with_text("SHIELD [1]")
-        .build(ctx);
         let health_fill = BorderBuilder::new(
             WidgetBuilder::new()
                 .with_horizontal_alignment(HorizontalAlignment::Left)
@@ -257,8 +224,6 @@ impl Hud {
                 .with_vertical_alignment(VerticalAlignment::Bottom)
                 .with_margin(Thickness::uniform(18.0))
                 .with_visibility(false)
-                .with_child(shield_label)
-                .with_child(shield_frame)
                 .with_child(health_label)
                 .with_child(health_frame),
         )
@@ -363,8 +328,7 @@ impl Hud {
             alert,
             stamina,
             stamina_fill,
-            shield_fill,
-            shield_label,
+            health_label,
             health,
             health_fill,
             hurt,
@@ -419,7 +383,7 @@ impl Hud {
                 if self.note_time > 0.0 {
                     text += &format!("\n{}", self.note);
                 }
-                (text, alarm, Some(breath), Some(health), armed, Some(credits), Some(shield))
+                (text, alarm, Some(breath), Some(health), armed, Some(credits), shield)
             }
         };
         ui.send(self.status, TextMessage::Text(text));
@@ -444,35 +408,27 @@ impl Hud {
             self.shown_stamina = stamina;
         }
 
-        // Rounded, so that it is only sent as it changes enough to see.
-        let shield = shield.map(|(full, colour, spares, up)| ((full.clamp(0.0, 1.0) * 200.0).round() / 200.0, colour, spares, up));
-        if shield != self.shown_shield {
-            if let Some((full, colour, spares, up)) = shield {
-                ui.send(self.shield_fill, WidgetMessage::Width(BAR.0 * full));
-                ui.send(self.shield_fill, WidgetMessage::Background(Brush::Solid(colour).into()));
-                let name = if up { "SHIELD ACTIVE" } else { "SHIELD [1]" };
-                let label = match spares {
-                    0 => name.to_string(),
-                    n => format!("{name}  +{n}"),
-                };
-                ui.send(self.shield_label, TextMessage::Text(label));
-            }
-            self.shown_shield = shield;
-        }
-
-        // Rounded, so that it is only sent as it changes enough to see.
+        // One bar for both: the player's health, or while the shield is up, the shield's - named
+        // so, and blue. Rounded, so that it is only sent as it changes enough to see.
         let health = health.map(|(left, flash)| {
-            ((left.clamp(0.0, 1.0) * 200.0).round() / 200.0, (flash * 20.0).round() / 20.0)
+            let (left, shielded) = shield.map_or((left, false), |shield| (shield, true));
+            ((left.clamp(0.0, 1.0) * 200.0).round() / 200.0, (flash * 20.0).round() / 20.0, shielded)
         });
         if health != self.shown_health {
             ui.send(self.health, WidgetMessage::Visibility(health.is_some()));
-            if let Some((left, flash)) = health {
+            if let Some((left, flash, shielded)) = health {
                 ui.send(self.health_fill, WidgetMessage::Width(BAR.0 * left));
-                let colour = match left < HEALTH_LOW && blinking_on {
-                    true => ALERT_RED,
-                    false => HEALTH_RED,
+                let colour = match (shielded, left < HEALTH_LOW && blinking_on) {
+                    (true, _) => SHIELD_BLUE,
+                    (false, true) => ALERT_RED,
+                    (false, false) => HEALTH_RED,
                 };
                 ui.send(self.health_fill, WidgetMessage::Background(Brush::Solid(colour).into()));
+                if self.shown_health.is_none_or(|(_, _, was)| was != shielded) {
+                    let (name, colour) = if shielded { ("SHIELD ACTIVE", SHIELD_BLUE) } else { ("HEALTH", Color::WHITE) };
+                    ui.send(self.health_label, TextMessage::Text(name.to_string()));
+                    ui.send(self.health_label, WidgetMessage::Foreground(Brush::Solid(colour).into()));
+                }
                 let red = (flash / crate::health::FLASH * HURT_RED as f32) as u8;
                 ui.send(self.hurt, WidgetMessage::Visibility(red > 0));
                 ui.send(

@@ -1114,10 +1114,7 @@ impl MazeGame {
                     || self.talking.is_some(),
                 alarm: self.inhabitants.alarm(),
                 credits: self.credits,
-                shield: self.shield.as_ref().map_or((0.0, Color::opaque(70, 90, 110), 0, false), |s| {
-                    let (full, colour) = s.charge.meter();
-                    (full, colour, s.spares, s.charge.is_up())
-                }),
+                shield: self.shield.as_ref().filter(|s| s.charge.is_up()).map(|s| s.charge.health()),
             },
         };
         // Healing only while playing; the flash of the last hit fades out after too.

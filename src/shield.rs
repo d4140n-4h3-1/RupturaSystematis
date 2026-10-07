@@ -6,8 +6,7 @@
 //! is whole, yellow by half, red when one more hit will break it ([`colour_of`]). It flashes as it
 //! takes each. Once raised it stays up until it breaks - there is no taking it down early - and
 //! only then does it start to charge again, over [`RECHARGE`] seconds: so it cannot be raised and
-//! let go again and again. The bar under the stamina shows its health while it is up, and how far
-//! along it is charging after.
+//! let go again and again. While it is up, the health bar is its, blue, named SHIELD ACTIVE.
 //!
 //! The model, [`SHIELD_MODEL`], is made in Blender by `data/shield.py`. The engine takes a glTF
 //! surface for solid whatever its alpha, so the see-through shell is made glass here, as the
@@ -117,16 +116,6 @@ impl Charge {
         match self {
             Charge::Up { health } => *health as f32 / STRENGTH as f32,
             _ => 1.0,
-        }
-    }
-
-    /// What the bar under the stamina shows: how full, and in what colour - up, how much health
-    /// it has left, in that health's colour; charging, how far along, dim.
-    pub fn meter(&self) -> (f32, Color) {
-        match self {
-            Charge::Ready => (1.0, WHOLE),
-            Charge::Up { .. } => (self.health(), colour_of(self.health())),
-            Charge::Recharging { left } => (1.0 - left / RECHARGE, Color::opaque(70, 90, 110)),
         }
     }
 }
@@ -390,19 +379,5 @@ mod tests {
         // Redder with every hit.
         let reds: Vec<u8> = (1..=STRENGTH).map(|h| colour_of(h as f32 / STRENGTH as f32).r).collect();
         assert!(reds.windows(2).all(|w| w[0] >= w[1]), "{reds:?}");
-    }
-
-    #[test]
-    fn the_meter_shows_health_while_up_and_progress_charging() {
-        let mut charge = Charge::Ready;
-        assert_eq!(charge.meter().0, 1.0);
-        charge.raise();
-        charge.take();
-        let (full, colour) = charge.meter();
-        assert!((full - (STRENGTH - 1) as f32 / STRENGTH as f32).abs() < 1.0e-4);
-        assert_ne!(colour, WHOLE, "coloured by its health");
-        while charge.take() != Took::Broke {}
-        charge.update(RECHARGE / 4.0);
-        assert!((charge.meter().0 - 0.25).abs() < 1.0e-3);
     }
 }
