@@ -3001,6 +3001,44 @@ impl MazeGame {
         }
     }
 
+    /// With MAZE_CORPSES=<n>, to see what bodies on the ground cost: the game goes straight into a
+    /// maze, and three seconds into a round, n droids are put down round the player and shot down
+    /// there, once a round.
+    fn debug_corpses(&mut self, ctx: &mut PluginContext) {
+        let Some(count) = platform::var("MAZE_CORPSES").and_then(|n| n.trim().parse::<usize>().ok()) else {
+            return;
+        };
+        // Straight into a maze from the title, so a run can be measured without the menu.
+        if self.phase == Phase::Title {
+            self.play(ctx, Game::Maze);
+            return;
+        }
+        if self.phase != Phase::Playing || self.round_time < 3.0 || self.round_time - ctx.dt >= 3.0 {
+            return;
+        }
+        let scene = &mut ctx.scenes[self.scene];
+        let player = self.player.feet(&scene.graph);
+        let (Some((grid, origin)), Some(rng)) = (self.level.grid.as_ref(), self.rng.as_mut()) else {
+            return;
+        };
+        // Round the player, each in a place of its own - in rings, twelve to a ring, the first
+        // three meters off and each after more - and then each shot down from where they stand.
+        let around: Vec<Vector3<f32>> = (0..count.max(1))
+            .map(|k| {
+                let a = (k % 12) as f32 * std::f32::consts::TAU / 12.0 + (k / 12) as f32 * 0.26;
+                player + Vector3::new(a.cos(), 0.0, a.sin()) * (3.0 + 2.5 * (k / 12) as f32)
+            })
+            .collect();
+        let came = self.inhabitants.spawn_wave(scene, (grid, *origin), &around, count, player, rng);
+        let mut down = 0;
+        for _ in 0..came {
+            if self.inhabitants.knock_down(&mut scene.graph, player).is_some() {
+                down += 1;
+            }
+        }
+        Log::info(format!("MAZE_CORPSES: {came} put down, {down} shot down"));
+    }
+
     /// Raises the player's shield, if it is charged; or says it is not.
     fn raise_shield(&mut self) {
         let Some(shield) = self.shield.as_mut() else {
@@ -3290,6 +3328,7 @@ impl Plugin for MazeGame {
         self.set_up_hearts(ctx);
         self.set_up_shield(ctx);
         self.update_heist(ctx);
+        self.debug_corpses(ctx);
 
         // The ferries go on whatever the player does, until the menu stops the world. First, so
         // the player is carried along with where they are going this step.
