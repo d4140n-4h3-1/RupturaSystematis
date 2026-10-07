@@ -155,7 +155,12 @@ their animations; the crate decides what they make of what is round them.
   from guard towers at its corners - stairs up to a platform with a parapet, a guard on each - and
   in it the data hall, rows of glowing server racks to creep between, and at the hall's end the
   core chamber, its glowing data core ringed with terminals; server blocks banded with light and
-  cooling units stand about its streets. `MAZE_HEIST_OPEN=<n>` opens the first n doors, to try a
+  cooling units stand about its streets. The third is **Helix**, `data/arena/heist_helix.glb`,
+  built by `data/arena/heist_helix.py`: a gene lab's campus in a round wall, sentry pods either
+  side of its gate, greenhouse domes in its yard; the lab's atrium rises to the roof, stairs climb
+  its west wall to a gallery, and on the gallery, walled off, the vault - a double helix of light
+  turning over a plinth, six terminals round it. Helix towers twist a quarter turn as they rise
+  among specimen tanks about its streets. `MAZE_HEIST_OPEN=<n>` opens the first n doors, to try a
   heist out.
 - **Stamina cells** freeze the player's breath for 10 seconds: running and sprinting spend none
   of it, though walking still gets it back, and a player out of breath is no longer winded. They

@@ -77,8 +77,19 @@ pub const CORTEX: Map = Map {
     echoes: true,
 };
 
+/// Helix: a gene lab's campus, its vault up on a gallery behind three firewall doors.
+pub const HELIX: Map = Map {
+    name: "Helix",
+    path: "data/arena/heist_helix.glb",
+    about: "A gene lab. Through the campus gate and the lab's door, up to the gallery and the vault's.",
+    void: true,
+    open_sky: true,
+    night: true,
+    echoes: true,
+};
+
 /// The districts heists are played in, picked from in the main menu (see [`crate::heist`]).
-pub const HEIST_MAPS: [Map; 2] = [AURUM, CORTEX];
+pub const HEIST_MAPS: [Map; 3] = [AURUM, CORTEX, HELIX];
 
 /// The sky round a map in the void, each face of it.
 pub const VOID_SKY: &str = "data/skybox.png";
