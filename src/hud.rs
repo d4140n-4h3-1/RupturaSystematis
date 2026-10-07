@@ -47,6 +47,8 @@ const STAMINA_GREEN: Color = Color::opaque(90, 230, 120);
 /// The health bar's colour, and its name's, while it is the shield's.
 const SHIELD_BLUE: Color = Color::opaque(70, 150, 255);
 const STAMINA_LOW: f32 = 0.35;
+/// The stamina bar's colour while a stamina cell has it frozen.
+const STAMINA_FROZEN: Color = Color::opaque(150, 235, 255);
 /// The health bar's colour, and below how much of it it blinks; and how red the screen goes as
 /// the player is hit, out of 255.
 const HEALTH_RED: Color = Color::opaque(230, 50, 70);
@@ -63,8 +65,10 @@ pub enum Status {
     Round {
         time: f32,
         best: Option<f32>,
-        /// How much breath is left, from 0 to 1, and whether the player has run out of it.
+        /// How much breath is left, from 0 to 1, and whether the player has run out of it; and
+        /// how long it stays frozen by a stamina cell, in seconds, 0 when it is not.
         breath: (f32, bool),
+        frozen: f32,
         /// How much health is left, from 0 to 1, and how long is left of the red flash of a hit,
         /// in seconds.
         health: (f32, f32),
@@ -92,6 +96,8 @@ pub struct Hud {
     alert: Handle<Text>,
     stamina: Handle<UiNode>,
     stamina_fill: Handle<Border>,
+    /// Its name: STAMINA, or STAMINA FROZEN with the seconds left while a stamina cell has it.
+    stamina_label: Handle<Text>,
     /// The health bar's name: HEALTH, or SHIELD ACTIVE while the shield is up.
     health_label: Handle<Text>,
     /// The health bar - its panel and what fills it - and the red over the whole screen as the
@@ -112,7 +118,7 @@ pub struct Hud {
     /// is only sent when it changes.
     blink: f32,
     shown_alert: Option<(String, Color)>,
-    shown_stamina: Option<(f32, Color)>,
+    shown_stamina: Option<(f32, Color, u32)>,
     /// The bars over the sentries' and the drone's heads - each its stamina and its health, a
     /// frame and what fills it - of which those not needed are hidden; and where they go.
     overhead_bars: Vec<[(Handle<UiNode>, Handle<Border>); 2]>,
@@ -331,6 +337,7 @@ impl Hud {
             alert,
             stamina,
             stamina_fill,
+            stamina_label,
             health_label,
             health,
             health_fill,
@@ -369,6 +376,7 @@ impl Hud {
                 time,
                 best,
                 breath,
+                frozen,
                 health,
                 armed,
                 mouse_captured,
@@ -387,7 +395,7 @@ impl Hud {
                 if self.note_time > 0.0 {
                     text += &format!("\n{}", self.note);
                 }
-                (text, alarm, Some(breath), Some(health), armed, Some(credits), shield, shield_ready)
+                (text, alarm, Some((breath, frozen)), Some(health), armed, Some(credits), shield, shield_ready)
             }
         };
         ui.send(self.status, TextMessage::Text(text));
@@ -402,12 +410,26 @@ impl Hud {
             self.shown_alert = alert;
         }
 
-        let stamina = breath.map(|(left, winded)| stamina_shown(left, winded, blinking_on));
+        let stamina = breath.map(|((left, winded), frozen)| {
+            let (left, colour) = stamina_shown(left, winded, blinking_on);
+            // Frozen, in the colour of ice, counting down the seconds it has left.
+            match frozen > 0.0 {
+                true => (left, STAMINA_FROZEN, frozen.ceil() as u32),
+                false => (left, colour, 0),
+            }
+        });
         if stamina != self.shown_stamina {
             ui.send(self.stamina, WidgetMessage::Visibility(stamina.is_some()));
-            if let Some((left, colour)) = stamina {
+            if let Some((left, colour, frozen)) = stamina {
                 ui.send(self.stamina_fill, WidgetMessage::Width(BAR.0 * left));
                 ui.send(self.stamina_fill, WidgetMessage::Background(Brush::Solid(colour).into()));
+                if self.shown_stamina.is_none_or(|(_, _, was)| was != frozen) {
+                    let name = match frozen {
+                        0 => "STAMINA".to_string(),
+                        seconds => format!("STAMINA FROZEN  {seconds}"),
+                    };
+                    ui.send(self.stamina_label, TextMessage::Text(name));
+                }
             }
             self.shown_stamina = stamina;
         }

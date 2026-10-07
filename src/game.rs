@@ -18,7 +18,7 @@ use crate::{
     drone_shot::{Shots, SHOT_MODEL},
     alarm::AlarmSound,
     health::{Health, HealthSounds, Healing, Heard},
-    hearts::{self, Hearts, HEART_MODEL, SHIELD_LAMP, SHIELD_PICKUP_MODEL},
+    hearts::{self, Hearts, HEART_MODEL, SHIELD_LAMP, SHIELD_PICKUP_MODEL, STAMINA_LAMP, STAMINA_PICKUP_MODEL},
     shield::{self, Shield, Took, SHIELD_MODEL},
     notes::{self, Notes, NOTES},
     diagnostics::{self, FrameStats},
@@ -427,6 +427,14 @@ pub struct MazeGame {
     #[visit(skip)]
     #[reflect(hidden)]
     shield_pickup_model: Option<ModelResource>,
+    /// Stamina cells, which freeze the player's breath for a while (see
+    /// [`crate::player::breath::FREEZE`]), and their model.
+    #[visit(skip)]
+    #[reflect(hidden)]
+    stamina_cells: Hearts,
+    #[visit(skip)]
+    #[reflect(hidden)]
+    stamina_pickup_model: Option<ModelResource>,
     /// The player's health this round, and how it is heard.
     #[visit(skip)]
     #[reflect(hidden)]
@@ -627,6 +635,8 @@ impl MazeGame {
         self.shield_model = Some(resources.request::<Model>(SHIELD_MODEL));
         self.shield_pickup_model = Some(resources.request::<Model>(SHIELD_PICKUP_MODEL));
         self.shield_cells = Hearts::with_lamp("Shield cells", SHIELD_LAMP);
+        self.stamina_pickup_model = Some(resources.request::<Model>(STAMINA_PICKUP_MODEL));
+        self.stamina_cells = Hearts::with_lamp("Stamina cells", STAMINA_LAMP);
     }
 
     /// Starts `game`, picked in the main menu: loads its level, and plays it once it has. The
@@ -717,6 +727,7 @@ impl MazeGame {
         }
         self.hearts.clear(&mut scene.graph);
         self.shield_cells.clear(&mut scene.graph);
+        self.stamina_cells.clear(&mut scene.graph);
         if let Some(shots) = self.shots.as_mut() {
             shots.clear(&mut scene.graph);
         }
@@ -1105,6 +1116,7 @@ impl MazeGame {
                 time: self.round_time,
                 best: self.best_time,
                 breath: self.player.breath(),
+                frozen: self.player.stamina_frozen(),
                 health: (self.health.left, self.health.flash),
                 armed: self.player.armed(),
                 // The menu and the conversation say what to do next, so the hint to click would
@@ -2838,28 +2850,37 @@ impl MazeGame {
             Log::err(format!("Could not load {SHIELD_PICKUP_MODEL}; there are no shield cells"));
             self.shield_pickup_model = None;
         }
+        if self.stamina_pickup_model.as_ref().is_some_and(|model| model.is_failed_to_load()) {
+            Log::err(format!("Could not load {STAMINA_PICKUP_MODEL}; there are no stamina cells"));
+            self.stamina_pickup_model = None;
+        }
         let Some(model) = self.heart_model.clone().filter(|model| model.is_ok()) else {
             return;
         };
-        // The shield cells' model, once it has loaded - or without them, if it cannot.
+        // The cells' models, once they have loaded - or without them, if they cannot.
         let cells = self.shield_pickup_model.clone();
-        let cells_ready = cells.as_ref().is_none_or(|cells| cells.is_ok());
+        let stamina = self.stamina_pickup_model.clone();
+        let cells_ready = [&cells, &stamina].iter().all(|m| m.as_ref().is_none_or(|m| m.is_ok()));
         if !self.hearts_placed && self.phase == Phase::Playing && cells_ready {
             self.rng();
             if let (Some((grid, origin)), Some(start), Some(rng)) =
                 (self.level.grid.as_ref(), self.start_cell, self.rng.as_mut())
             {
                 let floor = grid.walkable_cells().count();
-                // Hearts and shield cells all apart from one another: the first, near the start,
-                // a heart.
+                // Hearts and cells all apart from one another: the first, near the start, a heart.
                 let hearts = hearts::count(floor);
                 let shields = if cells.is_some() { hearts::shield_count(floor) } else { 0 };
-                let spots = hearts::spots(grid, start, hearts + shields, rng);
-                let (heart_spots, cell_spots) = spots.split_at(hearts.min(spots.len()));
+                let breaths = if stamina.is_some() { hearts::stamina_count(floor) } else { 0 };
+                let spots = hearts::spots(grid, start, hearts + shields + breaths, rng);
+                let (heart_spots, rest) = spots.split_at(hearts.min(spots.len()));
+                let (cell_spots, stamina_spots) = rest.split_at(shields.min(rest.len()));
                 let scene = &mut ctx.scenes[self.scene];
                 self.hearts.place(&model, scene, (grid, *origin), heart_spots);
                 if let Some(cells) = &cells {
                     self.shield_cells.place(cells, scene, (grid, *origin), cell_spots);
+                }
+                if let Some(stamina) = &stamina {
+                    self.stamina_cells.place(stamina, scene, (grid, *origin), stamina_spots);
                 }
                 // Tried once a round, found room or not.
                 self.hearts_placed = true;
@@ -2869,6 +2890,15 @@ impl MazeGame {
             let graph = &mut ctx.scenes[self.scene].graph;
             self.hearts.update(graph, ctx.dt);
             self.shield_cells.update(graph, ctx.dt);
+            self.stamina_cells.update(graph, ctx.dt);
+            // Walking into a stamina cell, with breath not frozen already, freezes it.
+            if self.phase == Phase::Playing && self.player.stamina_frozen() == 0.0 {
+                let player = self.player.position(graph);
+                if self.stamina_cells.take(graph, player) {
+                    self.player.freeze_stamina();
+                    self.hud.show_note(format!("Stamina frozen for {:.0} seconds", crate::player::breath::FREEZE));
+                }
+            }
             // Walking into a shield cell with room for a spare picks it up.
             if self.phase == Phase::Playing {
                 let player = self.player.position(graph);
@@ -3225,6 +3255,7 @@ impl Plugin for MazeGame {
             let level = &self.level;
             self.hearts.cull(&mut scene.graph, |at| level.can_see(at));
             self.shield_cells.cull(&mut scene.graph, |at| level.can_see(at));
+            self.stamina_cells.cull(&mut scene.graph, |at| level.can_see(at));
         }
 
         // Blue's flag, once the player has it, on their back.

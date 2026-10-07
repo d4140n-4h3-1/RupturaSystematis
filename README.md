@@ -136,6 +136,13 @@ their animations; the crate decides what they make of what is round them.
   shield at once while it is still charging after breaking. Picking one up says how many are
   kept. Going down loses them. The model, `data/shield_pickup.glb`, is exported from
   `shield.blend` in Blender.
+- **Stamina cells** freeze the player's breath for 10 seconds: running and sprinting spend none
+  of it, though walking still gets it back, and a player out of breath is no longer winded. They
+  float about as hearts do, with a green lamp, rarer than hearts but commoner than shield cells
+  (one for every 10,000 cells of floor, between 2 and 6), and are only picked up while breath is
+  not frozen already. While it is, the stamina bar is the colour of ice, named STAMINA FROZEN
+  with the seconds it has left. The model, `data/stamina_pickup.glb`, is exported from
+  `stamina.blend` in Blender.
 - **Voices echo on the Grid and in Nexus**, off the buildings of a city in the open: each line
   comes back a quarter of a second later, again and again, fainter and duller each time, for
   about a second and a half after it is said (`synth::CITY_ECHO`). A map says whether its voices

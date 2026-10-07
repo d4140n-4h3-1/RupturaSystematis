@@ -1,4 +1,6 @@
-//! Breath: a run spends it, a sprint a good deal faster, and a jog or a walk gets it back.
+//! Breath: a run spends it, a sprint a good deal faster, and a jog or a walk gets it back. A
+//! stamina cell picked up freezes it for a while ([`FREEZE`]): nothing spends it, though it still
+//! comes back.
 
 use super::{posture::Gait, Player};
 
@@ -13,6 +15,8 @@ const RECOVER_JOGGING: f32 = 0.5;
 /// How much breath has to come back before the player can sprint again, out of 1. Being winded
 /// costs more than the moment it takes to draw one breath.
 const RECOVERED: f32 = 0.35;
+/// How long a stamina cell keeps breath from being spent, in seconds.
+pub const FREEZE: f32 = 10.0;
 
 impl Player {
     /// How much breath is left, from 1 down to 0, and whether the player has run out of it - for
@@ -26,7 +30,25 @@ impl Player {
     /// enough of it is back.
     pub(super) fn breathe(&mut self, dt: f32, moving: bool) {
         let gait = if moving { self.gait() } else { Gait::Walking };
-        (self.stamina, self.winded) = breathe(self.stamina, self.winded, gait, dt, 1.0, 1.0);
+        let (stamina, winded) = breathe(self.stamina, self.winded, gait, dt, 1.0, 1.0);
+        // Frozen, it is never spent, only got back.
+        (self.stamina, self.winded) = match self.stamina_frozen > 0.0 {
+            true => (stamina.max(self.stamina), false),
+            false => (stamina, winded),
+        };
+        self.stamina_frozen = (self.stamina_frozen - dt).max(0.0);
+    }
+
+    /// Freezes the player's breath for [`FREEZE`] seconds: nothing spends it, and a player out
+    /// of it is no longer winded, to run on what they have.
+    pub fn freeze_stamina(&mut self) {
+        self.stamina_frozen = FREEZE;
+        self.winded = false;
+    }
+
+    /// How long the player's breath stays frozen, in seconds; 0 when it is not.
+    pub fn stamina_frozen(&self) -> f32 {
+        self.stamina_frozen
     }
 }
 
@@ -131,6 +153,31 @@ mod tests {
         );
         // And once it has run out, it starts coming back: being winded is already a walk.
         assert!(breathe_for(&mut player, 1.0, true) > 0.0);
+    }
+
+    #[test]
+    fn frozen_breath_is_not_spent_until_the_freeze_is_over() {
+        let mut player = sprinting();
+        breathe_for(&mut player, SPRINT_TIME * 0.5, true);
+        let half = player.stamina;
+        player.freeze_stamina();
+        assert_eq!(breathe_for(&mut player, FREEZE * 0.9, true), half, "a frozen sprint costs nothing");
+        assert!(player.stamina_frozen() > 0.0);
+        breathe_for(&mut player, FREEZE * 0.2, true);
+        assert_eq!(player.stamina_frozen(), 0.0);
+        assert!(breathe_for(&mut player, 1.0, true) < half, "and then it costs again");
+    }
+
+    #[test]
+    fn a_winded_player_frozen_runs_on_what_they_have() {
+        let mut player = sprinting();
+        breathe_for(&mut player, SPRINT_TIME * 1.1, true);
+        assert!(player.winded);
+        player.freeze_stamina();
+        assert!(!player.winded);
+        assert_eq!(player.gait(), Gait::Sprinting);
+        breathe_for(&mut player, FREEZE * 0.5, true);
+        assert!(!player.winded, "not winded again while it is frozen");
     }
 
     #[test]

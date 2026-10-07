@@ -117,6 +117,8 @@ pub struct Player {
     pace: posture::Gait,
     /// How much breath is left, from 1 down to 0.
     stamina: f32,
+    /// How long it stays frozen by a stamina cell, unspent, in seconds (see [`breath::FREEZE`]).
+    stamina_frozen: f32,
     /// Whether the player has run themselves out and is walking it off.
     winded: bool,
     /// Whether the player stood still this frame.
@@ -215,6 +217,7 @@ impl Default for Player {
             flashlight_on: false,
             pace: posture::Gait::Walking,
             stamina: 1.0,
+            stamina_frozen: 0.0,
             winded: false,
             resting: false,
             grounded: false,
@@ -407,6 +410,7 @@ impl Player {
         self.lean = Vector3::zeros();
         self.cover = None;
         self.stamina = 1.0;
+        self.stamina_frozen = 0.0;
         self.winded = false;
         self.fall_speed = 0.0;
         self.carried = Vector3::zeros();

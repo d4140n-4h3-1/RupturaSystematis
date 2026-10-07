@@ -17,7 +17,10 @@
 //!
 //! Shield cells - spare charges for the shield (see [`crate::shield`]) - float about the same
 //! way, from their own model, [`SHIELD_PICKUP_MODEL`], made in Blender from `shield.blend`, with
-//! a blue lamp. They are rarer: about one for every three hearts ([`shield_count`]).
+//! a blue lamp. They are rarer: about one for every three hearts ([`shield_count`]). Stamina
+//! cells, which freeze the player's breath for a while (see [`crate::player::breath::FREEZE`]),
+//! the same, from [`STAMINA_PICKUP_MODEL`], made from `stamina.blend`, with a green lamp: rarer
+//! than hearts too, but commoner than shield cells ([`stamina_count`]).
 
 use crate::{
     fixtures::{property, DIFFUSE_COLOR},
@@ -51,8 +54,10 @@ use fyrox::{
 /// The heart's model, and the shield cell's.
 pub const HEART_MODEL: &str = "data/health.glb";
 pub const SHIELD_PICKUP_MODEL: &str = "data/shield_pickup.glb";
-/// The shield cells' lamp.
+pub const STAMINA_PICKUP_MODEL: &str = "data/stamina_pickup.glb";
+/// The shield cells' lamp, and the stamina cells'.
 pub const SHIELD_LAMP: Color = Color::opaque(60, 150, 255);
+pub const STAMINA_LAMP: Color = Color::opaque(60, 255, 110);
 /// How near the middle of the player's body a heart has to be to be picked up, in meters.
 const TAKE_REACH: f32 = 0.9;
 /// How big a heart is across its biggest side, in meters.
@@ -76,6 +81,10 @@ const MOST: usize = 12;
 const FLOOR_PER_SHIELD: usize = 15000;
 const FEWEST_SHIELDS: usize = 1;
 const MOST_SHIELDS: usize = 4;
+/// And how many stamina cells: between the two, half as many as hearts.
+const FLOOR_PER_STAMINA: usize = 10000;
+const FEWEST_STAMINA: usize = 2;
+const MOST_STAMINA: usize = 6;
 /// How many cells of walking from the start a heart has to be at least, and the first at most;
 /// how many cells apart two hearts are at first asked to be; and how many cells of floor all
 /// round a heart's cell has to have, so that it floats in a corridor rather than against a wall.
@@ -92,6 +101,12 @@ pub fn count(floor: usize) -> usize {
 /// How many shield cells a maze with `floor` cells of floor gets: fewer than hearts.
 pub fn shield_count(floor: usize) -> usize {
     (floor / FLOOR_PER_SHIELD).clamp(FEWEST_SHIELDS, MOST_SHIELDS)
+}
+
+/// How many stamina cells a maze with `floor` cells of floor gets: fewer than hearts, more than
+/// shield cells.
+pub fn stamina_count(floor: usize) -> usize {
+    (floor / FLOOR_PER_STAMINA).clamp(FEWEST_STAMINA, MOST_STAMINA)
 }
 
 /// Where `count` hearts go in `grid`, whose player starts at `start`: cells of open floor far
@@ -352,6 +367,14 @@ mod tests {
         for floor in [0, 5_000, 20_000, 60_000, 150_000, 1_000_000] {
             assert!(shield_count(floor) >= 1, "at least one");
             assert!(shield_count(floor) < count(floor), "fewer than hearts in {floor}");
+        }
+    }
+
+    #[test]
+    fn stamina_cells_are_rarer_than_hearts_and_commoner_than_shield_cells() {
+        for floor in [0, 5_000, 20_000, 60_000, 150_000, 1_000_000] {
+            assert!(stamina_count(floor) < count(floor), "fewer than hearts in {floor}");
+            assert!(stamina_count(floor) > shield_count(floor), "more than shield cells in {floor}");
         }
     }
 
