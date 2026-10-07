@@ -66,8 +66,19 @@ pub const AURUM: Map = Map {
     echoes: true,
 };
 
+/// Cortex: a data quarter, its data core behind three firewall doors, guard towers round it.
+pub const CORTEX: Map = Map {
+    name: "Cortex",
+    path: "data/arena/heist_cortex.glb",
+    about: "A data quarter. Past the guard towers, through the yard's gate, the hall's door and the core's.",
+    void: true,
+    open_sky: true,
+    night: true,
+    echoes: true,
+};
+
 /// The districts heists are played in, picked from in the main menu (see [`crate::heist`]).
-pub const HEIST_MAPS: [Map; 1] = [AURUM];
+pub const HEIST_MAPS: [Map; 2] = [AURUM, CORTEX];
 
 /// The sky round a map in the void, each face of it.
 pub const VOID_SKY: &str = "data/skybox.png";

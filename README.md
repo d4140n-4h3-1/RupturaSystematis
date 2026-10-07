@@ -150,7 +150,13 @@ their animations; the crate decides what they make of what is round them.
   next, how much is stolen and when the next wave comes. The first district is **Aurum**,
   `data/arena/heist_aurum.glb`, built by `data/arena/heist_aurum.py` with Nexus's helpers: a
   walled bank compound among towers, pods and domes, its lines of light lighting what is round
-  them. `MAZE_HEIST_OPEN=<n>` opens the first n doors, to try a heist out.
+  them. The second is **Cortex**, `data/arena/heist_cortex.glb`, built by
+  `data/arena/heist_cortex.py`: a data quarter on an octagonal platform, its walled yard watched
+  from guard towers at its corners - stairs up to a platform with a parapet, a guard on each - and
+  in it the data hall, rows of glowing server racks to creep between, and at the hall's end the
+  core chamber, its glowing data core ringed with terminals; server blocks banded with light and
+  cooling units stand about its streets. `MAZE_HEIST_OPEN=<n>` opens the first n doors, to try a
+  heist out.
 - **Stamina cells** freeze the player's breath for 10 seconds: running and sprinting spend none
   of it, though walking still gets it back, and a player out of breath is no longer winded. They
   float about as hearts do, with a green lamp, rarer than hearts but commoner than shield cells
