@@ -108,8 +108,8 @@ their animations; the crate decides what they make of what is round them.
 
 6 October 2026:
 
-- **Battle royale.** Battle Royale in the main menu: you and up to 15 droids - 16 in all - in a
-  walled town at night, every one against every other. Each has three lives: shot down, you come
+- **Battle royale.** Battle Royale in the main menu, on the map of your choice - the town or the
+  Grid: you and up to 15 droids - 16 in all - every one against every other. Each has three lives: shot down, you come
   back a few seconds later at a start inside the ring, and the third time you are out, told how
   you placed. The last one in wins. A ring of glowing posts closes in on the town in five stages,
   each somewhere new inside the last, hurting anyone caught outside it. `MAZE_ROYALE` sets how
@@ -120,6 +120,14 @@ their animations; the crate decides what they make of what is round them.
   over four floors - every one open to go into, with doors, windows on every floor to see and
   shoot through, switchback stairs inside up to each floor and to the roofs of the tallest, and a
   light on every floor. Street lights stand along every street under a black sky.
+- **The Grid**, `data/arena/br_grid.glb`, a city traced in light floating in the void, built by
+  `data/arena/br_grid.py` with the town's buildings: black blocks on a black platform ruled with
+  a grid of light, every corner, floor, roof and door of every building lined in glowing cyan or
+  orange, and every crate, low wall and parked light cycle with a glowing edge. A barrier lit
+  along its top runs round the platform's edge, but for a gap on each side where a bridge goes
+  out over the void, no rail on it, to a pad with a tower: the highest ground there is. Light
+  pylons stand at every other corner. The engine lights what a surface gives off by the surface's
+  own colour, so each line of light is its own colour too, to glow at full strength.
 - **Lamps on floors over one another** each get their own: fixtures share a lamp only on the
   same floor.
 

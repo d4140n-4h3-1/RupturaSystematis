@@ -1,7 +1,7 @@
 //! The menus.
 //!
 //! The main menu comes first, over a blank screen: which game to play - the maze, or capture the
-//! flag on one of its maps, picked on a page of their own - or to leave.
+//! flag or battle royale on one of their maps, each picked on a page of their own - or to leave.
 //!
 //! The pause menu: the world stops behind a dimmed screen, with buttons to carry on, to switch
 //! the maze's lights, to change the options, to start again, to go back to the main menu or to
@@ -12,7 +12,10 @@
 //! Every menu works from the keyboard as well as the mouse: the arrow keys, or W and S, go up and
 //! down its buttons - the one picked shows in its own colour - and Enter or Space presses it.
 
-use crate::{ctf::MAPS, dialogue::screen::Subtitles};
+use crate::{
+    ctf::{Map, MAPS, ROYALE_MAPS},
+    dialogue::screen::Subtitles,
+};
 use fyrox::{
     core::{color::Color, pool::Handle},
     gui::{
@@ -179,7 +182,15 @@ pub enum Game {
     Maze,
     /// Capture the flag, on the map of [`MAPS`] at this index.
     CaptureTheFlag(usize),
-    /// Battle royale: everyone against everyone in the town, the last one standing winning.
+    /// Battle royale: everyone against everyone, the last one standing winning, on the map of
+    /// [`ROYALE_MAPS`] at this index.
+    BattleRoyale(usize),
+}
+
+/// The games with maps to pick from, each on a page of its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Maps {
+    CaptureTheFlag,
     BattleRoyale,
 }
 
@@ -187,14 +198,14 @@ pub enum Game {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Start {
     Play(Game),
-    /// Go to the maps for capture the flag, or back from them to the menu.
-    Maps,
+    /// Go to the maps for capture the flag or battle royale, or back from them to the menu.
+    Maps(Maps),
     Back,
     Quit,
 }
 
-/// The main menu: which game to play, or to leave; and for capture the flag, a page of its own
-/// for which map.
+/// The main menu: which game to play, or to leave; and for capture the flag and battle royale,
+/// a page each for which map.
 #[derive(Debug, Default, PartialEq)]
 pub struct MainMenu {
     screen: Handle<Screen>,
@@ -202,12 +213,15 @@ pub struct MainMenu {
     ctf: Handle<Button>,
     royale: Handle<Button>,
     quit: Handle<Button>,
-    /// The menu's own page, and the maps'.
+    /// The menu's own page, and the maps' for capture the flag and for battle royale.
     main_page: Handle<UiNode>,
     maps_page: Handle<UiNode>,
-    /// A button for each of [`MAPS`], in order.
+    royale_page: Handle<UiNode>,
+    /// A button for each of [`MAPS`], and of [`ROYALE_MAPS`], in order; and back from each page.
     maps: Vec<Handle<Button>>,
+    royale_maps: Vec<Handle<Button>>,
     back: Handle<Button>,
+    royale_back: Handle<Button>,
     picking: Picking,
 }
 
@@ -230,37 +244,24 @@ impl MainMenu {
             "Maze: find the way out of a new maze each round.\n\
              Capture the Flag: hack red's firewall, take their flag and bring it home,\n\
              with blue's droids and drone on your side, on the map of your choice.\n\
-             Battle Royale: everyone against everyone in a town, inside a closing ring;\n\
-             the last one standing wins.",
+             Battle Royale: everyone against everyone inside a closing ring, in a town\n\
+             or on the Grid; the last one standing wins.",
         )
         .with_font_size(16.0.into())
         .with_horizontal_text_alignment(HorizontalAlignment::Center)
         .build(ctx);
         let items = [heading.to_base(), maze.to_base(), ctf.to_base(), royale.to_base(), quit.to_base(), about.to_base()];
         let main_page = page(ctx, true, items);
-        let maps_title = title(ctx, "Capture the Flag");
-        let map_buttons: Vec<_> = MAPS.iter().map(|map| button(ctx, map.name)).collect();
+        let (maps_page, map_buttons, back_button) = map_page(ctx, "Capture the Flag", &MAPS);
+        let (royale_page, royale_buttons, royale_back_button) = map_page(ctx, "Battle Royale", &ROYALE_MAPS);
         let maps: Vec<_> = map_buttons.iter().map(|&(map, _)| map).collect();
-        let back_button = button(ctx, "Back");
-        let back = back_button.0;
-        let maps_about = TextBuilder::new(
-            WidgetBuilder::new()
-                .with_margin(Thickness::top(24.0))
-                .with_foreground(Brush::Solid(Color::opaque(190, 190, 200)).into()),
-        )
-        .with_text(maps_text())
-        .with_font_size(16.0.into())
-        .with_horizontal_text_alignment(HorizontalAlignment::Center)
-        .build(ctx);
-        let items = std::iter::once(maps_title.to_base())
-            .chain(maps.iter().map(|map| map.to_base()))
-            .chain([back.to_base(), maps_about.to_base()]);
-        let maps_page = page(ctx, false, items);
+        let royale_maps: Vec<_> = royale_buttons.iter().map(|&(map, _)| map).collect();
         let backdrop = BorderBuilder::new(
             WidgetBuilder::new()
                 .with_background(Brush::Solid(Color::opaque(8, 10, 14)).into())
                 .with_child(main_page)
-                .with_child(maps_page),
+                .with_child(maps_page)
+                .with_child(royale_page),
         )
         .with_stroke_thickness(Thickness::uniform(0.0).into())
         .build(ctx);
@@ -274,12 +275,16 @@ impl MainMenu {
             quit,
             main_page,
             maps_page,
+            royale_page,
             maps,
-            back,
+            royale_maps,
+            back: back_button.0,
+            royale_back: royale_back_button.0,
             picking: Picking {
                 pages: vec![
                     vec![maze_button, ctf_button, royale_button, quit_button],
                     map_buttons.into_iter().chain([back_button]).collect(),
+                    royale_buttons.into_iter().chain([royale_back_button]).collect(),
                 ],
                 ..Picking::default()
             },
@@ -289,17 +294,23 @@ impl MainMenu {
     /// Shows or hides the menu, on its own page.
     pub fn set_open(&mut self, ui: &UserInterface, open: bool) {
         ui.send(self.screen, WidgetMessage::Visibility(open));
-        self.show_maps(ui, false);
+        self.show_maps(ui, None);
         if !open {
             self.picking.leave(ui);
         }
     }
 
-    /// Shows the maps for capture the flag, or the menu's own page.
-    pub fn show_maps(&mut self, ui: &UserInterface, maps: bool) {
-        ui.send(self.main_page, WidgetMessage::Visibility(!maps));
-        ui.send(self.maps_page, WidgetMessage::Visibility(maps));
-        self.picking.show(ui, usize::from(maps), |_| true);
+    /// Shows the maps for capture the flag or battle royale, or with none the menu's own page.
+    pub fn show_maps(&mut self, ui: &UserInterface, maps: Option<Maps>) {
+        ui.send(self.main_page, WidgetMessage::Visibility(maps.is_none()));
+        ui.send(self.maps_page, WidgetMessage::Visibility(maps == Some(Maps::CaptureTheFlag)));
+        ui.send(self.royale_page, WidgetMessage::Visibility(maps == Some(Maps::BattleRoyale)));
+        let page = match maps {
+            None => 0,
+            Some(Maps::CaptureTheFlag) => 1,
+            Some(Maps::BattleRoyale) => 2,
+        };
+        self.picking.show(ui, page, |_| true);
     }
 
     /// Goes up and down the menu, or presses what is picked, for `code`: whether it did.
@@ -315,24 +326,48 @@ impl MainMenu {
     /// What `message` picks from the menu, if anything.
     pub fn choice(&self, message: &UiMessage) -> Option<Start> {
         let maps = (self.maps.iter().enumerate()).map(|(n, &map)| (map, Start::Play(Game::CaptureTheFlag(n))));
+        let royale_maps = (self.royale_maps.iter().enumerate()).map(|(n, &map)| (map, Start::Play(Game::BattleRoyale(n))));
         [
             (self.maze, Start::Play(Game::Maze)),
-            (self.ctf, Start::Maps),
-            (self.royale, Start::Play(Game::BattleRoyale)),
+            (self.ctf, Start::Maps(Maps::CaptureTheFlag)),
+            (self.royale, Start::Maps(Maps::BattleRoyale)),
             (self.back, Start::Back),
+            (self.royale_back, Start::Back),
             (self.quit, Start::Quit),
         ]
         .into_iter()
         .chain(maps)
+        .chain(royale_maps)
         .find(|&(button, _)| matches!(message.data_from(button), Some(ButtonMessage::Click)))
         .map(|(_, choice)| choice)
     }
 }
 
-/// A line about each map, under the maps' buttons.
-fn maps_text() -> String {
-    let lines: Vec<_> = MAPS.iter().map(|map| format!("{}: {}", map.name, map.about)).collect();
-    lines.join("\n")
+/// A page of `maps` to pick from under `heading`, hidden, with a button for each and one to go
+/// back, and a line about each under them: the page, and the buttons with their text.
+#[allow(clippy::type_complexity)]
+fn map_page(
+    ctx: &mut BuildContext,
+    heading: &str,
+    maps: &[Map],
+) -> (Handle<UiNode>, Vec<(Handle<Button>, Handle<Text>)>, (Handle<Button>, Handle<Text>)) {
+    let heading = title(ctx, heading);
+    let buttons: Vec<_> = maps.iter().map(|map| button(ctx, map.name)).collect();
+    let back = button(ctx, "Back");
+    let lines: Vec<_> = maps.iter().map(|map| format!("{}: {}", map.name, map.about)).collect();
+    let about = TextBuilder::new(
+        WidgetBuilder::new()
+            .with_margin(Thickness::top(24.0))
+            .with_foreground(Brush::Solid(Color::opaque(190, 190, 200)).into()),
+    )
+    .with_text(lines.join("\n"))
+    .with_font_size(16.0.into())
+    .with_horizontal_text_alignment(HorizontalAlignment::Center)
+    .build(ctx);
+    let items = std::iter::once(heading.to_base())
+        .chain(buttons.iter().map(|&(button, _)| button.to_base()))
+        .chain([back.0.to_base(), about.to_base()]);
+    (page(ctx, false, items), buttons, back)
 }
 
 #[derive(Debug, Default, PartialEq)]
@@ -620,12 +655,23 @@ mod tests {
         let mut ui = UserInterface::new(Vector2::new(800.0, 600.0));
         let menu = MainMenu::build(&mut ui);
         assert_eq!(menu.maps.len(), MAPS.len());
-        assert_eq!(menu.choice(&click(menu.ctf)), Some(Start::Maps));
+        assert_eq!(menu.choice(&click(menu.ctf)), Some(Start::Maps(Maps::CaptureTheFlag)));
         assert_eq!(menu.choice(&click(menu.back)), Some(Start::Back));
         assert_eq!(menu.choice(&click(menu.maze)), Some(Start::Play(Game::Maze)));
-        assert_eq!(menu.choice(&click(menu.royale)), Some(Start::Play(Game::BattleRoyale)));
         for (n, &map) in menu.maps.iter().enumerate() {
             assert_eq!(menu.choice(&click(map)), Some(Start::Play(Game::CaptureTheFlag(n))));
+        }
+    }
+
+    #[test]
+    fn battle_royale_opens_its_maps_and_each_map_plays_its_own() {
+        let mut ui = UserInterface::new(Vector2::new(800.0, 600.0));
+        let menu = MainMenu::build(&mut ui);
+        assert_eq!(menu.royale_maps.len(), ROYALE_MAPS.len());
+        assert_eq!(menu.choice(&click(menu.royale)), Some(Start::Maps(Maps::BattleRoyale)));
+        assert_eq!(menu.choice(&click(menu.royale_back)), Some(Start::Back));
+        for (n, &map) in menu.royale_maps.iter().enumerate() {
+            assert_eq!(menu.choice(&click(map)), Some(Start::Play(Game::BattleRoyale(n))));
         }
     }
 
@@ -670,7 +716,7 @@ mod tests {
         enter(&mut ui, &mut main);
         assert_eq!(settle(&mut ui, &mut main, &mut pause), [main.ctf], "pressed once");
         // On the maps: down past the last goes round to the first.
-        main.show_maps(&ui, true);
+        main.show_maps(&ui, Some(Maps::CaptureTheFlag));
         settle(&mut ui, &mut main, &mut pause);
         for _ in 0..MAPS.len() + 1 {
             main.key(&ui, KeyCode::KeyS);
@@ -721,16 +767,18 @@ mod tests {
     fn the_maps_show_in_place_of_the_menus_own_page() {
         let mut ui = UserInterface::new(Vector2::new(800.0, 600.0));
         let mut menu = MainMenu::build(&mut ui);
-        let (main_page, maps_page) = (menu.main_page, menu.maps_page);
+        let (main_page, maps_page, royale_page) = (menu.main_page, menu.maps_page, menu.royale_page);
         let showing = |ui: &mut UserInterface| {
             while ui.poll_message().is_some() {}
-            (ui[main_page].visibility(), ui[maps_page].visibility())
+            (ui[main_page].visibility(), ui[maps_page].visibility(), ui[royale_page].visibility())
         };
-        assert_eq!(showing(&mut ui), (true, false));
-        menu.show_maps(&ui, true);
-        assert_eq!(showing(&mut ui), (false, true));
+        assert_eq!(showing(&mut ui), (true, false, false));
+        menu.show_maps(&ui, Some(Maps::CaptureTheFlag));
+        assert_eq!(showing(&mut ui), (false, true, false));
+        menu.show_maps(&ui, Some(Maps::BattleRoyale));
+        assert_eq!(showing(&mut ui), (false, false, true));
         // Opened again, it is back on its own page.
         menu.set_open(&ui, true);
-        assert_eq!(showing(&mut ui), (true, false));
+        assert_eq!(showing(&mut ui), (true, false, false));
     }
 }

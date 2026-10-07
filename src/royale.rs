@@ -1,4 +1,4 @@
-//! Battle royale: the player and up to [`MOST`] less one droids in the town (see [`crate::ctf::TOWN`]),
+//! Battle royale: the player and up to [`MOST`] less one droids on one of [`crate::ctf::ROYALE_MAPS`],
 //! every one against every other, each droid on a side of its own ([`Side::Lone`]).
 //!
 //! Each has [`LIVES`] lives. Shot down with a life left, it comes back [`BACK_IN`] seconds later

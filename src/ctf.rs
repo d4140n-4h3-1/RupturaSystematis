@@ -27,7 +27,7 @@ pub struct Map {
     pub night: bool,
 }
 
-/// The town battle royale is played in.
+/// The town, one of the maps battle royale is played on.
 pub const TOWN: Map = Map {
     name: "Town",
     path: "data/arena/br_town.glb",
@@ -37,12 +37,25 @@ pub const TOWN: Map = Map {
     night: true,
 };
 
+/// The Grid: a city traced in light on a platform in the void.
+pub const GRID: Map = Map {
+    name: "Grid",
+    path: "data/arena/br_grid.glb",
+    about: "A black city traced in light, on a platform in the void, with towers out over it on pads.",
+    void: true,
+    open_sky: true,
+    night: true,
+};
+
+/// The maps battle royale is played on, picked from in the main menu.
+pub const ROYALE_MAPS: [Map; 2] = [TOWN, GRID];
+
 /// The sky round a map in the void, each face of it.
 pub const VOID_SKY: &str = "data/skybox.png";
 
 /// The map whose model is at `path`, if one is.
 pub fn map_at(path: &str) -> Option<&'static Map> {
-    MAPS.iter().chain(std::iter::once(&TOWN)).find(|map| map.path == path)
+    MAPS.iter().chain(&ROYALE_MAPS).find(|map| map.path == path)
 }
 
 /// The maps it can be played on, picked from in the main menu.
@@ -161,7 +174,9 @@ mod tests {
         for map in MAPS {
             assert!(dir.join(map.path).is_file(), "{} has no model at {}", map.name, map.path);
         }
-        assert!(dir.join(TOWN.path).is_file(), "no town at {}", TOWN.path);
+        for map in ROYALE_MAPS {
+            assert!(dir.join(map.path).is_file(), "{} has no model at {}", map.name, map.path);
+        }
         assert!(dir.join(VOID_SKY).is_file(), "no sky for the void at {VOID_SKY}");
     }
 

@@ -589,7 +589,7 @@ impl MazeGame {
         let resources = &ctx.resource_manager;
         let model = match game {
             Game::CaptureTheFlag(map) => Some(MAPS[map].path.to_string()),
-            Game::BattleRoyale => Some(ctf::TOWN.path.to_string()),
+            Game::BattleRoyale(map) => Some(ctf::ROYALE_MAPS[map].path.to_string()),
             Game::Maze => platform::var("MAZE_MODEL"),
         };
         match model {
@@ -1132,7 +1132,7 @@ impl MazeGame {
         match code {
             // On the main menu, only its buttons do anything, and Escape goes back from the maps.
             KeyCode::Escape if self.phase == Phase::Title => {
-                self.main_menu.show_maps(ctx.user_interfaces.first(), false)
+                self.main_menu.show_maps(ctx.user_interfaces.first(), None)
             }
             _ if self.phase == Phase::Title => (),
             // At the computer every key but Escape is for it: minus and the rest are typed.
@@ -3089,8 +3089,8 @@ impl Plugin for MazeGame {
         self.menu.observe(ctx.user_interfaces.first(), message);
         match self.main_menu.choice(message) {
             Some(Start::Play(game)) if self.phase == Phase::Title => self.play(ctx, game),
-            Some(Start::Maps) => self.main_menu.show_maps(ctx.user_interfaces.first(), true),
-            Some(Start::Back) => self.main_menu.show_maps(ctx.user_interfaces.first(), false),
+            Some(Start::Maps(game)) => self.main_menu.show_maps(ctx.user_interfaces.first(), Some(game)),
+            Some(Start::Back) => self.main_menu.show_maps(ctx.user_interfaces.first(), None),
             Some(Start::Quit) => platform::quit(ctx),
             _ => (),
         }
