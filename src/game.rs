@@ -32,6 +32,7 @@ use crate::{
         synth,
     },
     generate::Maze,
+    glow::GlowLights,
     hud::{self, Hud, Status},
     inhabitants::{Alert, Inhabitants, Livery, News, Rival, Threat, HOSTILE_MODEL},
     layout::{self, Rng},
@@ -236,6 +237,10 @@ pub struct MazeGame {
     #[visit(skip)]
     #[reflect(hidden)]
     area_lights: fyrox_gfx::AreaLights,
+    /// The level's lines of light, lighting what is round them, if it has any (see [`glow`]).
+    #[visit(skip)]
+    #[reflect(hidden)]
+    glow: Option<GlowLights>,
     /// The droid the player is seen as, until it has loaded and joined the player.
     #[visit(skip)]
     #[reflect(hidden)]
@@ -599,6 +604,8 @@ impl MazeGame {
                     .filter(|map| map.void || map.night)
                     .map(|_| resources.request::<Texture>(ctf::VOID_SKY));
                 self.firewalls = Firewalls::request(resources);
+                // Only where shadows are traced: elsewhere their light would shine through walls.
+                self.glow = if cfg!(target_arch = "wasm32") { None } else { GlowLights::load(&path) };
                 self.model_path = path;
             }
             None => self.prefabs = Some(Prefabs::request(resources)),
@@ -3049,6 +3056,21 @@ impl Plugin for MazeGame {
         } else {
             Vec::new()
         };
+        // The level's lines of light, round the player and the droids, while its lights are on,
+        // in whatever room the computers leave.
+        let mut lights = lights;
+        if let Some(glow) = self.glow.as_mut() {
+            if lit && !self.lights_off && matches!(self.phase, Phase::Playing | Phase::Won | Phase::Deleted) {
+                let graph = &ctx.scenes[self.scene].graph;
+                let player = self.player.position(graph);
+                let droids: Vec<Vector3<f32>> = self.inhabitants.standing().into_iter().map(|d| d.3).collect();
+                let room = fyrox_gfx::area_lights::MAX_AREA_LIGHTS.saturating_sub(lights.len());
+                glow.update(ctx.dt, player, &droids, room);
+                lights.extend(glow.lights());
+            } else {
+                glow.clear();
+            }
+        }
         self.area_lights.set(lights);
 
         #[cfg(target_arch = "wasm32")]

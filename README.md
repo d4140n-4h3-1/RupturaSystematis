@@ -129,6 +129,13 @@ their animations; the crate decides what they make of what is round them.
   out over the void, no rail on it, to a pad with a tower: the highest ground there is. Light
   pylons stand at every other corner. The engine lights what a surface gives off by the surface's
   own colour, so each line of light is its own colour too, to glow at full strength.
+- **The Grid's lines of light light what is round them**, with traced soft shadows: a droid by a
+  glowing wall is lit in its colour, and stands out against the dark. The map's script writes
+  every line, cut into pieces 3 m long at most, to `data/arena/br_grid.glow.json`; each frame the
+  game lights as area lights the pieces nearest the player and nearest each droid within 70 m,
+  the nearest droids first, fading each in and out - 64 at once, the engine's most (raised from
+  16). It costs nothing measurable. Only where shadows are traced, so not in the browser, where
+  their light would shine through walls; `MAZE_AREA_LIGHTS=0` turns them off.
 - **Lamps on floors over one another** each get their own: fixtures share a lamp only on the
   same floor.
 

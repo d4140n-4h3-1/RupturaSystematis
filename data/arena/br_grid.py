@@ -24,11 +24,15 @@ It is night in the void: light pylons stand at every other corner, on the pads a
 square, and each building has a light in every ceiling - their glass pure magenta, which the
 game lights with a lamp of its own.
 
+Beside the model goes br_grid.glow.json: every coloured line of light, cut into pieces no longer
+than SEGMENT, for the game to light what is near them with, casting traced shadows.
+
 Made for Ruptura Systematis (MazeGame/maze). The game puts the players down at the empties
 `spawn_1` to `spawn_16`, round the platform's outer street.
 """
 
 import bpy
+import json
 import math
 import os
 import random
@@ -70,6 +74,7 @@ PALETTE = {
     "red": (1.0, 0.05, 0.05),
 }
 SHADES = ("cyan", "cyan", "orange", "pink", "yellow", "green", "violet", "red")
+SEGMENT = 3.0        # the longest piece of a line of light the game lights its surroundings with
 
 
 def material(name, rgb, roughness=0.35, metallic=0.4):
@@ -116,10 +121,19 @@ class Grid(br_town.Town):
         self.lines = {name: glow(f"Trim{name.title()}", rgb, 3.0) for name, rgb in PALETTE.items()}
         self.white = glow("TrimWhite", WHITE, 2.0)
         self.n_trim = 0
+        # Every coloured line of light, as (x0, x1, y0, y1, z0, z1, rgb): for the game to light
+        # what is round them with (see `glow_segments`).
+        self.glowing = []
+        self.shade_of = {id(m): PALETTE[name] for name, m in self.lines.items()}
 
     def line(self, x0, x1, y0, y1, z0, z1, mat):
         """A line of light, a box given by its extents."""
         self.n_trim += 1
+        if id(mat) in self.shade_of:
+            x0, x1 = sorted((x0, x1))
+            y0, y1 = sorted((y0, y1))
+            z0, z1 = sorted((z0, z1))
+            self.glowing.append((x0, x1, y0, y1, z0, z1, self.shade_of[id(mat)]))
         return add_box(f"Trim_{self.n_trim}", x0, x1, y0, y1, z0, z1, self.trim, mat)
 
     def floor_line(self, x0, x1, y0, y1, mat, z=0.0):
@@ -150,6 +164,30 @@ class Grid(br_town.Town):
         self.line(x - 0.9, x + 0.9, y + 0.25, y + 0.27, top, top + 0.18, self.white)
         add_box(f"{name}_Glass", x - 0.8, x + 0.8, y - 0.2, y + 0.2, top - 0.04, top, self.lights, self.glass)
         self.keep_clear.append((x - 0.6, x + 0.6, y - 0.6, y + 0.6))
+
+
+def glow_segments(glowing):
+    """The lines of light as the game lights with them: each cut into pieces no longer than
+    SEGMENT, each piece a rectangle through its middle along its length and its width - in the
+    game's terms, y up (Blender's x, z, -y) - with its colour."""
+    pieces = []
+    for x0, x1, y0, y1, z0, z1, rgb in glowing:
+        lo, hi = (x0, y0, z0), (x1, y1, z1)
+        size = [hi[k] - lo[k] for k in range(3)]
+        long, wide = sorted(range(3), key=lambda k: -size[k])[:2]
+        n = max(1, math.ceil(size[long] / SEGMENT))
+        for i in range(n):
+            a = [lo[k] if k != long else lo[k] + size[k] * i / n for k in range(3)]
+            # Through the middle of the line's thickness.
+            thin = 3 - long - wide
+            a[thin] = (lo[thin] + hi[thin]) / 2
+            along = [0.0, 0.0, 0.0]
+            along[long] = size[long] / n
+            across = [0.0, 0.0, 0.0]
+            across[wide] = size[wide]
+            game = lambda v: [round(v[0], 3), round(v[2], 3), round(-v[1], 3)]
+            pieces.append({"corner": game(a), "edges": [game(along), game(across)], "colour": list(rgb)})
+    return pieces
 
 
 def trim_building(g, kind, cx, cy, w, d, floors, colour):
@@ -371,6 +409,12 @@ def main():
     print(f"[map] seed={seed} {HALF * 2:.0f} m across, buildings={g.n_buildings} tallest={tallest} floors, "
           f"lights={g.n_lights} cover={g.n_cover} trim={g.n_trim} -> {out}")
     if glb:
+        # Where the lines of light are, beside the model: `<model>.glow.json`.
+        glow_path = os.path.splitext(os.path.abspath(glb))[0] + ".glow.json"
+        pieces = glow_segments(g.glowing)
+        with open(glow_path, "w") as f:
+            json.dump({"intensity": 3.0, "pieces": pieces}, f, separators=(",", ":"))
+        print(f"[map] {len(pieces)} pieces of light -> {glow_path}")
         br_town.export_glb(os.path.abspath(glb), [g.ground, g.struct, g.cover, g.trim])
 
 
