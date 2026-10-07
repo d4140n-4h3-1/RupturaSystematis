@@ -863,7 +863,7 @@ impl MazeGame {
 
     /// A map with starts for everyone, and no flags, is played as battle royale: the player at
     /// one start picked at random, and a droid at each of as many others as make up the match -
-    /// [`royale::MOST`] in all, or as MAZE_ROYALE says - the ring round all the town.
+    /// [`royale::MOST`] in all, or as MAZE_ROYALE says - the ring round all the map.
     fn start_royale(&mut self, ctx: &mut PluginContext) {
         let mut starts: Vec<(u32, Vector3<f32>)> = self
             .level
@@ -882,11 +882,11 @@ impl MazeGame {
         let Some((grid, origin)) = self.level.grid.as_ref() else {
             return;
         };
-        // The town's middle, and how far its corners are from it.
+        // The map's middle, and how far its corners are from it.
         let size = Vector3::new(grid.width as f32, 0.0, grid.depth as f32) * grid.cell_size;
         let middle = origin + size * 0.5;
         let reach = 0.5 * size.norm();
-        // Each start facing the town's middle.
+        // Each start facing the map's middle.
         let starts: Vec<(Vector3<f32>, f32)> = starts
             .into_iter()
             .map(|(_, at)| {
@@ -904,7 +904,7 @@ impl MazeGame {
         let mut royale = Royale::new(players, starts, middle, reach, &mut pick);
         let mine = rng.below(royale.starts.len());
         let (at, facing) = royale.starts[mine];
-        // The droids at the starts after the player's, round the town.
+        // The droids at the starts after the player's, round the map.
         royale.first_starts = (1..players).map(|k| royale.starts[(mine + k) % royale.starts.len()]).collect();
         self.player.teleport(graph, at + Vector3::new(0.0, 1.2, 0.0), facing);
         // Nothing to find: the exit's marker out of the way.

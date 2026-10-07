@@ -27,16 +27,6 @@ pub struct Map {
     pub night: bool,
 }
 
-/// The town, one of the maps battle royale is played on.
-pub const TOWN: Map = Map {
-    name: "Town",
-    path: "data/arena/br_town.glb",
-    about: "A walled town of streets, its buildings up to four floors, every one open to go into.",
-    void: false,
-    open_sky: true,
-    night: true,
-};
-
 /// The Grid: a city traced in light on a platform in the void.
 pub const GRID: Map = Map {
     name: "Grid",
@@ -58,7 +48,7 @@ pub const NEXUS: Map = Map {
 };
 
 /// The maps battle royale is played on, picked from in the main menu.
-pub const ROYALE_MAPS: [Map; 3] = [TOWN, GRID, NEXUS];
+pub const ROYALE_MAPS: [Map; 2] = [GRID, NEXUS];
 
 /// The sky round a map in the void, each face of it.
 pub const VOID_SKY: &str = "data/skybox.png";

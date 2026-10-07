@@ -6,7 +6,7 @@
 //! third time, it is out for the rest of the match. The last one in wins - the player, or not:
 //! out, the player is told how they placed.
 //!
-//! A ring closes in on the town in stages ([`STAGES`]), each round a middle picked inside the
+//! A ring closes in on the map in stages ([`STAGES`]), each round a middle picked inside the
 //! one before, so that it always ends somewhere new. Anyone outside it is hurt every
 //! [`RING_HURTS_EVERY`] seconds, as by a bolt. It shows as a fence of glowing posts, tall enough to
 //! see over the roofs.
@@ -77,7 +77,7 @@ pub enum RingNews {
 }
 
 impl Ring {
-    /// A ring round all of a town `reach` from its middle, `middle`, whose first stage closes to
+    /// A ring round all of a map `reach` from its middle, `middle`, whose first stage closes to
     /// somewhere `pick` says: a share of the way, from 0 to 1, each time it is asked.
     pub fn new(middle: Vector3<f32>, reach: f32, pick: &mut impl FnMut() -> f32) -> Self {
         let from = (middle, reach);
@@ -161,7 +161,7 @@ pub struct Royale {
 }
 
 impl Royale {
-    /// A match among `players`, the player and the droids, starting at `starts`, in a town
+    /// A match among `players`, the player and the droids, starting at `starts`, on a map
     /// `reach` round from `middle`.
     pub fn new(
         players: usize,

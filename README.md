@@ -108,18 +108,15 @@ their animations; the crate decides what they make of what is round them.
 
 6 October 2026:
 
-- **Battle royale.** Battle Royale in the main menu, on the map of your choice - the town, the
-  Grid or Nexus: you and up to 15 droids - 16 in all - every one against every other. Each has three lives: shot down, you come
+- **Battle royale.** Battle Royale in the main menu, on the map of your choice - the Grid or
+  Nexus: you and up to 15 droids - 16 in all - every one against every other. Each has three lives: shot down, you come
   back a few seconds later at a start inside the ring, and the third time you are out, told how
-  you placed. The last one in wins. A ring of glowing posts closes in on the town in five stages,
+  you placed. The last one in wins. A ring of glowing posts closes in on the map in five stages,
   each somewhere new inside the last, hurting anyone caught outside it. `MAZE_ROYALE` sets how
   many play.
-- **The town**, `data/arena/br_town.glb`, 188 m across, built by `data/arena/br_town.py` in
-  Blender from a seed: a five-by-five grid of blocks between streets, an open square in the
-  middle, and on each other block a house, an office, an apartment block or a warehouse - none
-  over four floors - every one open to go into, with doors, windows on every floor to see and
-  shoot through, switchback stairs inside up to each floor and to the roofs of the tallest, and a
-  light on every floor. Street lights stand along every street under a black sky.
+- **The town is gone**: battle royale's first map, a walled town at night, was too dark to play,
+  and the Grid and Nexus took its place. `data/arena/br_town.py`, which built it, stays: the
+  Grid's buildings, and the helpers both new maps are made with, are its.
 - **The Grid**, `data/arena/br_grid.glb`, a city traced in light floating in the void, built by
   `data/arena/br_grid.py` with the town's buildings: black blocks on a black platform ruled with
   a grid of light, every corner, floor, roof and door of every building lined in glowing colour -

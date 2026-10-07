@@ -1,4 +1,9 @@
 """
+The town is no longer played - it was too dark - but this script stays: its buildings (houses,
+offices, apartments, warehouses, with their stairs, floors, doors and windows) and its helpers
+for boxes, markers and exporting are what br_grid.py and br_nexus.py are built with. Run on its
+own it still builds the town.
+
 Battle royale town: a walled town of streets and blocks, its buildings from one to four floors,
 every one of them open to go into - doors on the ground floor, windows on every floor to see and
 shoot through, and stairs up inside to each floor, and to the roof of the tallest.
