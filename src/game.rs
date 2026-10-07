@@ -18,8 +18,8 @@ use crate::{
     drone_shot::{Shots, SHOT_MODEL},
     alarm::AlarmSound,
     health::{Health, HealthSounds, Healing, Heard},
-    hearts::{self, Hearts, HEART_MODEL},
-    shield::{Shield, Took, SHIELD_MODEL},
+    hearts::{self, Hearts, HEART_MODEL, SHIELD_LAMP, SHIELD_PICKUP_MODEL},
+    shield::{self, Shield, Took, SHIELD_MODEL},
     notes::{self, Notes, NOTES},
     diagnostics::{self, FrameStats},
     dialogue::{
@@ -419,6 +419,14 @@ pub struct MazeGame {
     #[visit(skip)]
     #[reflect(hidden)]
     hearts: Hearts,
+    /// Shield cells, spare charges for the shield, floating about as the hearts do but rarer;
+    /// and their model.
+    #[visit(skip)]
+    #[reflect(hidden)]
+    shield_cells: Hearts,
+    #[visit(skip)]
+    #[reflect(hidden)]
+    shield_pickup_model: Option<ModelResource>,
     /// The player's health this round, and how it is heard.
     #[visit(skip)]
     #[reflect(hidden)]
@@ -617,6 +625,8 @@ impl MazeGame {
         self.shot_model = Some(resources.request::<Model>(SHOT_MODEL));
         self.heart_model = Some(resources.request::<Model>(HEART_MODEL));
         self.shield_model = Some(resources.request::<Model>(SHIELD_MODEL));
+        self.shield_pickup_model = Some(resources.request::<Model>(SHIELD_PICKUP_MODEL));
+        self.shield_cells = Hearts::with_lamp("Shield cells", SHIELD_LAMP);
     }
 
     /// Starts `game`, picked in the main menu: loads its level, and plays it once it has. The
@@ -706,6 +716,7 @@ impl MazeGame {
             drone.hide(&mut scene.graph);
         }
         self.hearts.clear(&mut scene.graph);
+        self.shield_cells.clear(&mut scene.graph);
         if let Some(shots) = self.shots.as_mut() {
             shots.clear(&mut scene.graph);
         }
@@ -1103,7 +1114,10 @@ impl MazeGame {
                     || self.talking.is_some(),
                 alarm: self.inhabitants.alarm(),
                 credits: self.credits,
-                shield: self.shield.as_ref().map_or((0.0, Color::opaque(70, 90, 110)), |s| s.charge.meter()),
+                shield: self.shield.as_ref().map_or((0.0, Color::opaque(70, 90, 110), 0, false), |s| {
+                    let (full, colour) = s.charge.meter();
+                    (full, colour, s.spares, s.charge.is_up())
+                }),
             },
         };
         // Healing only while playing; the flash of the last hit fades out after too.
@@ -2792,8 +2806,13 @@ impl MazeGame {
         let Some(shield) = self.shield.as_mut() else {
             return;
         };
+        let spares = shield.spares;
         if shield.raise() {
-            self.hud.show_note("Shield up".to_string());
+            let note = match shield.spares < spares {
+                true => format!("Shield up, from a spare: {} left", shield.spares),
+                false => "Shield up".to_string(),
+            };
+            self.hud.show_note(note);
         } else if !shield.charge.is_up() {
             self.hud.show_note("The shield is still charging".to_string());
         }
@@ -2817,18 +2836,33 @@ impl MazeGame {
             Log::err(format!("Could not load {HEART_MODEL}; there are no hearts"));
             self.heart_model = None;
         }
+        if self.shield_pickup_model.as_ref().is_some_and(|model| model.is_failed_to_load()) {
+            Log::err(format!("Could not load {SHIELD_PICKUP_MODEL}; there are no shield cells"));
+            self.shield_pickup_model = None;
+        }
         let Some(model) = self.heart_model.clone().filter(|model| model.is_ok()) else {
             return;
         };
-        if !self.hearts_placed && self.phase == Phase::Playing {
+        // The shield cells' model, once it has loaded - or without them, if it cannot.
+        let cells = self.shield_pickup_model.clone();
+        let cells_ready = cells.as_ref().is_none_or(|cells| cells.is_ok());
+        if !self.hearts_placed && self.phase == Phase::Playing && cells_ready {
             self.rng();
             if let (Some((grid, origin)), Some(start), Some(rng)) =
                 (self.level.grid.as_ref(), self.start_cell, self.rng.as_mut())
             {
                 let floor = grid.walkable_cells().count();
-                let spots = hearts::spots(grid, start, hearts::count(floor), rng);
+                // Hearts and shield cells all apart from one another: the first, near the start,
+                // a heart.
+                let hearts = hearts::count(floor);
+                let shields = if cells.is_some() { hearts::shield_count(floor) } else { 0 };
+                let spots = hearts::spots(grid, start, hearts + shields, rng);
+                let (heart_spots, cell_spots) = spots.split_at(hearts.min(spots.len()));
                 let scene = &mut ctx.scenes[self.scene];
-                self.hearts.place(&model, scene, (grid, *origin), &spots);
+                self.hearts.place(&model, scene, (grid, *origin), heart_spots);
+                if let Some(cells) = &cells {
+                    self.shield_cells.place(cells, scene, (grid, *origin), cell_spots);
+                }
                 // Tried once a round, found room or not.
                 self.hearts_placed = true;
             }
@@ -2836,6 +2870,17 @@ impl MazeGame {
         if !self.menu.is_open() {
             let graph = &mut ctx.scenes[self.scene].graph;
             self.hearts.update(graph, ctx.dt);
+            self.shield_cells.update(graph, ctx.dt);
+            // Walking into a shield cell with room for a spare picks it up.
+            if self.phase == Phase::Playing {
+                let player = self.player.position(graph);
+                if let Some(shield) = self.shield.as_mut().filter(|shield| shield.spares < shield::MOST_SPARES) {
+                    if self.shield_cells.take(graph, player) {
+                        shield.add_spare();
+                        self.hud.show_note(format!("Shield cell: {} spare", shield.spares));
+                    }
+                }
+            }
             // Walking into one with health to make up picks it up.
             if self.phase == Phase::Playing && self.health.hurt() {
                 let player = self.player.position(graph);
@@ -3181,6 +3226,7 @@ impl Plugin for MazeGame {
             self.inhabitants.show(&mut scene.graph, &self.level);
             let level = &self.level;
             self.hearts.cull(&mut scene.graph, |at| level.can_see(at));
+            self.shield_cells.cull(&mut scene.graph, |at| level.can_see(at));
         }
 
         // Blue's flag, once the player has it, on their back.

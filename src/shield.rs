@@ -33,6 +33,8 @@ pub const SHIELD_MODEL: &str = "data/shield.glb";
 pub const RECHARGE: f32 = 18.0;
 /// How many hits it stops before it breaks.
 pub const STRENGTH: u32 = 4;
+/// How many spare charges - shield cells picked up - can be carried at once.
+pub const MOST_SPARES: u32 = 2;
 /// How long it takes to grow round the droid, and to fade away, in seconds.
 const GROW: f32 = 0.25;
 /// How long a hit makes it flash, in seconds.
@@ -162,6 +164,8 @@ pub fn colour_of(health: f32) -> Color {
 #[derive(Debug, Default, PartialEq)]
 pub struct Shield {
     pub charge: Charge,
+    /// Spare charges, from shield cells picked up: each raises it at once, charging or not.
+    pub spares: u32,
     root: Handle<Node>,
     /// The shell's glass, and the rings' materials, its own to colour; and the rings, hidden
     /// while the camera is inside it, where they would cut across the view.
@@ -227,13 +231,28 @@ impl Shield {
         shield
     }
 
-    /// Raises it, if it is charged: whether it did.
+    /// Raises it, if it is charged, or with a spare charge if it is still charging: whether it
+    /// did. Up already, it stays as it is.
     pub fn raise(&mut self) -> bool {
-        let raised = self.charge.raise();
+        let mut raised = self.charge.raise();
+        if !raised && matches!(self.charge, Charge::Recharging { .. }) && self.spares > 0 {
+            self.spares -= 1;
+            self.charge = Charge::Up { health: STRENGTH };
+            raised = true;
+        }
         if raised {
             self.time = 0.0;
         }
         raised
+    }
+
+    /// Takes a shield cell as a spare charge, if there is room for one: whether there was.
+    pub fn add_spare(&mut self) -> bool {
+        let room = self.spares < MOST_SPARES;
+        if room {
+            self.spares += 1;
+        }
+        room
     }
 
     /// Takes a hit, if it is up, flashing as it does.
@@ -248,6 +267,7 @@ impl Shield {
     /// Charged and down again, for a new round, or the player back in after going down.
     pub fn reset(&mut self, graph: &mut Graph) {
         self.charge = Charge::Ready;
+        self.spares = 0;
         self.grown = 0.0;
         self.flash = 0.0;
         if let Ok(node) = graph.try_get_mut(self.root) {
@@ -338,6 +358,20 @@ mod tests {
         charge.take();
         charge.update(RECHARGE * 10.0);
         assert_eq!(charge, Charge::Up { health: STRENGTH - 1 }, "worn down, it does not mend");
+    }
+
+    #[test]
+    fn a_spare_raises_it_again_while_it_charges_but_not_while_it_is_up() {
+        let mut shield = Shield::default();
+        assert!(shield.add_spare() && shield.add_spare());
+        assert!(!shield.add_spare(), "no room for more than {MOST_SPARES}");
+        assert!(shield.raise());
+        assert_eq!(shield.spares, MOST_SPARES, "charged, the charge is used, not a spare");
+        assert!(!shield.raise(), "up, it stays as it is");
+        assert_eq!(shield.spares, MOST_SPARES);
+        while shield.take() != Took::Broke {}
+        assert!(shield.raise(), "broken and charging, a spare raises it at once");
+        assert_eq!((shield.spares, shield.charge), (MOST_SPARES - 1, Charge::Up { health: STRENGTH }));
     }
 
     #[test]

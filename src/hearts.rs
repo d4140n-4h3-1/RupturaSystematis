@@ -14,6 +14,10 @@
 //! A few are scattered afresh each maze ([`count`]), each on open floor away from the start and
 //! from the others ([`spots`]) - the first a little way from the start, so there is one to come
 //! across early.
+//!
+//! Shield cells - spare charges for the shield (see [`crate::shield`]) - float about the same
+//! way, from their own model, [`SHIELD_PICKUP_MODEL`], made in Blender from `shield.blend`, with
+//! a blue lamp. They are rarer: about one for every three hearts ([`shield_count`]).
 
 use crate::{
     fixtures::{property, DIFFUSE_COLOR},
@@ -44,8 +48,11 @@ use fyrox::{
     },
 };
 
-/// The heart's model.
+/// The heart's model, and the shield cell's.
 pub const HEART_MODEL: &str = "data/health.glb";
+pub const SHIELD_PICKUP_MODEL: &str = "data/shield_pickup.glb";
+/// The shield cells' lamp.
+pub const SHIELD_LAMP: Color = Color::opaque(60, 150, 255);
 /// How near the middle of the player's body a heart has to be to be picked up, in meters.
 const TAKE_REACH: f32 = 0.9;
 /// How big a heart is across its biggest side, in meters.
@@ -65,6 +72,10 @@ const LAMP_REACH: f32 = 2.5;
 const FLOOR_PER_HEART: usize = 5000;
 const FEWEST: usize = 3;
 const MOST: usize = 12;
+/// And how many shield cells: rarer, a third as many.
+const FLOOR_PER_SHIELD: usize = 15000;
+const FEWEST_SHIELDS: usize = 1;
+const MOST_SHIELDS: usize = 4;
 /// How many cells of walking from the start a heart has to be at least, and the first at most;
 /// how many cells apart two hearts are at first asked to be; and how many cells of floor all
 /// round a heart's cell has to have, so that it floats in a corridor rather than against a wall.
@@ -76,6 +87,11 @@ const ROOM: i64 = 2;
 /// How many hearts a maze with `floor` cells of floor gets.
 pub fn count(floor: usize) -> usize {
     (floor / FLOOR_PER_HEART).clamp(FEWEST, MOST)
+}
+
+/// How many shield cells a maze with `floor` cells of floor gets: fewer than hearts.
+pub fn shield_count(floor: usize) -> usize {
+    (floor / FLOOR_PER_SHIELD).clamp(FEWEST_SHIELDS, MOST_SHIELDS)
 }
 
 /// Where `count` hearts go in `grid`, whose player starts at `start`: cells of open floor far
@@ -139,11 +155,19 @@ pub struct Hearts {
     scale: f32,
     /// The glass its see-through surfaces are made of, shared by every heart.
     glass: Option<MaterialResource>,
+    /// The colour of each one's lamp - a heart's red, without - and what they are called.
+    lamp: Option<Color>,
+    name: Option<&'static str>,
     /// How long they have been floating, in seconds.
     time: f32,
 }
 
 impl Hearts {
+    /// Floating things called `name`, lit by lamps of `colour`, rather than hearts' red.
+    pub fn with_lamp(name: &'static str, colour: Color) -> Self {
+        Self { lamp: Some(colour), name: Some(name), ..Default::default() }
+    }
+
     /// Takes the hearts of the last maze out of `scene`, and puts one from `model` at each of
     /// `spots` in the maze whose `grid` has its corner at `origin`.
     pub fn place(
@@ -169,7 +193,7 @@ impl Hearts {
             // Not scattering into a haze in the air: the heart is what glows.
             let lamp = PointLightBuilder::new(
                 BaseLightBuilder::new(BaseBuilder::new())
-                    .with_color(LAMP_COLOUR)
+                    .with_color(self.lamp.unwrap_or(LAMP_COLOUR))
                     .with_intensity(LAMP_BRIGHTNESS)
                     .with_scatter_enabled(false),
             )
@@ -182,7 +206,7 @@ impl Hearts {
             let phase = n as f32 * 0.37 % 1.0;
             self.hearts.push((root, lamp, at, phase));
         }
-        Log::info(format!("Hearts: {} in the maze", self.hearts.len()));
+        Log::info(format!("{}: {} in the maze", self.name.unwrap_or("Hearts"), self.hearts.len()));
         self.update(&mut scene.graph, 0.0);
     }
 
@@ -322,6 +346,14 @@ fn scale_for(graph: &Graph, root: Handle<Node>) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shield_cells_are_rarer_than_hearts() {
+        for floor in [0, 5_000, 20_000, 60_000, 150_000, 1_000_000] {
+            assert!(shield_count(floor) >= 1, "at least one");
+            assert!(shield_count(floor) < count(floor), "fewer than hearts in {floor}");
+        }
+    }
 
     #[test]
     fn a_few_hearts_for_any_maze() {

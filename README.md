@@ -126,9 +126,15 @@ their animations; the crate decides what they make of what is round them.
   shots, a droid catching you - but not the closing ring. It has health of its own, four hits,
   and its glow is its health: cyan whole, through yellow, to red a hit from breaking, flashing
   as it takes each. Raised, it stays up until it breaks, and only then charges again, over 18
-  seconds, so it cannot be raised and let go again and again. A bar under the stamina shows its
-  health while it is up and how far it has charged after. The egg is made in Blender by
-  `data/shield.py`; from inside it, aiming over the shoulder, its rings are hidden.
+  seconds, so it cannot be raised and let go again and again. A bar over the health bar shows
+  its health while it is up - SHIELD ACTIVE - and how far it has charged after. The egg is made
+  in Blender by `data/shield.py`; from inside it, aiming over the shoulder, its rings are hidden.
+- **Shield cells**, spare charges for the shield, float about the levels as the hearts do, with
+  a blue lamp - but rarer, about one for every three hearts (one for every 15,000 cells of
+  floor, between 1 and 4). Walked into, one is kept as a spare, two at most; a spare raises the
+  shield at once while it is still charging after breaking. The bar's label counts them,
+  `SHIELD [1] +1`. Going down loses them. The model, `data/shield_pickup.glb`, is exported from
+  `shield.blend` in Blender.
 - **Voices echo on the Grid and in Nexus**, off the buildings of a city in the open: each line
   comes back a quarter of a second later, again and again, fainter and duller each time, for
   about a second and a half after it is said (`synth::CITY_ECHO`). A map says whether its voices
