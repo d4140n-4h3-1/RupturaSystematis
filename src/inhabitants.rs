@@ -351,6 +351,9 @@ struct Inhabitant {
     unaimed: f32,
     /// How long until it works out its way to the player again, in seconds.
     replan: f32,
+    /// Whether there was no way there the last time it worked one out: it waits for `replan` to
+    /// try again, rather than searching the whole level for it every frame.
+    no_way: bool,
     /// How long, having just turned hostile, it stands before going after the player, in seconds.
     windup: f32,
     /// On Alert, how long until it sprints, in seconds - below 0 before it has been picked - and
@@ -968,6 +971,7 @@ impl Inhabitants {
             warned: 0,
             unaimed: 0.0,
             replan: 0.0,
+            no_way: false,
             windup: 0.0,
             sprint_in: -1.0,
             sprinting: 0.0,
@@ -1462,7 +1466,9 @@ impl Inhabitants {
             } else if droid.alert == Some(Alert::Alert) {
                 // After the player, the way to them worked out again every so often as they move.
                 droid.replan -= dt;
-                if droid.replan <= 0.0 || droid.route.is_empty() {
+                // Not while it stands to shoot, which leaves it no route; and with no way there
+                // last time, only once it is time to look again.
+                if !standing_to_shoot && (droid.replan <= 0.0 || droid.route.is_empty() && !droid.no_way) {
                     droid.replan = REPLAN;
                     let away = flat(player - droid.feet).norm();
                     let cut_off = player_going
@@ -1471,20 +1477,25 @@ impl Inhabitants {
                         .map(|going| player + going * (away * 0.6).min(CUT_OFF))
                         .filter(|&ahead| (1..=4).all(|i| floor_at(player + (ahead - player) * (i as f32 / 4.0))));
                     (droid.route, droid.trip) = go_to(droid.feet, cut_off.unwrap_or(player));
+                    droid.no_way = droid.route.is_empty();
                 }
             } else if let Some((feet, _)) = fighting.and_then(foe_place) {
                 // After one of the other side, the way to it worked out again every so often.
                 droid.replan -= dt;
-                if droid.replan <= 0.0 || droid.route.is_empty() {
+                // As after the player: not while it stands to shoot, nor before it is time again.
+                if !standing_to_shoot && (droid.replan <= 0.0 || droid.route.is_empty() && !droid.no_way) {
                     droid.replan = REPLAN;
                     (droid.route, droid.trip) = go_to(droid.feet, feet);
+                    droid.no_way = droid.route.is_empty();
                 }
             } else if let Some((from, _)) = droid.shot_from.filter(|_| droid.side.is_some()) {
                 // Shot at by someone it did not see: after them, where the shot came from.
                 droid.replan -= dt;
-                if droid.replan <= 0.0 || droid.route.is_empty() {
+                // As after the player: not while it stands to shoot, nor before it is time again.
+                if !standing_to_shoot && (droid.replan <= 0.0 || droid.route.is_empty() && !droid.no_way) {
                     droid.replan = REPLAN;
                     (droid.route, droid.trip) = go_to(droid.feet, from);
+                    droid.no_way = droid.route.is_empty();
                 }
             } else if droid.alert == Some(Alert::Evasion) {
                 if droid.route.is_empty() {
