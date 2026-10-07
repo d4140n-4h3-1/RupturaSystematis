@@ -55,12 +55,26 @@ pub const NEXUS: Map = Map {
 /// The maps battle royale is played on, picked from in the main menu.
 pub const ROYALE_MAPS: [Map; 2] = [GRID, NEXUS];
 
+/// Aurum: a bank district, its vault behind three firewall doors.
+pub const AURUM: Map = Map {
+    name: "Aurum",
+    path: "data/arena/heist_aurum.glb",
+    about: "A bank district. Through the compound's gate, the bank's door and the vault's, and out.",
+    void: true,
+    open_sky: true,
+    night: true,
+    echoes: true,
+};
+
+/// The districts heists are played in, picked from in the main menu (see [`crate::heist`]).
+pub const HEIST_MAPS: [Map; 1] = [AURUM];
+
 /// The sky round a map in the void, each face of it.
 pub const VOID_SKY: &str = "data/skybox.png";
 
 /// The map whose model is at `path`, if one is.
 pub fn map_at(path: &str) -> Option<&'static Map> {
-    MAPS.iter().chain(&ROYALE_MAPS).find(|map| map.path == path)
+    MAPS.iter().chain(&ROYALE_MAPS).chain(&HEIST_MAPS).find(|map| map.path == path)
 }
 
 /// The maps it can be played on, picked from in the main menu.
@@ -183,7 +197,7 @@ mod tests {
         for map in MAPS {
             assert!(dir.join(map.path).is_file(), "{} has no model at {}", map.name, map.path);
         }
-        for map in ROYALE_MAPS {
+        for map in ROYALE_MAPS.iter().chain(&HEIST_MAPS) {
             assert!(dir.join(map.path).is_file(), "{} has no model at {}", map.name, map.path);
         }
         assert!(dir.join(VOID_SKY).is_file(), "no sky for the void at {VOID_SKY}");

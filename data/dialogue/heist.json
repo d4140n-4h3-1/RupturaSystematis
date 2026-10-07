@@ -1,0 +1,65 @@
+{
+  "about": "Heists: the bank's security, who keep posts round the vault and hunt whoever breaks in. They are not talked to. Each character is a kind of guard - its name, shown with its code, and the model it is made from - and the guards go round them in turn. Their barks, said out loud as they hunt the player: 'spotted', 'lost', 'heard', 'gave_up' and 'alarmed', as everywhere, and 'engaged' as one goes after them. Every line is checked by data/system_latin/sl_parser.py.",
+  "characters": [
+    {
+      "name": "Custos",
+      "model": "data/droid_security.glb",
+      "barks": {
+        "spotted": {
+          "says": "Intrusor detectum. Neutralizo intrusor.",
+          "means": "Intruder detected. Neutralizing the intruder."
+        },
+        "lost": {
+          "says": "Intrusor perdatum. Zeto intrusor.",
+          "means": "Intruder lost. Searching for the intruder."
+        },
+        "heard": {
+          "says": "Sonus detectum. Verifico.",
+          "means": "A sound detected. Checking."
+        },
+        "gave_up": {
+          "says": "Intrusor non detectum. Resumo patrolium.",
+          "means": "No intruder detected. Resuming patrol."
+        },
+        "alarmed": {
+          "says": "Sirenatio accipatum. Defendo zona.",
+          "means": "Alarm received. Defending the zone."
+        },
+        "engaged": {
+          "says": "Accessus prohibatum. Neutralizo intrusor.",
+          "means": "Access forbidden. Neutralizing the intruder."
+        }
+      }
+    },
+    {
+      "name": "Excubitor",
+      "model": "data/droid_hostile.glb",
+      "barks": {
+        "spotted": {
+          "says": "Intrusio detectum. Persequo intrusor.",
+          "means": "Intrusion detected. Pursuing the intruder."
+        },
+        "lost": {
+          "says": "Intrusor evadatum. Investigo zona.",
+          "means": "The intruder got away. Searching the zone."
+        },
+        "heard": {
+          "says": "Quid? Motus detectum.",
+          "means": "What? Movement detected."
+        },
+        "gave_up": {
+          "says": "Zona securum. Resumo patrolium.",
+          "means": "The zone is secure. Resuming patrol."
+        },
+        "alarmed": {
+          "says": "Sirenatio accipatum. Protego reserva.",
+          "means": "Alarm received. Guarding the reserve."
+        },
+        "engaged": {
+          "says": "Targetum detectum. Elimino targetum.",
+          "means": "Target detected. Eliminating the target."
+        }
+      }
+    }
+  ]
+}

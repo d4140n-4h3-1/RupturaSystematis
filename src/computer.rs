@@ -1306,6 +1306,11 @@ impl Computer {
         self.hack.take_credits()
     }
 
+    /// Carries `credits` instead of what it was given: a heist vault's terminal, say.
+    pub fn set_credits(&mut self, credits: Credits) {
+        self.hack.credits = credits;
+    }
+
     /// Enter, beeping if it starts a breach or opens a file.
     pub fn enter(&mut self, graph: &mut Graph) {
         if self.hack.enter() {

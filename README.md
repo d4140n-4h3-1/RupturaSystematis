@@ -136,6 +136,21 @@ their animations; the crate decides what they make of what is round them.
   shield at once while it is still charging after breaking. Picking one up says how many are
   kept. Going down loses them. The model, `data/shield_pickup.glb`, is exported from
   `shield.blend` in Blender.
+- **Heist**, a new game in the main menu, in districts of the city in the void: break into a
+  bank's vault, steal what you can, and get out. Three **firewall doors** stand between you and
+  the vault - a doorway's frame traced in orange with a pane of a firewall's glass in it,
+  flickering, made by `data/heist/door.py` - each opened by hacking the computer on its near
+  side: the compound's gate from the street, the bank's door from the courtyard, the vault's from
+  the lobby. Guards keep posts in the streets, the courtyard and the lobby, and drones patrol.
+  Once the vault is open, its six terminals are there to hack, each carrying far more credits
+  than a computer elsewhere - and security sends waves of guards in after you, each bigger than
+  the last, with a drone called in each time and a lull between them. A failed hack, at any
+  stage, brings a wave five seconds later. Get out at either extraction pad whenever you like:
+  only then are the credits yours, and going down loses them. The status line says what to do
+  next, how much is stolen and when the next wave comes. The first district is **Aurum**,
+  `data/arena/heist_aurum.glb`, built by `data/arena/heist_aurum.py` with Nexus's helpers: a
+  walled bank compound among towers, pods and domes, its lines of light lighting what is round
+  them. `MAZE_HEIST_OPEN=<n>` opens the first n doors, to try a heist out.
 - **Stamina cells** freeze the player's breath for 10 seconds: running and sprinting spend none
   of it, though walking still gets it back, and a player out of breath is no longer winded. They
   float about as hearts do, with a green lamp, rarer than hearts but commoner than shield cells
@@ -730,6 +745,7 @@ logs goes to the browser's console there.
 | `MAZE_SSAO=0`            | Turns ambient occlusion off.                                            |
 | `MAZE_REFLECTIONS=0`     | Turns floor reflections off.                                            |
 | `MAZE_KNOCKDOWN=<s>`     | That many seconds into a round, shoots down the droid nearest you, to try the ragdolls out. |
+| `MAZE_HEIST_OPEN=<n>`    | In a heist, the first n doors' computers count as hacked, to try it out. |
 | `MAZE_SHIELD=<s>`        | That many seconds into a round, raises your shield, as the 1 key does. |
 | `MAZE_DRONE_ALARM=<s>`   | That many seconds into a round, sends the drone after you as if the alarm had sounded, to try it out. |
 | `MAZE_DISMEMBER=<parts>` | With `MAZE_KNOCKDOWN`, breaks those parts off it too, such as `head,forearm.L,shin.R`. |

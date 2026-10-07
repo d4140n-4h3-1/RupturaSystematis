@@ -1040,6 +1040,80 @@ impl Inhabitants {
         Log::info(format!("Capture the flag: {} droids", self.droids.len()));
     }
 
+    /// Puts a guard into `scene` for a heist at each of `posts`, on the floor of `grid` whose corner
+    /// is at `origin`: droids of the side against the player, each keeping to its post and
+    /// watching for them from the start, the kinds of droid of `liveries` in turn.
+    pub fn populate_guards(
+        &mut self,
+        scene: &mut Scene,
+        liveries: Vec<Livery>,
+        (grid, origin): (&WalkGrid, Vector3<f32>),
+        posts: &[Vector3<f32>],
+        rng: &mut Rng,
+    ) {
+        self.clear(&mut scene.graph);
+        self.populated = true;
+        self.liveries = liveries;
+        if self.liveries.is_empty() {
+            return;
+        }
+        ragdoll::prepare(&mut scene.graph);
+        for (n, &post) in posts.iter().enumerate() {
+            let Some(feet) = spot_near((grid, origin), post, SPAWN_REACH, rng) else {
+                continue;
+            };
+            let heading = between(rng, (0.0, std::f32::consts::TAU));
+            if !self.spawn_one(scene, feet, heading, between(rng, (0.5, 2.0)), n % self.liveries.len(), rng) {
+                break;
+            }
+            let droid = self.droids.last_mut().expect("just put down");
+            droid.side = Some(ctf::PLAYERS.other());
+            droid.post = Some(post);
+            droid.alert = Some(Alert::Caution);
+            droid.search_left = CAUTION;
+        }
+        Log::info(format!("Heist: {} guards", self.droids.len()));
+    }
+
+    /// Sends a wave of `count` guards after the player, at `player`, in a heist: into `scene`, at
+    /// the `entries` in turn, on the floor of `grid` whose corner is at `origin`, each already
+    /// searching where the player is. How many came.
+    pub fn spawn_wave(
+        &mut self,
+        scene: &mut Scene,
+        (grid, origin): (&WalkGrid, Vector3<f32>),
+        entries: &[Vector3<f32>],
+        count: usize,
+        player: Vector3<f32>,
+        rng: &mut Rng,
+    ) -> usize {
+        if self.liveries.is_empty() || entries.is_empty() {
+            return 0;
+        }
+        let mut came = 0;
+        for k in 0..count {
+            let at = entries[k % entries.len()];
+            let Some(feet) = spot_near((grid, origin), at, SPAWN_REACH, rng) else {
+                continue;
+            };
+            let to = flat(player - feet);
+            let character = (self.droids.len() + k) % self.liveries.len();
+            if !self.spawn_one(scene, feet, to.x.atan2(to.z), between(rng, (0.1, 0.5)), character, rng) {
+                break;
+            }
+            let m = self.droids.len() - 1;
+            let droid = &mut self.droids[m];
+            droid.side = Some(ctf::PLAYERS.other());
+            droid.lost_at = player;
+            droid.lost_going = Vector3::zeros();
+            droid.alert = None;
+            droid.enter(m, Some(Alert::Evasion), &mut self.alerts);
+            self.search_from = Some(player);
+            came += 1;
+        }
+        came
+    }
+
     /// Puts `count` droids into `scene` for battle royale, each on a side of its own - side
     /// `Lone(1)` and on - one at each of `spots` (where, and which way it faces), on the floor of
     /// `grid` whose corner is at `origin`. Each is the kind of droid of `liveries` its number

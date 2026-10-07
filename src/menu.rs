@@ -13,7 +13,7 @@
 //! down its buttons - the one picked shows in its own colour - and Enter or Space presses it.
 
 use crate::{
-    ctf::{Map, MAPS, ROYALE_MAPS},
+    ctf::{Map, HEIST_MAPS, MAPS, ROYALE_MAPS},
     dialogue::screen::Subtitles,
 };
 use fyrox::{
@@ -185,6 +185,9 @@ pub enum Game {
     /// Battle royale: everyone against everyone, the last one standing winning, on the map of
     /// [`ROYALE_MAPS`] at this index.
     BattleRoyale(usize),
+    /// A heist: into the vault and out with the loot, in the district of [`HEIST_MAPS`] at this
+    /// index.
+    Heist(usize),
 }
 
 /// The games with maps to pick from, each on a page of its own.
@@ -192,13 +195,14 @@ pub enum Game {
 pub enum Maps {
     CaptureTheFlag,
     BattleRoyale,
+    Heist,
 }
 
 /// What the player picked in the main menu.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Start {
     Play(Game),
-    /// Go to the maps for capture the flag or battle royale, or back from them to the menu.
+    /// Go to the maps for capture the flag, battle royale or heists, or back from them to the menu.
     Maps(Maps),
     Back,
     Quit,
@@ -212,16 +216,21 @@ pub struct MainMenu {
     maze: Handle<Button>,
     ctf: Handle<Button>,
     royale: Handle<Button>,
+    heist: Handle<Button>,
     quit: Handle<Button>,
-    /// The menu's own page, and the maps' for capture the flag and for battle royale.
+    /// The menu's own page, and the maps' for capture the flag, battle royale and heists.
     main_page: Handle<UiNode>,
     maps_page: Handle<UiNode>,
     royale_page: Handle<UiNode>,
-    /// A button for each of [`MAPS`], and of [`ROYALE_MAPS`], in order; and back from each page.
+    heist_page: Handle<UiNode>,
+    /// A button for each of [`MAPS`], [`ROYALE_MAPS`] and [`HEIST_MAPS`], in order; and back from
+    /// each page.
     maps: Vec<Handle<Button>>,
     royale_maps: Vec<Handle<Button>>,
+    heist_maps: Vec<Handle<Button>>,
     back: Handle<Button>,
     royale_back: Handle<Button>,
+    heist_back: Handle<Button>,
     picking: Picking,
 }
 
@@ -233,8 +242,10 @@ impl MainMenu {
         let maze_button = button(ctx, "Maze");
         let ctf_button = button(ctx, "Capture the Flag");
         let royale_button = button(ctx, "Battle Royale");
+        let heist_button = button(ctx, "Heist");
         let quit_button = button(ctx, "Quit");
-        let ((maze, _), (ctf, _), (royale, _), (quit, _)) = (maze_button, ctf_button, royale_button, quit_button);
+        let ((maze, _), (ctf, _), (royale, _), (heist, _), (quit, _)) =
+            (maze_button, ctf_button, royale_button, heist_button, quit_button);
         let about = TextBuilder::new(
             WidgetBuilder::new()
                 .with_margin(Thickness::top(24.0))
@@ -245,23 +256,36 @@ impl MainMenu {
              Capture the Flag: hack red's firewall, take their flag and bring it home,\n\
              with blue's droids and drone on your side, on the map of your choice.\n\
              Battle Royale: everyone against everyone inside a closing ring,\n\
-             on the Grid or in Nexus; the last one standing wins.",
+             on the Grid or in Nexus; the last one standing wins.\n\
+             Heist: hack through the firewall doors to a bank's vault,\n\
+             past its guards and drones, and get out with the loot.",
         )
         .with_font_size(16.0.into())
         .with_horizontal_text_alignment(HorizontalAlignment::Center)
         .build(ctx);
-        let items = [heading.to_base(), maze.to_base(), ctf.to_base(), royale.to_base(), quit.to_base(), about.to_base()];
+        let items = [
+            heading.to_base(),
+            maze.to_base(),
+            ctf.to_base(),
+            royale.to_base(),
+            heist.to_base(),
+            quit.to_base(),
+            about.to_base(),
+        ];
         let main_page = page(ctx, true, items);
         let (maps_page, map_buttons, back_button) = map_page(ctx, "Capture the Flag", &MAPS);
         let (royale_page, royale_buttons, royale_back_button) = map_page(ctx, "Battle Royale", &ROYALE_MAPS);
         let maps: Vec<_> = map_buttons.iter().map(|&(map, _)| map).collect();
         let royale_maps: Vec<_> = royale_buttons.iter().map(|&(map, _)| map).collect();
+        let (heist_page, heist_buttons, heist_back_button) = map_page(ctx, "Heist", &HEIST_MAPS);
+        let heist_maps: Vec<_> = heist_buttons.iter().map(|&(map, _)| map).collect();
         let backdrop = BorderBuilder::new(
             WidgetBuilder::new()
                 .with_background(Brush::Solid(Color::opaque(8, 10, 14)).into())
                 .with_child(main_page)
                 .with_child(maps_page)
-                .with_child(royale_page),
+                .with_child(royale_page)
+                .with_child(heist_page),
         )
         .with_stroke_thickness(Thickness::uniform(0.0).into())
         .build(ctx);
@@ -272,19 +296,24 @@ impl MainMenu {
             maze,
             ctf,
             royale,
+            heist,
             quit,
             main_page,
             maps_page,
             royale_page,
+            heist_page,
             maps,
             royale_maps,
+            heist_maps,
             back: back_button.0,
             royale_back: royale_back_button.0,
+            heist_back: heist_back_button.0,
             picking: Picking {
                 pages: vec![
-                    vec![maze_button, ctf_button, royale_button, quit_button],
+                    vec![maze_button, ctf_button, royale_button, heist_button, quit_button],
                     map_buttons.into_iter().chain([back_button]).collect(),
                     royale_buttons.into_iter().chain([royale_back_button]).collect(),
+                    heist_buttons.into_iter().chain([heist_back_button]).collect(),
                 ],
                 ..Picking::default()
             },
@@ -305,10 +334,12 @@ impl MainMenu {
         ui.send(self.main_page, WidgetMessage::Visibility(maps.is_none()));
         ui.send(self.maps_page, WidgetMessage::Visibility(maps == Some(Maps::CaptureTheFlag)));
         ui.send(self.royale_page, WidgetMessage::Visibility(maps == Some(Maps::BattleRoyale)));
+        ui.send(self.heist_page, WidgetMessage::Visibility(maps == Some(Maps::Heist)));
         let page = match maps {
             None => 0,
             Some(Maps::CaptureTheFlag) => 1,
             Some(Maps::BattleRoyale) => 2,
+            Some(Maps::Heist) => 3,
         };
         self.picking.show(ui, page, |_| true);
     }
@@ -327,17 +358,21 @@ impl MainMenu {
     pub fn choice(&self, message: &UiMessage) -> Option<Start> {
         let maps = (self.maps.iter().enumerate()).map(|(n, &map)| (map, Start::Play(Game::CaptureTheFlag(n))));
         let royale_maps = (self.royale_maps.iter().enumerate()).map(|(n, &map)| (map, Start::Play(Game::BattleRoyale(n))));
+        let heist_maps = (self.heist_maps.iter().enumerate()).map(|(n, &map)| (map, Start::Play(Game::Heist(n))));
         [
             (self.maze, Start::Play(Game::Maze)),
             (self.ctf, Start::Maps(Maps::CaptureTheFlag)),
             (self.royale, Start::Maps(Maps::BattleRoyale)),
+            (self.heist, Start::Maps(Maps::Heist)),
             (self.back, Start::Back),
             (self.royale_back, Start::Back),
+            (self.heist_back, Start::Back),
             (self.quit, Start::Quit),
         ]
         .into_iter()
         .chain(maps)
         .chain(royale_maps)
+        .chain(heist_maps)
         .find(|&(button, _)| matches!(message.data_from(button), Some(ButtonMessage::Click)))
         .map(|(_, choice)| choice)
     }
@@ -660,6 +695,18 @@ mod tests {
         assert_eq!(menu.choice(&click(menu.maze)), Some(Start::Play(Game::Maze)));
         for (n, &map) in menu.maps.iter().enumerate() {
             assert_eq!(menu.choice(&click(map)), Some(Start::Play(Game::CaptureTheFlag(n))));
+        }
+    }
+
+    #[test]
+    fn heist_opens_its_districts_and_each_plays_its_own() {
+        let mut ui = UserInterface::new(Vector2::new(800.0, 600.0));
+        let menu = MainMenu::build(&mut ui);
+        assert_eq!(menu.heist_maps.len(), HEIST_MAPS.len());
+        assert_eq!(menu.choice(&click(menu.heist)), Some(Start::Maps(Maps::Heist)));
+        assert_eq!(menu.choice(&click(menu.heist_back)), Some(Start::Back));
+        for (n, &map) in menu.heist_maps.iter().enumerate() {
+            assert_eq!(menu.choice(&click(map)), Some(Start::Play(Game::Heist(n))));
         }
     }
 

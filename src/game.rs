@@ -18,13 +18,14 @@ use crate::{
     drone_shot::{Shots, SHOT_MODEL},
     alarm::AlarmSound,
     health::{Health, HealthSounds, Healing, Heard},
+    heist::{self, Doors, Heist, Plan, Stage},
     hearts::{self, Hearts, HEART_MODEL, SHIELD_LAMP, SHIELD_PICKUP_MODEL, STAMINA_LAMP, STAMINA_PICKUP_MODEL},
     shield::{self, Shield, Took, SHIELD_MODEL},
     notes::{self, Notes, NOTES},
     diagnostics::{self, FrameStats},
     dialogue::{
         screen::{self, DialogueScreen, Pointer, Subtitles},
-        Bark, Conversation, Facts, Mood, Provoked, Script, CTF_SCRIPT, ROYALE_SCRIPT, SCRIPT,
+        Bark, Conversation, Facts, Mood, Provoked, Script, CTF_SCRIPT, HEIST_SCRIPT, ROYALE_SCRIPT, SCRIPT,
     },
     formants::{
         self,
@@ -86,7 +87,10 @@ use fyrox::{
 /// How many junctions wide and deep a maze is, unless MAZE_SIZE says otherwise.
 const MAZE_SIZE: (usize, usize) = (20, 20);
 /// How many computers there are in a maze, to hack and read the notes on.
-const COMPUTERS: usize = 6;
+const COMPUTERS: usize = 12;
+/// How many of them a maze or a capture-the-flag map puts out; a heist puts out as many as its
+/// doors and its vault's terminals.
+const MAZE_COMPUTERS: usize = 6;
 /// The chance of a dead end being opened into a neighbouring corridor, which makes loops.
 const LOOP_CHANCE: f32 = 0.15;
 /// How long a droid in capture the flag keeps its head turned to the player it says something
@@ -283,6 +287,13 @@ pub struct MazeGame {
     #[visit(skip)]
     #[reflect(hidden)]
     ring_called: Vec<usize>,
+    /// The heist under way, on a heist map (see [`crate::heist`]), and its firewall doors.
+    #[visit(skip)]
+    #[reflect(hidden)]
+    heist: Option<Heist>,
+    #[visit(skip)]
+    #[reflect(hidden)]
+    doors: Doors,
     exit: Handle<Node>,
     sun: Handle<Node>,
     /// The floor under everything (see [`UNDER_FLOOR`]).
@@ -646,6 +657,7 @@ impl MazeGame {
         let model = match game {
             Game::CaptureTheFlag(map) => Some(MAPS[map].path.to_string()),
             Game::BattleRoyale(map) => Some(ctf::ROYALE_MAPS[map].path.to_string()),
+            Game::Heist(map) => Some(ctf::HEIST_MAPS[map].path.to_string()),
             Game::Maze => platform::var("MAZE_MODEL"),
         };
         match model {
@@ -655,6 +667,7 @@ impl MazeGame {
                     .filter(|map| map.void || map.night)
                     .map(|_| resources.request::<Texture>(ctf::VOID_SKY));
                 self.firewalls = Firewalls::request(resources);
+                self.doors = Doors::request(resources);
                 // Only where shadows are traced: elsewhere their light would shine through walls.
                 self.glow = if cfg!(target_arch = "wasm32") { None } else { GlowLights::load(&path) };
                 self.model_path = path;
@@ -741,6 +754,8 @@ impl MazeGame {
         self.model_path.clear();
         self.ctf = None;
         self.royale = None;
+        self.heist = None;
+        self.doors.clear(&mut ctx.scenes[self.scene].graph);
         self.inhabitants.set_ring(None);
         self.set_banner(ctx, "");
         self.phase = Phase::Title;
@@ -842,10 +857,14 @@ impl MazeGame {
         // map with starts for everyone and no flags is played as battle royale (see
         // `start_royale`).
         let royale = self.ctf.is_none() && self.level.markers.iter().any(|m| m.name.starts_with("spawn_"));
-        let script = match (self.ctf.is_some(), royale) {
-            (true, _) => CTF_SCRIPT,
-            (false, true) => ROYALE_SCRIPT,
-            (false, false) => SCRIPT,
+        // A map marking a way in, loot and a way out is played as a heist.
+        let plan = if self.ctf.is_none() { Plan::from_markers(&self.level.markers) } else { None };
+        self.heist = plan.map(Heist::new);
+        let script = match (self.ctf.is_some(), royale, self.heist.is_some()) {
+            (true, _, _) => CTF_SCRIPT,
+            (false, true, _) => ROYALE_SCRIPT,
+            (false, false, true) => HEIST_SCRIPT,
+            (false, false, false) => SCRIPT,
         };
         if script != self.script_path {
             self.use_script(&ctx.resource_manager, script);
@@ -928,6 +947,7 @@ impl MazeGame {
         self.phase = Phase::Playing;
         self.set_banner(ctx, "");
         self.start_royale(ctx);
+        self.start_heist(ctx);
     }
 
     /// A map with starts for everyone, and no flags, is played as battle royale: the player at
@@ -1128,6 +1148,7 @@ impl MazeGame {
                 credits: self.credits,
                 shield: self.shield.as_ref().filter(|s| s.charge.is_up()).map(|s| s.charge.health()),
                 shield_ready: self.shield.as_ref().is_some_and(Shield::can_raise),
+                objective: self.heist.as_ref().map(Heist::objective),
             },
         };
         // Healing only while playing; the flash of the last hit fades out after too.
@@ -1394,7 +1415,10 @@ impl MazeGame {
         };
         let scene = &mut ctx.scenes[self.scene];
         let player = self.player.feet(&scene.graph);
-        if let Some(liveries) = liveries {
+        if let (Some(liveries), Some(heist)) = (liveries.clone(), &self.heist) {
+            // In a heist, a guard at each post.
+            self.inhabitants.populate_guards(scene, liveries, (grid, *origin), &heist.plan.guards, rng);
+        } else if let Some(liveries) = liveries {
             match &self.ctf {
                 // Each side's droids of its own kind: red's the first in the conversations, blue's
                 // the second.
@@ -1541,7 +1565,7 @@ impl MazeGame {
         // A bolt that only flies close by is an attack all the same: the droid takes it as one
         // that hit would, harmlessly, and so does a drone.
         let passes = self.player.passed();
-        let fired_by = self.ctf.as_ref().map(|_| PLAYERS);
+        let fired_by = self.sided().then_some(PLAYERS);
         for n in self.inhabitants.near_miss(&passes, fired_by, &struck) {
             droid_shot = true;
             if self.threatened(n).is_some() && self.inhabitants.provoke(n) && !provoked.contains(&n) {
@@ -1579,7 +1603,11 @@ impl MazeGame {
             self.health_sounds.play(graph, Heard::Hit, at);
             if last {
                 self.gloat(side);
-                self.delete_player(ctx, &format!("{}'s side", side.name()));
+                let by = match self.heist {
+                    Some(_) => "security".to_string(),
+                    None => format!("{}'s side", side.name()),
+                };
+                self.delete_player(ctx, &by);
             }
             return;
         }
@@ -1610,6 +1638,135 @@ impl MazeGame {
                 }
             }
         }
+    }
+
+    /// Whether the game has sides - capture the flag's, or a heist's guards against the player -
+    /// for droids and drones to be on.
+    fn sided(&self) -> bool {
+        self.ctf.is_some() || self.heist.is_some()
+    }
+
+    /// On a heist map, the heist: its doors put up, closed, the player at the way in, and the
+    /// marker on the loot.
+    fn start_heist(&mut self, ctx: &mut PluginContext) {
+        let Some(plan) = self.heist.as_ref().map(|heist| heist.plan.clone()) else {
+            return;
+        };
+        let scene = &mut ctx.scenes[self.scene];
+        self.doors.place(scene, &plan);
+        // The marker's +x is the way in: in the player's terms, a heading of atan2(x, z).
+        let (at, yaw) = plan.start;
+        let facing = yaw.cos().atan2(-yaw.sin());
+        self.player.teleport(&mut scene.graph, at + Vector3::new(0.0, 1.2, 0.0), facing);
+        if let Some((grid, origin)) = self.level.grid.as_ref() {
+            self.start_cell = grid.walkable_cell(*origin, at).or(self.start_cell);
+        }
+        scene.graph[self.exit].local_transform_mut().set_position(plan.vault + Vector3::new(0.0, 1.2, 0.0));
+        if let Some(&ball) = scene.graph[self.exit].children().first() {
+            scene.graph[ball].set_visibility(true);
+        }
+        self.carrying = false;
+        self.hud.show_note(format!("Heist: {} doors to the vault. Hack their computers.", plan.doors.len()));
+        Log::info(format!(
+            "Heist: {} doors, {} guards, {} drones, {} ways out",
+            plan.doors.len(),
+            plan.guards.len(),
+            plan.drones.len(),
+            plan.extracts.len()
+        ));
+    }
+
+    /// Moves the heist on: each door down whose computer is hacked, the alarm counted each time
+    /// it goes up.
+    fn update_heist(&mut self, ctx: &mut PluginContext) {
+        let Some(heist) = self.heist.as_mut() else {
+            return;
+        };
+        let graph = &mut ctx.scenes[self.scene].graph;
+        let computers = &self.computers;
+        // With MAZE_HEIST_OPEN=<n>, to try a heist out: the first n doors' computers count as
+        // hacked.
+        let opened = platform::var("MAZE_HEIST_OPEN").and_then(|n| n.trim().parse::<usize>().ok()).unwrap_or(0);
+        let cleared = |n: usize| n < opened || computers.get(n).is_some_and(Computer::cleared);
+        let open = self.doors.update(graph, cleared, ctx.elapsed_time, ctx.dt);
+        if let Stage::Breaking { open: was, of } = heist.stage {
+            if open > was {
+                let note = match open >= of {
+                    true => "The vault is open: hack its terminals, and get out when you like".to_string(),
+                    false => format!("Door {open} of {of} is down"),
+                };
+                self.hud.show_note(note);
+                Log::info(format!("Heist: {open} of {of} doors down"));
+            }
+        }
+        heist.doors_open(open);
+        // The vault open: the marker shows the way out, the nearest.
+        if heist.stage == Stage::Take && !self.carrying {
+            self.carrying = true;
+            let out = heist.plan.nearest_extract(heist.plan.vault);
+            graph[self.exit].local_transform_mut().set_position(out + Vector3::new(0.0, 1.2, 0.0));
+        }
+        // Security's waves: guards from where they come in, hunting the player, and a drone.
+        if let Some(size) = heist.update(ctx.dt).filter(|_| self.phase == Phase::Playing) {
+            let player = self.player.feet(graph);
+            let scene = &mut ctx.scenes[self.scene];
+            if let (Some((grid, origin)), Some(rng)) = (self.level.grid.as_ref(), self.rng.as_mut()) {
+                let came = self.inhabitants.spawn_wave(scene, (grid, *origin), &heist.plan.waves, size, player, rng);
+                self.hud.show_note(format!("Security wave {}: {came} guards coming", heist.wave));
+                Log::info(format!("Heist: wave {}, {came} guards", heist.wave));
+            }
+            self.drone_calls.push(player);
+        }
+        if self.phase == Phase::Playing {
+            heist.alarm(matches!(self.inhabitants.alarm(), Some((Alert::Alert, _))));
+        }
+    }
+
+    /// In a heist, the computers: one at each door's mark, opening it, and the rest hidden.
+    /// Whether it was a heist.
+    fn place_heist_computers(&mut self, ctx: &mut PluginContext) -> bool {
+        let Some(plan) = self.heist.as_ref().map(|heist| heist.plan.clone()) else {
+            return false;
+        };
+        let Some((grid, origin)) = self.level.grid.as_mut() else {
+            return true;
+        };
+        let graph = &mut ctx.scenes[self.scene].graph;
+        let colliders: Vec<_> = self.computers.iter().map(Computer::collider).collect();
+        let doors = plan.doors.len();
+        let rng = self.rng.get_or_insert_with(|| Rng::new(platform::nanos_now()));
+        for (n, computer) in self.computers.iter_mut().enumerate() {
+            // The doors' first, each where the map marks it or else by its door; then the vault's
+            // terminals.
+            let marked = match plan.doors.get(n) {
+                Some(&(door, _, marked)) => match marked {
+                    Some((at, yaw)) => computer::spot_marked(grid, *origin, at, yaw),
+                    None => grid.nearest_walkable(*origin, door).and_then(|cell| computer::spot(grid, cell)),
+                },
+                None => plan.terminals.get(n - doors).and_then(|&(at, yaw)| computer::spot_marked(grid, *origin, at, yaw)),
+            };
+            match marked {
+                Some(spot) => {
+                    computer.place(graph, grid, *origin, spot, &colliders);
+                    match self.doors.doors.get_mut(n) {
+                        Some(door) => door.computer = Some(n),
+                        None => computer.set_credits(heist::terminal_credits(|k| rng.below(k))),
+                    }
+                }
+                None => computer.hide(graph),
+            }
+        }
+        if plan.terminals.len() + doors > self.computers.len() {
+            Log::warn("Heist: more doors and terminals than computers; some go without");
+        }
+        let linked = self.doors.doors.iter().filter(|door| door.computer.is_some()).count();
+        let terminals = (doors..self.computers.len()).filter(|&n| plan.terminals.get(n - doors).is_some()).count();
+        Log::info(format!("Heist: {linked} doors with computers, {terminals} vault terminals"));
+        if self.doors.doors.iter().any(|door| door.computer.is_none()) {
+            Log::warn("Heist: a door has no computer to open it, and stands open");
+        }
+        self.computer_placed = true;
+        true
     }
 
     /// In battle royale, the droid of `side` that has just shot someone down says so.
@@ -2063,7 +2220,7 @@ impl MazeGame {
                 (&self.player, self.player.feet(graph), self.player.ahead());
             self.inhabitants
                 .to_talk_to(feet, ahead, |there| player.can_see(graph, there))
-                .filter(|&n| self.ctf.is_none() || self.inhabitants.side(n).is_some_and(Side::is_players))
+                .filter(|&n| !self.sided() || self.inhabitants.side(n).is_some_and(Side::is_players))
         } else {
             None
         };
@@ -2414,6 +2571,9 @@ impl MazeGame {
             self.computer_placed = true;
             return;
         }
+        if !self.computer_placed && self.phase == Phase::Playing && self.place_heist_computers(ctx) {
+            return;
+        }
         if !self.computer_placed && self.phase == Phase::Playing {
             self.rng();
             if let (Some((grid, origin)), Some(start), Some(rng)) =
@@ -2425,7 +2585,11 @@ impl MazeGame {
                 let mut placed = Vec::new();
                 // Each firewall answers to one of the last computers, put first after the one
                 // near the start, where the model marks for it or else near the firewall.
-                let count = self.computers.len();
+                // A maze has so many; the rest, there for a heist's vault, out of sight.
+                let count = self.computers.len().min(MAZE_COMPUTERS);
+                for computer in &mut self.computers[count..] {
+                    computer.hide(graph);
+                }
                 let tied = self.firewalls.iter().count().min(count.saturating_sub(1));
                 let first_tied = count - tied;
                 let order = std::iter::once(0).chain(first_tied..count).chain(1..first_tied);
@@ -2517,11 +2681,20 @@ impl MazeGame {
         if !self.menu.is_open() {
             let mut denied = false;
             let mut taken = Credits::default();
-            for computer in &mut self.computers {
+            let doors = self.doors.doors.len();
+            for (n, computer) in self.computers.iter_mut().enumerate() {
                 denied |= computer.update(ctx.dt);
-                // Cleared, it transfers its credits to the player.
+                // Cleared, it transfers its credits to the player - in a heist, stolen, theirs
+                // only once they are out.
                 if let Some(credits) = computer.take_credits() {
-                    taken += credits;
+                    match self.heist.as_mut() {
+                        Some(heist) => {
+                            heist.steal(credits, n >= doors);
+                            self.hud.show_note(format!("+{credits} stolen: {} in all", heist.stolen));
+                            Log::info(format!("Heist: +{credits} stolen, {} in all", heist.stolen));
+                        }
+                        None => taken += credits,
+                    }
                 }
             }
             if taken > Credits::default() {
@@ -2531,8 +2704,15 @@ impl MazeGame {
             }
             // A hacked computer opens its firewall.
             self.firewalls.update(&mut ctx.scenes[self.scene].graph, &self.computers, ctx.elapsed_time);
+            // In a heist, a failed hack brings security's wave, five seconds on.
+            if denied && self.phase == Phase::Playing && self.heist.is_some() {
+                if let Some(heist) = self.heist.as_mut() {
+                    heist.hack_failed();
+                }
+                self.hud.show_note("Trace complete: security wave in 5 seconds".into());
+                Log::info("Heist: a failed hack brings a wave");
             // A failed hack calls in a drone, to where the player is.
-            if denied && self.phase == Phase::Playing {
+            } else if denied && self.phase == Phase::Playing {
                 let feet = self.player.feet(&ctx.scenes[self.scene].graph);
                 self.drone_calls.push(feet);
                 self.hud.show_note("Trace complete: a drone is on its way".into());
@@ -2601,14 +2781,14 @@ impl MazeGame {
             let graph = &mut ctx.scenes[self.scene].graph;
             // In the maze, through every drone; in capture the flag, only through the one that
             // fired, so that the sides' drones can hit each other.
-            let drones: Vec<_> = match self.ctf {
-                Some(_) => Vec::new(),
-                None => self.drones.iter().map(|drone| drone.collider()).collect(),
+            let drones: Vec<_> = match self.sided() {
+                true => Vec::new(),
+                false => self.drones.iter().map(|drone| drone.collider()).collect(),
             };
             let hits = self.shots.as_mut().map_or_else(Vec::new, |shots| shots.update(graph, ctx.dt, &drones));
             // In capture the flag, a shot that flies close by one of the other side is an attack
             // on it too, as a droid's bolt is.
-            if self.ctf.is_some() {
+            if self.sided() {
                 let struck: Vec<Handle<Collider>> = hits.iter().map(|hit| hit.collider).collect();
                 let passed = self.shots.as_ref().map_or_else(Vec::new, |shots| shots.passed().to_vec());
                 for (by, pass) in passed {
@@ -2624,9 +2804,9 @@ impl MazeGame {
                     break;
                 }
                 let side = self.drones.iter().find(|d| d.collider() == hit.by).and_then(Drone::side);
-                match (&self.ctf, side) {
+                match (self.sided(), side) {
                     // A drone on a side harms whatever of the other side it hits.
-                    (Some(_), Some(side)) => {
+                    (true, Some(side)) => {
                         let strike = Strike { collider: hit.collider, at: hit.at, way: hit.way };
                         self.side_strike(ctx, side, strike);
                     }
@@ -2661,6 +2841,13 @@ impl MazeGame {
                 match &self.ctf {
                     // In battle royale, no drones: it is droid against droid.
                     _ if self.royale.is_some() => (),
+                    // In a heist, the bank's, each patrolling round its own spot.
+                    _ if self.heist.is_some() => {
+                        let spots = self.heist.as_ref().map_or_else(Vec::new, |h| h.plan.drones.clone());
+                        for (drone, spot) in self.drones.iter_mut().zip(spots) {
+                            drone.place_for(graph, (grid, *origin), ENEMY, spot, rng);
+                        }
+                    }
                     // One for each side, by its flag; the rest wait to be called in.
                     Some(bases) => {
                         for (drone, side) in self.drones.iter_mut().zip(Side::BOTH) {
@@ -2687,6 +2874,7 @@ impl MazeGame {
         for at in std::mem::take(&mut self.drone_calls) {
             self.call_drone(&mut ctx.scenes[self.scene].graph, at);
         }
+        let sided = self.sided();
         let (Some((grid, origin)), Some(rng)) = (self.level.grid.as_ref(), self.rng.as_mut()) else {
             return;
         };
@@ -2703,7 +2891,7 @@ impl MazeGame {
         let targets: Vec<Target> = (0..self.drones.len())
             .map(|n| {
                 let drone = &self.drones[n];
-                let Some(side) = drone.side().filter(|_| self.ctf.is_some()) else {
+                let Some(side) = drone.side().filter(|_| sided) else {
                     return player;
                 };
                 let droids = self.inhabitants.standing().into_iter().filter(|d| d.1 == Some(side.other())).map(|(_, _, feet, middle, collider)| Target {
@@ -3093,6 +3281,7 @@ impl Plugin for MazeGame {
         self.set_up_drone(ctx);
         self.set_up_hearts(ctx);
         self.set_up_shield(ctx);
+        self.update_heist(ctx);
 
         // The ferries go on whatever the player does, until the menu stops the world. First, so
         // the player is carried along with where they are going this step.
@@ -3108,6 +3297,7 @@ impl Plugin for MazeGame {
                     (Some(model), _) => {
                         let mut models = vec![(self.model_path.clone(), model.clone())];
                         models.extend(self.firewalls.models());
+                        models.extend(self.doors.models());
                         models
                     }
                     (None, Some(prefabs)) => prefabs
@@ -3183,7 +3373,11 @@ impl Plugin for MazeGame {
                     // In capture the flag, blue's flag first - only there to take once its
                     // firewall is down, and reached from beside its plinth - and then home with
                     // it, to red's, which the marker moves to.
-                    let won = match self.ctf.clone() {
+                    let won = if let Some(heist) = self.heist.as_mut() {
+                        // In a heist, out at any of the extraction points, once the vault is open.
+                        heist.extract(self.player.feet(&scene.graph))
+                    } else {
+                        match self.ctf.clone() {
                         Some(bases) if !self.carrying => {
                             let open = self.firewalls.of(ENEMY.name()).is_none_or(|wall| wall.is_open());
                             if open && flat.norm() < firewall::REACH {
@@ -3198,8 +3392,23 @@ impl Plugin for MazeGame {
                         }
                         Some(_) => flat.norm() < HOME_REACH,
                         None => flat.norm() < EXIT_RADIUS,
+                        }
                     };
-                    if won {
+                    if let Some(heist) = self.heist.as_ref().filter(|_| won) {
+                        // The heist done: what was stolen is the player's now.
+                        self.phase = Phase::Won;
+                        let pay = heist.stolen;
+                        self.credits += pay;
+                        let terminals = heist.plan.terminals.len();
+                        let text = format!(
+                            "Heist complete: +{pay} in {}\n{} of {terminals} vault terminals hacked, {} waves held off\nPress N for another heist",
+                            hud::format_time(self.round_time),
+                            heist.hacked,
+                            heist.wave
+                        );
+                        Log::info(format!("Heist: done, +{pay}, {} terminals, {} waves", heist.hacked, heist.wave));
+                        self.set_banner(ctx, &text);
+                    } else if won {
                         self.phase = Phase::Won;
                         let best = self
                             .best_time

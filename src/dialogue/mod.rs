@@ -51,6 +51,8 @@ pub const CTF_SCRIPT: &str = "data/dialogue/ctf.json";
 /// What the droids say in battle royale, where everyone is against everyone: they call out as
 /// they fight, and taunt the player who tries to talk to them.
 pub const ROYALE_SCRIPT: &str = "data/dialogue/royale.json";
+/// What the guards say in a heist, as they hunt whoever breaks in: they are not talked to.
+pub const HEIST_SCRIPT: &str = "data/dialogue/heist.json";
 
 /// A skill check on a reply: which skill, and the chance it succeeds, in percent.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -654,6 +656,21 @@ mod tests {
         pitches.sort_by(f32::total_cmp);
         pitches.dedup();
         assert_eq!(pitches.len(), script.characters.len(), "every voice its own pitch");
+    }
+
+    #[test]
+    fn heist_guards_call_out_each_in_a_voice_of_its_own() {
+        let script = Script::load(HEIST_SCRIPT).unwrap();
+        let voices = crate::formants::speech::Voices::load(crate::formants::speech::VOICES).unwrap();
+        assert!(!script.characters.is_empty());
+        for character in &script.characters {
+            assert!(character.lines.is_empty(), "{} is not talked to", character.name);
+            for bark in ["spotted", "lost", "heard", "gave_up", "alarmed"] {
+                assert!(character.barks.contains_key(bark), "{} says {bark}", character.name);
+            }
+            assert!(character.model.is_some());
+            assert!(voices.voices.contains_key(&character.name), "{} has a voice", character.name);
+        }
     }
 
     #[test]

@@ -85,6 +85,8 @@ pub enum Status {
         shield: Option<f32>,
         /// Whether the shield can be raised now: the health bar's name says so, `HEALTH [1]`.
         shield_ready: bool,
+        /// What there is to do next, in a heist, after the time.
+        objective: Option<String>,
     },
 }
 
@@ -384,8 +386,12 @@ impl Hud {
                 credits,
                 shield,
                 shield_ready,
+                objective,
             } => {
                 let mut text = format!("Time {}", format_time(time));
+                if let Some(objective) = objective {
+                    text += &format!("    {objective}");
+                }
                 if let Some(best) = best {
                     text += &format!("    Best {}", format_time(best));
                 }

@@ -34,6 +34,7 @@ mod drone;
 mod drone_shot;
 mod health;
 mod hearts;
+mod heist;
 mod shield;
 mod firewall;
 mod ferry;

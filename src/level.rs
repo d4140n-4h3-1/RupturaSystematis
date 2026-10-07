@@ -34,9 +34,14 @@ use fyrox::{
 /// How high the middle of a flag is over the floor its firewall stands on.
 const FLAG_MIDDLE: f32 = 2.0;
 /// What a model's empty is named to mark where the game puts something: a flag in its firewall,
-/// the computer that opens it (see [`crate::firewall`]), a droid's post (see [`crate::ctf`]), or
-/// where someone starts in battle royale (see [`crate::royale`]).
-const MARKERS: [&str; 4] = ["flag_", "computer_", "post_", "spawn_"];
+/// the computer that opens it (see [`crate::firewall`]), a droid's post (see [`crate::ctf`]),
+/// where someone starts in battle royale (see [`crate::royale`]), or a heist's way in, doors,
+/// vault and its terminals, ways out, guards, drones and where its waves come from (see
+/// [`crate::heist`]).
+const MARKERS: [&str; 12] = [
+    "flag_", "computer_", "post_", "spawn_", "heist_start", "door_", "loot", "extract_", "guard_", "drone_",
+    "terminal_", "wave_",
+];
 
 /// Somewhere a maze model marks with an empty, by the empty's name, for the game to put
 /// something: where it is, and which way its +x points, as a turn about the vertical.
