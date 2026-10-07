@@ -32,7 +32,7 @@ use crate::{
     layout::{Rng, WalkGrid},
     notes::{self, Entry},
     ragdoll::CHARACTERS,
-    survey::{self, CELL_SIZE},
+    survey::CELL_SIZE,
 };
 use fyrox::{
     asset::untyped::ResourceKind,
@@ -1187,7 +1187,8 @@ impl Computer {
         self.lit = None;
         self.placed = true;
         let across = (-facing.1, facing.0);
-        let at = survey::cell_center(origin, cell.0, cell.1);
+        // Where the cell is on the plan, whichever storey it is on.
+        let at = grid.center(origin, cell);
         let floor = grid.floor(cell.0, cell.1);
         let yaw = (facing.0 as f32).atan2(facing.1 as f32);
         // Its back just off the wall behind the cell - [`WALL_CLEARANCE`] short of as far as a ray

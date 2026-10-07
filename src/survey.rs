@@ -171,12 +171,13 @@ pub fn nearest_walkable(
 /// The direction from `cell` towards the walkable floor around it, reached by walking.
 pub fn open_direction(grid: &WalkGrid, origin: Vector3<f32>, cell: (usize, usize)) -> Vector3<f32> {
     const REACH: u32 = 8;
-    let center = cell_center(origin, cell.0, cell.1);
+    // Where cells are on the plan, whichever storey they are on.
+    let center = grid.center(origin, cell);
     let distances = grid.distances_from(cell);
     let mut sum = Vector3::zeros();
     for (i, distance) in distances.iter().enumerate() {
         if distance.is_some_and(|d| d > 0 && d <= REACH) {
-            sum += cell_center(origin, i % grid.width, i / grid.width) - center;
+            sum += grid.center(origin, (i % grid.width, i / grid.width)) - center;
         }
     }
     if sum.norm_squared() > 0.0 {
@@ -360,6 +361,28 @@ fn first_hit(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cells_upstairs_are_where_they_are_on_the_plan_not_a_grid_away() {
+        // A corridor along x on the ground, climbing at its east end onto a second storey - whose
+        // rows the grid puts after all of the ground's.
+        let depth = 10;
+        let mut grid = WalkGrid::with_storeys(12, depth, 2, CELL_SIZE);
+        for x in 0..6 {
+            grid.set(x, 5, true);
+        }
+        for (k, x) in (6..12).enumerate() {
+            grid.set(x, 5 + depth, true);
+            grid.set_floor(x, 5 + depth, 0.25 * (k + 1) as f32);
+        }
+        let origin = Vector3::zeros();
+        // Upstairs is in the same row of the plan as downstairs.
+        assert!((grid.center(origin, (8, 5 + depth)).z - grid.center(origin, (8, 5)).z).abs() < 1.0e-5);
+        // And the way open from the corridor's west end is along it, east, not off towards where
+        // the second storey's rows would be if they were more of the ground.
+        let open = open_direction(&grid, origin, (1, 5));
+        assert!(open.x > 0.0 && open.z.abs() < 1.0e-3 * open.x.abs().max(1.0), "{open:?}");
+    }
 
     #[test]
     fn a_floor_under_a_roof_is_the_one_with_headroom() {

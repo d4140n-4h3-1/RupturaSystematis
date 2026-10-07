@@ -516,7 +516,7 @@ impl Drone {
             },
         };
         let (x, z) = (cell % grid.width, cell / grid.width);
-        self.at = survey::cell_center(origin, x, z) + Vector3::new(0.0, grid.floor(x, z) + HOVER, 0.0);
+        self.at = grid.center(origin, (x, z)) + Vector3::new(0.0, grid.floor(x, z) + HOVER, 0.0);
         self.heading = inhabitants::between(rng, (-PI, PI));
         self.state = State::Patrol;
         self.placed = true;

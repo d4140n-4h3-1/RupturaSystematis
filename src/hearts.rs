@@ -25,7 +25,6 @@
 use crate::{
     fixtures::{property, DIFFUSE_COLOR},
     layout::{Rng, WalkGrid},
-    survey,
 };
 use fyrox_gfx::{replace_materials, GlassMaterial};
 use fyrox::{
@@ -215,7 +214,8 @@ impl Hearts {
             .with_radius(LAMP_REACH)
             .build(&mut scene.graph)
             .to_base();
-            let at = survey::cell_center(origin, x, z);
+            // Where the cell is on the plan, whichever storey it is on.
+            let at = grid.center(origin, (x, z));
             let at = Vector3::new(at.x, grid.floor(x, z) + HOVER, at.z);
             // Each out of step with the others.
             let phase = n as f32 * 0.37 % 1.0;
