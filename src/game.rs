@@ -1759,6 +1759,8 @@ impl MazeGame {
         if plan.terminals.len() + doors > self.computers.len() {
             Log::warn("Heist: more doors and terminals than computers; some go without");
         }
+        // MAZE_COMPUTER, next frame, as in a maze: the player put at the first, using it.
+        self.computer_test = platform::var("MAZE_COMPUTER").is_some();
         let linked = self.doors.doors.iter().filter(|door| door.computer.is_some()).count();
         let terminals = (doors..self.computers.len()).filter(|&n| plan.terminals.get(n - doors).is_some()).count();
         Log::info(format!("Heist: {linked} doors with computers, {terminals} vault terminals"));
@@ -3244,6 +3246,12 @@ impl Plugin for MazeGame {
         }
         // An interface of its own, after the window's, which stays the first.
         self.screen_terminal = ScreenTerminal::build(ctx.user_interfaces);
+        Ok(())
+    }
+
+    fn before_rendering(&mut self, _ctx: PluginContext) -> GameResult {
+        // The computer's screen counts the frames drawn into its terminal's picture.
+        self.screen_terminal.rendering();
         Ok(())
     }
 

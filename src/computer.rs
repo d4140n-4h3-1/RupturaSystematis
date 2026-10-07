@@ -114,7 +114,9 @@ const SCREEN_COLOUR: Color = Color::opaque(0, 44, 18);
 const SCREEN_GLOW: f32 = 1.0;
 /// The terminal on the screen itself: its picture, in pixels, as wide for its height as the
 /// screen; how brightly the screen glows with it; and how many frames the interface draws into a
-/// fresh picture before the screen takes it up.
+/// fresh picture before the screen takes it up - frames drawn, not the game's steps, of which
+/// there can be several to a frame when it is catching up, as it often is the first time a
+/// computer is used: taken up before it has been drawn into, a picture stays blank for good.
 const PICTURE: (u32, u32) = (720, 468);
 const PICTURE_GLOW: f32 = 1.4;
 const DRAWN_BEFORE_SHOWN: u32 = 2;
@@ -861,7 +863,10 @@ pub struct ScreenTerminal {
     ui: Handle<UserInterface>,
     terminal: Terminal,
     picture: Option<TextureResource>,
+    /// How many frames have been drawn since it took up its picture, and whether the screen has
+    /// taken it up yet.
     drawn: u32,
+    taken_up: bool,
 }
 
 impl ScreenTerminal {
@@ -883,6 +888,14 @@ impl ScreenTerminal {
             terminal,
             picture: None,
             drawn: 0,
+            taken_up: false,
+        }
+    }
+
+    /// A frame is about to be drawn, the interface into its picture with it: counted.
+    pub fn rendering(&mut self) {
+        if self.picture.is_some() {
+            self.drawn = self.drawn.saturating_add(1);
         }
     }
 
@@ -905,6 +918,7 @@ impl ScreenTerminal {
                 }
                 self.picture = Some(picture);
                 self.drawn = 0;
+                self.taken_up = false;
             }
             (None, Some(_)) => {
                 computer.show_on_screen(None);
@@ -923,12 +937,11 @@ impl ScreenTerminal {
             let shown = shown.map(|(screen, view, wrong)| (screen, corners, view, wrong));
             self.terminal.show(ui, shown, dt);
         }
-        // The screen takes the picture up once the interface has drawn into it.
-        if self.picture.is_some() {
-            self.drawn += 1;
-            if self.drawn == DRAWN_BEFORE_SHOWN {
-                computer.show_on_screen(self.picture.clone());
-            }
+        // The screen takes the picture up once the interface has drawn into it - so many frames
+        // drawn since it was made, however many steps of the game.
+        if self.picture.is_some() && !self.taken_up && self.drawn > DRAWN_BEFORE_SHOWN {
+            computer.show_on_screen(self.picture.clone());
+            self.taken_up = true;
         }
     }
 }
