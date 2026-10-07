@@ -1,6 +1,7 @@
 //! What is written on screen: a status line in the corner, a banner across the middle for the
 //! end of a round and for anything that went wrong, the droids' alert at the top in the middle,
-//! as in Metal Gear and Fallout, the player's stamina in the bottom left corner, and, with the
+//! as in Metal Gear and Fallout, the player's stamina in the bottom left corner with their shield
+//! under it (see [`crate::shield`]), and, with the
 //! pistol out, its ammo in the bottom right: the cyber pistol's is endless, shown as ∞. The
 //! player's credits are in the top right.
 //!
@@ -42,6 +43,8 @@ const CAUTION_YELLOW: Color = Color::opaque(255, 225, 40);
 /// running low, and winded - and below how much it counts as running low.
 const BAR: (f32, f32) = (180.0, 10.0);
 const STAMINA_GREEN: Color = Color::opaque(90, 230, 120);
+/// The shield's bar, charged.
+const SHIELD_CYAN: Color = Color::opaque(60, 215, 255);
 const STAMINA_LOW: f32 = 0.35;
 /// The health bar's colour, and below how much of it it blinks; and how red the screen goes as
 /// the player is hit, out of 255.
@@ -72,6 +75,8 @@ pub enum Status {
         alarm: Option<(Alert, f32)>,
         /// The player's credits.
         credits: Credits,
+        /// The shield's bar: how full, and its colour (see [`crate::shield::Charge::meter`]).
+        shield: (f32, Color),
     },
 }
 
@@ -83,6 +88,9 @@ pub struct Hud {
     alert: Handle<Text>,
     stamina: Handle<UiNode>,
     stamina_fill: Handle<Border>,
+    /// The shield's bar, under the stamina, and what it last showed.
+    shield_fill: Handle<Border>,
+    shown_shield: Option<(f32, Color)>,
     /// The health bar - its panel and what fills it - and the red over the whole screen as the
     /// player is hit.
     health: Handle<UiNode>,
@@ -176,6 +184,37 @@ impl Hud {
             .build(ctx)
         };
         let stamina_label = label(ctx, "STAMINA", HorizontalAlignment::Left);
+        // The shield's bar, under the stamina's, the key that raises it in its name.
+        let shield_fill = BorderBuilder::new(
+            WidgetBuilder::new()
+                .with_horizontal_alignment(HorizontalAlignment::Left)
+                .with_margin(Thickness::uniform(3.0))
+                .with_width(BAR.0)
+                .with_height(BAR.1)
+                .with_background(Brush::Solid(SHIELD_CYAN).into()),
+        )
+        .with_stroke_thickness(Thickness::zero().into())
+        .build(ctx);
+        let shield_frame = BorderBuilder::new(
+            WidgetBuilder::new()
+                .with_horizontal_alignment(HorizontalAlignment::Left)
+                .with_width(BAR.0 + 6.0)
+                .with_height(BAR.1 + 6.0)
+                .with_foreground(Brush::Solid(Color::opaque(200, 200, 200)).into())
+                .with_background(Brush::Solid(Color::from_rgba(0, 0, 0, 120)).into())
+                .with_child(shield_fill),
+        )
+        .with_stroke_thickness(Thickness::uniform(1.0).into())
+        .build(ctx);
+        let shield_label = TextBuilder::new(
+            WidgetBuilder::new()
+                .with_horizontal_alignment(HorizontalAlignment::Left)
+                .with_margin(Thickness { left: 0.0, top: 8.0, right: 0.0, bottom: 3.0 })
+                .with_foreground(Brush::Solid(Color::WHITE).into()),
+        )
+        .with_font_size(16.0.into())
+        .with_text("SHIELD [1]")
+        .build(ctx);
         let health_fill = BorderBuilder::new(
             WidgetBuilder::new()
                 .with_horizontal_alignment(HorizontalAlignment::Left)
@@ -227,7 +266,9 @@ impl Hud {
                 .with_vertical_alignment(VerticalAlignment::Bottom)
                 .with_visibility(false)
                 .with_child(stamina_label)
-                .with_child(frame),
+                .with_child(frame)
+                .with_child(shield_label)
+                .with_child(shield_frame),
         )
         .with_orientation(Orientation::Vertical)
         .build(ctx)
@@ -318,6 +359,7 @@ impl Hud {
             alert,
             stamina,
             stamina_fill,
+            shield_fill,
             health,
             health_fill,
             hurt,
@@ -348,9 +390,9 @@ impl Hud {
         self.note_time = (self.note_time - dt).max(0.0);
         self.blink = (self.blink + dt) % BLINK;
         let blinking_on = self.blink < BLINK_ON;
-        let (text, alarm, breath, health, armed, credits) = match status {
-            Status::Loading => ("Loading the maze...".to_string(), None, None, None, false, None),
-            Status::Blank => (String::new(), None, None, None, false, None),
+        let (text, alarm, breath, health, armed, credits, shield) = match status {
+            Status::Loading => ("Loading the maze...".to_string(), None, None, None, false, None, None),
+            Status::Blank => (String::new(), None, None, None, false, None, None),
             Status::Round {
                 time,
                 best,
@@ -360,6 +402,7 @@ impl Hud {
                 mouse_captured,
                 alarm,
                 credits,
+                shield,
             } => {
                 let mut text = format!("Time {}", format_time(time));
                 if let Some(best) = best {
@@ -371,7 +414,7 @@ impl Hud {
                 if self.note_time > 0.0 {
                     text += &format!("\n{}", self.note);
                 }
-                (text, alarm, Some(breath), Some(health), armed, Some(credits))
+                (text, alarm, Some(breath), Some(health), armed, Some(credits), Some(shield))
             }
         };
         ui.send(self.status, TextMessage::Text(text));
@@ -394,6 +437,16 @@ impl Hud {
                 ui.send(self.stamina_fill, WidgetMessage::Background(Brush::Solid(colour).into()));
             }
             self.shown_stamina = stamina;
+        }
+
+        // Rounded, so that it is only sent as it changes enough to see.
+        let shield = shield.map(|(full, colour)| ((full.clamp(0.0, 1.0) * 200.0).round() / 200.0, colour));
+        if shield != self.shown_shield {
+            if let Some((full, colour)) = shield {
+                ui.send(self.shield_fill, WidgetMessage::Width(BAR.0 * full));
+                ui.send(self.shield_fill, WidgetMessage::Background(Brush::Solid(colour).into()));
+            }
+            self.shown_shield = shield;
         }
 
         // Rounded, so that it is only sent as it changes enough to see.

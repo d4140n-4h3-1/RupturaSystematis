@@ -375,6 +375,11 @@ impl Player {
             })
     }
 
+    /// Where the camera is, in the world.
+    pub fn camera_position(&self, graph: &Graph) -> Vector3<f32> {
+        graph[self.camera].global_position()
+    }
+
     /// Where the player's feet are.
     pub fn feet(&self, graph: &Graph) -> Vector3<f32> {
         self.position(graph) + Vector3::new(0.0, FEET, 0.0)

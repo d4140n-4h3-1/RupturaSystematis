@@ -36,7 +36,7 @@ const CONTROLS: &str = "WASD move    Mouse look    Space jump\n\
     Caps Lock walk or run    Shift sprint\n\
     C crouch    Z crawl    Tab cover    Q look behind\n\
     Right mouse strafe    R pistol    Left mouse draw, fire\n\
-    E talk    F flashlight    N new maze\n\
+    E talk    F flashlight    1 shield    N new maze\n\
     [ ] turn speed    - = view width";
 
 /// The colour of the button picked from the keyboard, and of the rest.

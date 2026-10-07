@@ -19,6 +19,7 @@ use crate::{
     alarm::AlarmSound,
     health::{Health, HealthSounds, Healing, Heard},
     hearts::{self, Hearts, HEART_MODEL},
+    shield::{Shield, Took, SHIELD_MODEL},
     notes::{self, Notes, NOTES},
     diagnostics::{self, FrameStats},
     dialogue::{
@@ -407,6 +408,14 @@ pub struct MazeGame {
     #[visit(skip)]
     #[reflect(hidden)]
     heart_model: Option<ModelResource>,
+    /// The shield the player raises with the 1 key (see [`crate::shield`]), once its model has
+    /// loaded and it is in the scene.
+    #[visit(skip)]
+    #[reflect(hidden)]
+    shield_model: Option<ModelResource>,
+    #[visit(skip)]
+    #[reflect(hidden)]
+    shield: Option<Shield>,
     #[visit(skip)]
     #[reflect(hidden)]
     hearts: Hearts,
@@ -607,6 +616,7 @@ impl MazeGame {
         self.drone_model = Some(resources.request::<Model>(DRONE_MODEL));
         self.shot_model = Some(resources.request::<Model>(SHOT_MODEL));
         self.heart_model = Some(resources.request::<Model>(HEART_MODEL));
+        self.shield_model = Some(resources.request::<Model>(SHIELD_MODEL));
     }
 
     /// Starts `game`, picked in the main menu: loads its level, and plays it once it has. The
@@ -889,6 +899,9 @@ impl MazeGame {
 
         self.round_time = 0.0;
         self.health = Health::default();
+        if let Some(shield) = self.shield.as_mut() {
+            shield.reset(&mut ctx.scenes[self.scene].graph);
+        }
         self.knocked_down = false;
         self.phase = Phase::Playing;
         self.set_banner(ctx, "");
@@ -1057,6 +1070,9 @@ impl MazeGame {
         let graph = &mut ctx.scenes[self.scene].graph;
         self.player.teleport(graph, at + Vector3::new(0.0, 1.2, 0.0), facing);
         self.health = Health::default();
+        if let Some(shield) = self.shield.as_mut() {
+            shield.reset(graph);
+        }
         self.knocked_down = false;
         self.phase = Phase::Playing;
         self.set_banner(ctx, "");
@@ -1087,6 +1103,7 @@ impl MazeGame {
                     || self.talking.is_some(),
                 alarm: self.inhabitants.alarm(),
                 credits: self.credits,
+                shield: self.shield.as_ref().map_or((0.0, Color::opaque(70, 90, 110)), |s| s.charge.meter()),
             },
         };
         // Healing only while playing; the flash of the last hit fades out after too.
@@ -1220,6 +1237,7 @@ impl MazeGame {
                 self.start_talking(ctx)
             }
             KeyCode::KeyE if !self.menu.is_open() => self.start_hacking(ctx),
+            KeyCode::Digit1 if !self.menu.is_open() && self.phase == Phase::Playing => self.raise_shield(),
             KeyCode::KeyN => self.restart(ctx),
             _ => (),
         }
@@ -1529,6 +1547,9 @@ impl MazeGame {
             if side.is_players() || self.phase != Phase::Playing {
                 return;
             }
+            if self.shield_stops() {
+                return;
+            }
             let last = self.health.hit();
             let at = self.player.position(graph);
             self.health_sounds.play(graph, Heard::Hit, at);
@@ -1775,6 +1796,8 @@ impl MazeGame {
             self.bark(n, bark, mood);
         }
         match hit {
+            // Behind the shield, it takes the hit.
+            Some(_) if self.phase == Phase::Playing && self.shield_stops() => false,
             // Hit, they lose some health, and with none left they are deleted.
             Some(n) if self.phase == Phase::Playing => {
                 let last = self.health.hit();
@@ -2584,6 +2607,9 @@ impl MazeGame {
                         self.side_strike(ctx, side, strike);
                     }
                     _ if hit.collider == self.player.collider() => {
+                        if self.shield_stops() {
+                            continue;
+                        }
                         let graph = &mut ctx.scenes[self.scene].graph;
                         let last = self.health.hit();
                         let at = self.player.position(graph);
@@ -2727,6 +2753,65 @@ impl MazeGame {
 
     /// Scatters the hearts in the corridors once their model has loaded and a round is under way,
     /// and keeps them floating.
+    fn set_up_shield(&mut self, ctx: &mut PluginContext) {
+        if self.shield_model.as_ref().is_some_and(|model| model.is_failed_to_load()) {
+            Log::err(format!("Could not load {SHIELD_MODEL}; there is no shield"));
+            self.shield_model = None;
+        }
+        if self.shield.is_none() {
+            if let Some(model) = self.shield_model.as_ref().filter(|model| model.is_ok()) {
+                self.shield = Some(Shield::place(&mut ctx.scenes[self.scene], model));
+            }
+        }
+        let graph = &mut ctx.scenes[self.scene].graph;
+        // With MAZE_SHIELD=<seconds>, to try it out: that far into the round it is raised, as if
+        // by the 1 key.
+        let at = platform::var("MAZE_SHIELD").and_then(|s| s.trim().parse::<f32>().ok());
+        if self.phase == Phase::Playing && at.is_some_and(|at| self.round_time >= at && self.round_time - ctx.dt < at) {
+            self.raise_shield();
+        }
+        let Some(shield) = self.shield.as_mut() else {
+            return;
+        };
+        if self.menu.is_open() {
+            return;
+        }
+        match self.phase {
+            Phase::Playing | Phase::Won => {
+                let (feet, yaw) = (self.player.feet(graph), self.player.yaw());
+                let eye = self.player.camera_position(graph);
+                shield.update(graph, ctx.dt, feet, yaw, eye);
+            }
+            // Deleted, it goes with them.
+            _ => shield.reset(graph),
+        }
+    }
+
+    /// Raises the player's shield, if it is charged; or says it is not.
+    fn raise_shield(&mut self) {
+        let Some(shield) = self.shield.as_mut() else {
+            return;
+        };
+        if shield.raise() {
+            self.hud.show_note("Shield up".to_string());
+        } else if !shield.charge.is_up() {
+            self.hud.show_note("The shield is still charging".to_string());
+        }
+    }
+
+    /// Whether the player's shield stops a hit that would land on them: it takes it if it is up,
+    /// and says so if that broke it.
+    fn shield_stops(&mut self) -> bool {
+        match self.shield.as_mut().map_or(Took::Nothing, Shield::take) {
+            Took::Nothing => false,
+            Took::Stopped => true,
+            Took::Broke => {
+                self.hud.show_note("Shield broken: recharging".to_string());
+                true
+            }
+        }
+    }
+
     fn set_up_hearts(&mut self, ctx: &mut PluginContext) {
         if self.heart_model.as_ref().is_some_and(|model| model.is_failed_to_load()) {
             Log::err(format!("Could not load {HEART_MODEL}; there are no hearts"));
@@ -2934,6 +3019,7 @@ impl Plugin for MazeGame {
         self.set_up_computer(ctx);
         self.set_up_drone(ctx);
         self.set_up_hearts(ctx);
+        self.set_up_shield(ctx);
 
         // The ferries go on whatever the player does, until the menu stops the world. First, so
         // the player is carried along with where they are going this step.

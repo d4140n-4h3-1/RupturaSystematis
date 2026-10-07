@@ -121,6 +121,14 @@ their animations; the crate decides what they make of what is round them.
   they have shot someone down, when they come back after losing a life, and when the ring catches
   them outside. Only those within 30 m are heard. Talked to, they taunt the player rather than
   talk. Every line is checked by `data/system_latin/sl_parser.py`.
+- **A shield, on the 1 key**: a see-through egg of glass closes round your droid, glowing
+  faintly, two rings of light round it, and stops what would hit you - droids' bolts, drones'
+  shots, a droid catching you - but not the closing ring. It has health of its own, four hits,
+  and its glow is its health: cyan whole, through yellow, to red a hit from breaking, flashing
+  as it takes each. Raised, it stays up until it breaks, and only then charges again, over 18
+  seconds, so it cannot be raised and let go again and again. A bar under the stamina shows its
+  health while it is up and how far it has charged after. The egg is made in Blender by
+  `data/shield.py`; from inside it, aiming over the shoulder, its rings are hidden.
 - **Voices echo on the Grid and in Nexus**, off the buildings of a city in the open: each line
   comes back a quarter of a second later, again and again, fainter and duller each time, for
   about a second and a half after it is said (`synth::CITY_ECHO`). A map says whether its voices
@@ -708,6 +716,7 @@ logs goes to the browser's console there.
 | `MAZE_SSAO=0`            | Turns ambient occlusion off.                                            |
 | `MAZE_REFLECTIONS=0`     | Turns floor reflections off.                                            |
 | `MAZE_KNOCKDOWN=<s>`     | That many seconds into a round, shoots down the droid nearest you, to try the ragdolls out. |
+| `MAZE_SHIELD=<s>`        | That many seconds into a round, raises your shield, as the 1 key does. |
 | `MAZE_DRONE_ALARM=<s>`   | That many seconds into a round, sends the drone after you as if the alarm had sounded, to try it out. |
 | `MAZE_DISMEMBER=<parts>` | With `MAZE_KNOCKDOWN`, breaks those parts off it too, such as `head,forearm.L,shin.R`. |
 | `MAZE_COMPUTER=1`        | Puts you at the computer, using it, as soon as it is placed; `breach` starts a breach too, and `look` only puts you in front of it. |
