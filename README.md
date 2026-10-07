@@ -127,7 +127,8 @@ their animations; the crate decides what they make of what is round them.
   and its glow is its health: cyan whole, through yellow, to red a hit from breaking, flashing
   as it takes each. Raised, it stays up until it breaks, and only then charges again, over 18
   seconds, so it cannot be raised and let go again and again. While it is up, the health bar is
-  its: blue, named SHIELD ACTIVE, as full as the shield's health. The egg is made in Blender by
+  its: blue, named SHIELD ACTIVE, as full as the shield's health. While it can be raised -
+  charged, or charging with a spare - the bar is named `HEALTH [1]`. The egg is made in Blender by
   `data/shield.py`; from inside it, aiming over the shoulder, its rings are hidden.
 - **Shield cells**, spare charges for the shield, float about the levels as the hearts do, with
   a blue lamp - but rarer, about one for every three hearts (one for every 15,000 cells of

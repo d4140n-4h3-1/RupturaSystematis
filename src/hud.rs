@@ -7,7 +7,8 @@
 //! The alert is coloured by its phase - ALERT red, EVASION amber, CAUTION yellow - and ALERT and
 //! CAUTION blink; EVASION and CAUTION count down the seconds they have left. The player's health
 //! is a red bar in the bottom middle, and the screen flashes red as they are hit; while their
-//! shield is up (see [`crate::shield`]) the same bar is the shield's, blue, named SHIELD ACTIVE. The stamina is a bar,
+//! shield is up (see [`crate::shield`]) the same bar is the shield's, blue, named SHIELD ACTIVE,
+//! and while it can be raised the bar is named `HEALTH [1]`, for the key that raises it. The stamina is a bar,
 //! green, yellow once it runs low, and red and blinking while the player is winded. Sentries have
 //! bars like these over their heads, their health above their stamina, and the drone its health
 //! (see [`Hud::show_overhead_bars`]).
@@ -78,6 +79,8 @@ pub enum Status {
         /// While the shield is up, how much of its health it has left, from 0 to 1: the health
         /// bar is its, then.
         shield: Option<f32>,
+        /// Whether the shield can be raised now: the health bar's name says so, `HEALTH [1]`.
+        shield_ready: bool,
     },
 }
 
@@ -96,9 +99,9 @@ pub struct Hud {
     health: Handle<UiNode>,
     health_fill: Handle<Border>,
     hurt: Handle<UiNode>,
-    /// What the health bar last showed: how full, how long is left of a hit's flash, and
-    /// whether it was the shield's.
-    shown_health: Option<(f32, f32, bool)>,
+    /// What the health bar last showed: how full, how long is left of a hit's flash, whether it
+    /// was the shield's, and whether the shield could be raised.
+    shown_health: Option<(f32, f32, bool, bool)>,
     /// The pistol's ammo, and whether it is showing.
     ammo: Handle<UiNode>,
     shown_ammo: bool,
@@ -359,9 +362,9 @@ impl Hud {
         self.note_time = (self.note_time - dt).max(0.0);
         self.blink = (self.blink + dt) % BLINK;
         let blinking_on = self.blink < BLINK_ON;
-        let (text, alarm, breath, health, armed, credits, shield) = match status {
-            Status::Loading => ("Loading the maze...".to_string(), None, None, None, false, None, None),
-            Status::Blank => (String::new(), None, None, None, false, None, None),
+        let (text, alarm, breath, health, armed, credits, shield, shield_ready) = match status {
+            Status::Loading => ("Loading the maze...".to_string(), None, None, None, false, None, None, false),
+            Status::Blank => (String::new(), None, None, None, false, None, None, false),
             Status::Round {
                 time,
                 best,
@@ -372,6 +375,7 @@ impl Hud {
                 alarm,
                 credits,
                 shield,
+                shield_ready,
             } => {
                 let mut text = format!("Time {}", format_time(time));
                 if let Some(best) = best {
@@ -383,7 +387,7 @@ impl Hud {
                 if self.note_time > 0.0 {
                     text += &format!("\n{}", self.note);
                 }
-                (text, alarm, Some(breath), Some(health), armed, Some(credits), shield)
+                (text, alarm, Some(breath), Some(health), armed, Some(credits), shield, shield_ready)
             }
         };
         ui.send(self.status, TextMessage::Text(text));
@@ -412,11 +416,11 @@ impl Hud {
         // so, and blue. Rounded, so that it is only sent as it changes enough to see.
         let health = health.map(|(left, flash)| {
             let (left, shielded) = shield.map_or((left, false), |shield| (shield, true));
-            ((left.clamp(0.0, 1.0) * 200.0).round() / 200.0, (flash * 20.0).round() / 20.0, shielded)
+            ((left.clamp(0.0, 1.0) * 200.0).round() / 200.0, (flash * 20.0).round() / 20.0, shielded, shield_ready)
         });
         if health != self.shown_health {
             ui.send(self.health, WidgetMessage::Visibility(health.is_some()));
-            if let Some((left, flash, shielded)) = health {
+            if let Some((left, flash, shielded, ready)) = health {
                 ui.send(self.health_fill, WidgetMessage::Width(BAR.0 * left));
                 let colour = match (shielded, left < HEALTH_LOW && blinking_on) {
                     (true, _) => SHIELD_BLUE,
@@ -424,8 +428,13 @@ impl Hud {
                     (false, false) => HEALTH_RED,
                 };
                 ui.send(self.health_fill, WidgetMessage::Background(Brush::Solid(colour).into()));
-                if self.shown_health.is_none_or(|(_, _, was)| was != shielded) {
-                    let (name, colour) = if shielded { ("SHIELD ACTIVE", SHIELD_BLUE) } else { ("HEALTH", Color::WHITE) };
+                if self.shown_health.is_none_or(|(_, _, was, could)| (was, could) != (shielded, ready)) {
+                    // With the shield ready to raise, the key that raises it, after the name.
+                    let (name, colour) = match (shielded, ready) {
+                        (true, _) => ("SHIELD ACTIVE", SHIELD_BLUE),
+                        (false, true) => ("HEALTH  [1]", Color::WHITE),
+                        (false, false) => ("HEALTH", Color::WHITE),
+                    };
                     ui.send(self.health_label, TextMessage::Text(name.to_string()));
                     ui.send(self.health_label, WidgetMessage::Foreground(Brush::Solid(colour).into()));
                 }

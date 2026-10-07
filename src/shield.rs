@@ -235,6 +235,15 @@ impl Shield {
         raised
     }
 
+    /// Whether it can be raised now: charged, or charging with a spare to raise it with.
+    pub fn can_raise(&self) -> bool {
+        match self.charge {
+            Charge::Ready => true,
+            Charge::Recharging { .. } => self.spares > 0,
+            Charge::Up { .. } => false,
+        }
+    }
+
     /// Takes a shield cell as a spare charge, if there is room for one: whether there was.
     pub fn add_spare(&mut self) -> bool {
         let room = self.spares < MOST_SPARES;
@@ -352,13 +361,16 @@ mod tests {
     #[test]
     fn a_spare_raises_it_again_while_it_charges_but_not_while_it_is_up() {
         let mut shield = Shield::default();
+        assert!(shield.can_raise(), "charged");
         assert!(shield.add_spare() && shield.add_spare());
         assert!(!shield.add_spare(), "no room for more than {MOST_SPARES}");
         assert!(shield.raise());
         assert_eq!(shield.spares, MOST_SPARES, "charged, the charge is used, not a spare");
         assert!(!shield.raise(), "up, it stays as it is");
         assert_eq!(shield.spares, MOST_SPARES);
+        assert!(!shield.can_raise(), "not while it is up");
         while shield.take() != Took::Broke {}
+        assert!(shield.can_raise(), "charging, but with a spare");
         assert!(shield.raise(), "broken and charging, a spare raises it at once");
         assert_eq!((shield.spares, shield.charge), (MOST_SPARES - 1, Charge::Up { health: STRENGTH }));
     }
