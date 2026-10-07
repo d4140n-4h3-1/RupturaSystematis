@@ -3002,15 +3002,19 @@ impl MazeGame {
     }
 
     /// With MAZE_CORPSES=<n>, to see what bodies on the ground cost: the game goes straight into a
-    /// maze, and three seconds into a round, n droids are put down round the player and shot down
+    /// maze when it starts, and three seconds into a round, n droids are put down round the player and shot down
     /// there, once a round.
     fn debug_corpses(&mut self, ctx: &mut PluginContext) {
         let Some(count) = platform::var("MAZE_CORPSES").and_then(|n| n.trim().parse::<usize>().ok()) else {
             return;
         };
-        // Straight into a maze from the title, so a run can be measured without the menu.
+        // Straight into a maze from the title, the first time only, so a run can be measured
+        // without the menu and the menu is still there to go back to.
+        static STARTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
         if self.phase == Phase::Title {
-            self.play(ctx, Game::Maze);
+            if !STARTED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                self.play(ctx, Game::Maze);
+            }
             return;
         }
         if self.phase != Phase::Playing || self.round_time < 3.0 || self.round_time - ctx.dt >= 3.0 {
