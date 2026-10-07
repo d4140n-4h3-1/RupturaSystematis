@@ -108,8 +108,8 @@ their animations; the crate decides what they make of what is round them.
 
 6 October 2026:
 
-- **Battle royale.** Battle Royale in the main menu, on the map of your choice - the town or the
-  Grid: you and up to 15 droids - 16 in all - every one against every other. Each has three lives: shot down, you come
+- **Battle royale.** Battle Royale in the main menu, on the map of your choice - the town, the
+  Grid or Nexus: you and up to 15 droids - 16 in all - every one against every other. Each has three lives: shot down, you come
   back a few seconds later at a start inside the ring, and the third time you are out, told how
   you placed. The last one in wins. A ring of glowing posts closes in on the town in five stages,
   each somewhere new inside the last, hurting anyone caught outside it. `MAZE_ROYALE` sets how
@@ -136,6 +136,16 @@ their animations; the crate decides what they make of what is round them.
   the nearest droids first, fading each in and out - 64 at once, the engine's most (raised from
   16). It costs nothing measurable. Only where shadows are traced, so not in the browser, where
   their light would shine through walls; `MAZE_AREA_LIGHTS=0` turns them off.
+- **Nexus**, `data/arena/br_nexus.glb`, a third battle royale map, built by
+  `data/arena/br_nexus.py`: a futuristic city on an octagonal platform in the void, every edge
+  traced in light, with nothing in it a house or an office. A spire, the Core, tapers 48 m up
+  from the middle with rings of light floating round it; round it a skyway, an octagonal ring of
+  walkway 7 m up on lit pillars, stairs up from the four ways; on the diagonals four ziggurats
+  turned to face the Core, three tiers each with stairs up the outside, a bridge from the skyway
+  landing on each one's second terrace; four ribbed domes; eight pods, discs on a single column
+  with stairs up and a lamp shining down under each; and bridges out to pads with lit obelisks.
+  The floor is ruled with lines of light running out from the plaza. Its lines of light light
+  what is round them, as on the Grid (`br_nexus.glow.json`).
 - **Lamps on floors over one another** each get their own: fixtures share a lamp only on the
   same floor.
 

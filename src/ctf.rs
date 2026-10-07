@@ -47,8 +47,18 @@ pub const GRID: Map = Map {
     night: true,
 };
 
+/// Nexus: a futuristic city traced in light, round a soaring spire, in the void.
+pub const NEXUS: Map = Map {
+    name: "Nexus",
+    path: "data/arena/br_nexus.glb",
+    about: "A city of light round a soaring spire: a skyway ring, ziggurats, domes and hovering pods.",
+    void: true,
+    open_sky: true,
+    night: true,
+};
+
 /// The maps battle royale is played on, picked from in the main menu.
-pub const ROYALE_MAPS: [Map; 2] = [TOWN, GRID];
+pub const ROYALE_MAPS: [Map; 3] = [TOWN, GRID, NEXUS];
 
 /// The sky round a map in the void, each face of it.
 pub const VOID_SKY: &str = "data/skybox.png";

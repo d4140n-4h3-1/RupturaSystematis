@@ -212,14 +212,17 @@ mod tests {
     }
 
     #[test]
-    fn the_grid_has_its_lines_of_light() {
-        let glow = GlowLights::load(concat!(env!("CARGO_MANIFEST_DIR"), "/data/arena/br_grid.glb")).expect("lines of light");
-        assert!(glow.pieces.len() > 1000);
-        // Every piece is short enough to light round it, and lies on the platform or its pads.
-        for piece in &glow.pieces {
-            let [u, w] = piece.light.edges;
-            assert!(u.norm() <= 3.01 && w.norm() <= u.norm() + 1.0e-3, "{u} {w}");
-            assert!(piece.middle.x.abs() < 140.0 && piece.middle.z.abs() < 140.0 && piece.middle.y > -3.0);
+    fn the_grid_and_nexus_have_their_lines_of_light() {
+        for map in ["br_grid", "br_nexus"] {
+            let path = format!("{}/data/arena/{map}.glb", env!("CARGO_MANIFEST_DIR"));
+            let glow = GlowLights::load(&path).expect("lines of light");
+            assert!(glow.pieces.len() > 1000, "{map}");
+            // Every piece is short enough to light round it, and lies on the platform or its pads.
+            for piece in &glow.pieces {
+                let [u, w] = piece.light.edges;
+                assert!(u.norm() <= 3.01 && w.norm() <= u.norm() + 1.0e-3, "{map}: {u} {w}");
+                assert!(piece.middle.x.abs() < 145.0 && piece.middle.z.abs() < 145.0 && piece.middle.y > -3.0, "{map}");
+            }
         }
     }
 }

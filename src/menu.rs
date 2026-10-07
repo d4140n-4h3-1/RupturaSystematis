@@ -244,8 +244,8 @@ impl MainMenu {
             "Maze: find the way out of a new maze each round.\n\
              Capture the Flag: hack red's firewall, take their flag and bring it home,\n\
              with blue's droids and drone on your side, on the map of your choice.\n\
-             Battle Royale: everyone against everyone inside a closing ring, in a town\n\
-             or on the Grid; the last one standing wins.",
+             Battle Royale: everyone against everyone inside a closing ring, in a town,\n\
+             on the Grid or in Nexus; the last one standing wins.",
         )
         .with_font_size(16.0.into())
         .with_horizontal_text_alignment(HorizontalAlignment::Center)
