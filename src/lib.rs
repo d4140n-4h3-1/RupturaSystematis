@@ -46,6 +46,7 @@ mod generate;
 mod hud;
 mod inhabitants;
 mod inward;
+mod latency;
 mod layout;
 mod level;
 mod menu;

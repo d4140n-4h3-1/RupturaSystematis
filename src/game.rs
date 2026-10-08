@@ -17,6 +17,7 @@ use crate::{
     drone::{self, Drone, DroneLines, State, Target, DRONE_LINES, DRONE_MODEL},
     drone_shot::{Shots, SHOT_MODEL},
     alarm::AlarmSound,
+    latency::OutputLatency,
     health::{Health, HealthSounds, Healing, Heard},
     heist::{self, Doors, Heist, Plan, Stage},
     hearts::{self, Hearts, HEART_MODEL, SHIELD_LAMP, SHIELD_PICKUP_MODEL, STAMINA_LAMP, STAMINA_PICKUP_MODEL},
@@ -170,6 +171,8 @@ struct Talking {
     voice: Handle<Node>,
     /// The line it is about to say, while it is being made.
     making: Option<Making>,
+    /// How long until the line it is saying is heard, and is shown then.
+    heard_in: Option<f32>,
 }
 
 /// Something a droid says out loud by itself, being made into a voice: which droid, as an index
@@ -178,6 +181,8 @@ struct Talking {
 struct Barking {
     droid: usize,
     making: Making,
+    /// What is shown of it once it is heard, as the player has subtitles.
+    note: Option<String>,
 }
 
 /// A line being made into a voice, away from the game so as not to hold it up: the samples to
@@ -363,6 +368,15 @@ pub struct MazeGame {
     #[visit(skip)]
     #[reflect(hidden)]
     barks: Vec<Barking>,
+    /// What droids have said out loud and is yet to be heard: how long until it is, and what is
+    /// shown of it then.
+    #[visit(skip)]
+    #[reflect(hidden)]
+    barks_heard_in: Vec<(f32, String)>,
+    /// How late sound is heard, which what is shown along with it waits for.
+    #[visit(skip)]
+    #[reflect(hidden)]
+    latency: OutputLatency,
     /// The droid the player could talk to right now, as an index into the inhabitants, and who
     /// it is as the hint to talk names it.
     #[visit(skip)]
@@ -566,6 +580,7 @@ impl MazeGame {
             area_lights,
             health_sounds: HealthSounds::make(),
             alarm_sound: AlarmSound::make(),
+            latency: OutputLatency::watch(),
             ..Default::default()
         }
     }
@@ -2060,7 +2075,7 @@ impl MazeGame {
     }
 
     /// Has the `n`th droid say `bark`, feeling `mood`: out loud once the voice is made, and on
-    /// screen straight away, as the player has subtitles.
+    /// screen once that is heard, as the player has subtitles.
     fn say_bark(&mut self, n: usize, bark: &Bark, mood: Mood) {
         let (Some(script), Some((character, code))) = (&self.script, self.inhabitants.who(n))
         else {
@@ -2074,14 +2089,19 @@ impl MazeGame {
         if self.subtitles.english && !bark.means.is_empty() {
             lines.push(bark.means.clone());
         }
-        if !lines.is_empty() {
+        let note = (!lines.is_empty()).then(|| {
             let who = format!("{} {code}", character.name.to_uppercase());
-            self.hud.show_note(format!("{who}: {}", lines.join("\n")));
-        }
-        let Some(voices) = &self.voices else {
-            return;
-        };
-        let Some(voice) = voices.voice(&character.name) else {
+            format!("{who}: {}", lines.join("\n"))
+        });
+        let Some((voices, voice)) = self
+            .voices
+            .as_ref()
+            .and_then(|voices| Some((voices, voices.voice(&character.name)?)))
+        else {
+            // Never heard, so shown straight away.
+            if let Some(note) = note {
+                self.hud.show_note(note);
+            }
             return;
         };
         let sound = voices.speak(&bark.says, voice, pitch(voices, code, mood));
@@ -2093,26 +2113,42 @@ impl MazeGame {
         self.barks.push(Barking {
             droid: n,
             making: Making(receiver, reach),
+            note,
         });
     }
 
-    /// Says each bark that has been made into a voice, from its droid's face.
+    /// Says each bark that has been made into a voice, from its droid's face, and shows what it
+    /// says once that is heard.
     fn bark_when_made(&mut self, ctx: &mut PluginContext) {
+        for (heard_in, _) in &mut self.barks_heard_in {
+            *heard_in -= ctx.dt;
+        }
+        for (_, note) in self.barks_heard_in.extract_if(.., |(heard_in, _)| *heard_in <= 0.0) {
+            self.hud.show_note(note);
+        }
         let Some(voices) = &self.voices else {
             return;
         };
         let graph = &mut ctx.scenes[self.scene].graph;
         let inhabitants = &self.inhabitants;
-        self.barks.retain(
+        let latency = self.latency.seconds();
+        let mut heard = Vec::new();
+        self.barks.retain_mut(
             |Barking {
                  droid,
                  making: Making(receiver, reach),
+                 note,
              }| {
                 let samples = match receiver.try_recv() {
                     Ok(samples) => samples,
                     Err(std::sync::mpsc::TryRecvError::Empty) => return true,
-                    Err(std::sync::mpsc::TryRecvError::Disconnected) => return false,
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        // Never heard, so shown now.
+                        heard.extend(note.take().map(|note| (0.0, note)));
+                        return false;
+                    }
                 };
+                heard.extend(note.take().map(|note| (latency, note)));
                 if let (Some(face), Some(buffer)) = (
                     inhabitants.face(graph, *droid),
                     formants::playable(samples, voices.sample_rate),
@@ -2129,6 +2165,7 @@ impl MazeGame {
                 false
             },
         );
+        self.barks_heard_in.extend(heard);
     }
 
     /// The player has been caught by the `n`th droid: they stop where they are, and are told so
@@ -2390,6 +2427,7 @@ impl MazeGame {
             who,
             voice: Handle::NONE,
             making: None,
+            heard_in: None,
         });
         self.speak(ctx);
     }
@@ -2399,6 +2437,8 @@ impl MazeGame {
     /// [`MazeGame::keep_talking`].
     fn speak(&mut self, ctx: &mut PluginContext) {
         self.hush(ctx);
+        // Shown straight away unless it is to be heard.
+        self.dialogue.set_heard(ctx.user_interfaces.first(), true);
         let echo = self.voice_echo();
         let (Some(talking), Some(script), Some(voices)) =
             (self.talking.as_mut(), &self.script, &self.voices)
@@ -2416,18 +2456,34 @@ impl MazeGame {
         let (rate, reach) = (voices.sample_rate, sound.reach);
         let receiver = platform::in_background(move || echoed(synth::make(&sound, rate), rate, echo));
         talking.making = Some(Making(receiver, reach));
+        self.dialogue.set_heard(ctx.user_interfaces.first(), false);
     }
 
-    /// Says the line that has been made into a voice, if it is ready, from the droid's face.
+    /// Says the line that has been made into a voice, if it is ready, from the droid's face, and
+    /// shows it once it is heard.
     fn say_when_made(&mut self, ctx: &mut PluginContext) {
+        let ui = ctx.user_interfaces.first();
         let (Some(talking), Some(voices)) = (self.talking.as_mut(), &self.voices) else {
             return;
         };
+        if let Some(heard_in) = &mut talking.heard_in {
+            *heard_in -= ctx.dt;
+            if *heard_in <= 0.0 {
+                talking.heard_in = None;
+                self.dialogue.set_heard(ui, true);
+            }
+        }
         let Some(Making(receiver, reach)) = &talking.making else {
             return;
         };
-        let Ok(samples) = receiver.try_recv() else {
-            return;
+        let samples = match receiver.try_recv() {
+            Ok(samples) => samples,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                talking.making = None;
+                self.dialogue.set_heard(ui, true);
+                return;
+            }
         };
         let reach = *reach;
         talking.making = None;
@@ -2436,8 +2492,10 @@ impl MazeGame {
             self.inhabitants.face(graph, talking.droid),
             formants::playable(samples, voices.sample_rate),
         ) else {
+            self.dialogue.set_heard(ui, true);
             return;
         };
+        talking.heard_in = Some(self.latency.seconds());
         talking.voice = SoundBuilder::new(
             BaseBuilder::new()
                 .with_local_transform(TransformBuilder::new().with_local_position(face).build()),
@@ -2462,6 +2520,7 @@ impl MazeGame {
         talking.voice = Handle::NONE;
         // Whatever was being made is not wanted any more.
         talking.making = None;
+        talking.heard_in = None;
     }
 
     /// Says the `choice`th reply on offer, and shows what comes of it, or ends the conversation.

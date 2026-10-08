@@ -143,6 +143,9 @@ pub struct DialogueScreen {
     /// Which of what is said is shown, and whether the line showing has a meaning to show.
     subtitles: Subtitles,
     has_means: bool,
+    /// Whether what is said has been heard yet: until then it is not shown, so as not to come
+    /// before the voice.
+    heard: bool,
     prompt: Handle<Text>,
     open: bool,
 }
@@ -163,6 +166,7 @@ impl Default for DialogueScreen {
             palette: GREEN,
             subtitles: Subtitles::default(),
             has_means: false,
+            heard: true,
             prompt: Handle::NONE,
             open: false,
         }
@@ -329,11 +333,19 @@ impl DialogueScreen {
         self.show_subtitles(ui);
     }
 
+    /// Shows what is said once it has been `heard`, and hides it until then.
+    pub fn set_heard(&mut self, ui: &UserInterface, heard: bool) {
+        if self.heard != heard {
+            self.heard = heard;
+            self.show_subtitles(ui);
+        }
+    }
+
     fn show_subtitles(&self, ui: &UserInterface) {
-        ui.send(self.says, WidgetMessage::Visibility(self.subtitles.latin));
+        ui.send(self.says, WidgetMessage::Visibility(self.heard && self.subtitles.latin));
         ui.send(
             self.means,
-            WidgetMessage::Visibility(self.subtitles.english && self.has_means),
+            WidgetMessage::Visibility(self.heard && self.subtitles.english && self.has_means),
         );
         let size = if self.subtitles.latin {
             MEANS_SIZE

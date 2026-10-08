@@ -749,6 +749,7 @@ logs goes to the browser's console there.
 | `MAZE_ROYALE=<n>`        | How many play battle royale, you included, from 2 to 16. The default is 16. |
 | `MAZE_DEBUG=1`           | Logs the walkable map of each level, and rendering statistics once a second. |
 | `MAZE_WINDOWED=1`        | Opens the game in a window instead of filling the screen.               |
+| `MAZE_AUDIO_LATENCY_MS=<n>` | How late sound reaches you, in milliseconds. Subtitles wait that long after a voice starts. On Linux the game works it out itself, guessing for Bluetooth earphones, which the sound server cannot measure. |
 | `MAZE_VSYNC=0`           | Uncaps the frame rate, for measuring what a frame costs.                |
 | `MAZE_RT=0`              | Shadow maps instead of ray-traced shadows.                              |
 | `MAZE_HARD_SHADOWS=1`    | Ray-traced shadows with sharp edges instead of soft ones.               |
