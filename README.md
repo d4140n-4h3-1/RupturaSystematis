@@ -124,8 +124,9 @@ their animations; the crate decides what they make of what is round them.
   water, and gates out east and west to pads over the void. Windows are lit or dark at random,
   warm in homes, cool in offices, in facades of glass, bronze, concrete, stone, brick and sand;
   streets have dashed lines, crossings, lamps, trees and parked light cycles. Empties named
-  `place_*` mark its landmarks for a story to use. Until there is one, play it as a maze, a
-  crossing of the city: `MAZE_MODEL=data/story/story_urbs.glb`.
+  `place_*` mark its landmarks for a story to use.
+- **Story**, in the main menu, for the story to come. For now it is a crossing of Urbs: off the
+  train at the station, find the way through the city to Summa, its tallest tower.
 - **No more walking under the platform.** On maps in the void, a street too close to a wall to
   stand on had the platform's underside taken for its ground, and from there the walk spread
   under the whole platform: more than half of what was walkable in Nexus and Helix was under it,

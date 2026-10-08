@@ -38,9 +38,9 @@ const FLAG_MIDDLE: f32 = 2.0;
 /// where someone starts in battle royale (see [`crate::royale`]), or a heist's way in, doors,
 /// vault and its terminals, ways out, guards, drones and where its waves come from (see
 /// [`crate::heist`]).
-const MARKERS: [&str; 12] = [
+const MARKERS: [&str; 13] = [
     "flag_", "computer_", "post_", "spawn_", "heist_start", "door_", "loot", "extract_", "guard_", "drone_",
-    "terminal_", "wave_",
+    "terminal_", "wave_", "place_",
 ];
 
 /// Somewhere a maze model marks with an empty, by the empty's name, for the game to put

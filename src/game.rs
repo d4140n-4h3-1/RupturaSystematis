@@ -112,6 +112,10 @@ const ROYALE_HEARD_WITHIN: f32 = 30.0;
 /// In capture the flag, the side the player takes the flag from.
 const ENEMY: Side = PLAYERS.other();
 
+/// Where a place for a story is set off across from, and the way across is to: its markers.
+const STORY_START: &str = "place_station";
+const STORY_END: &str = "place_summa";
+
 /// How close to the exit counts as reaching it.
 const EXIT_RADIUS: f32 = 1.5;
 /// In capture the flag, how close to the middle of the player's own flag counts as having
@@ -296,6 +300,8 @@ pub struct MazeGame {
     #[visit(skip)]
     #[reflect(hidden)]
     heist: Option<Heist>,
+    /// Whether the round crosses a place for a story, from [`STORY_START`] to [`STORY_END`].
+    story: bool,
     #[visit(skip)]
     #[reflect(hidden)]
     doors: Doors,
@@ -673,6 +679,7 @@ impl MazeGame {
             Game::CaptureTheFlag(map) => Some(MAPS[map].path.to_string()),
             Game::BattleRoyale(map) => Some(ctf::ROYALE_MAPS[map].path.to_string()),
             Game::Heist(map) => Some(ctf::HEIST_MAPS[map].path.to_string()),
+            Game::Story(map) => Some(ctf::STORY_MAPS[map].path.to_string()),
             Game::Maze => platform::var("MAZE_MODEL"),
         };
         match model {
@@ -895,14 +902,20 @@ impl MazeGame {
         let Some(rng) = self.rng.as_mut() else {
             return;
         };
-        let round = match self.level.goal {
+        // A place for a story is crossed from its station to its tallest tower.
+        let place = |name: &str| self.level.markers.iter().find(|m| m.name == name).map(|m| m.position);
+        let story = place(STORY_START).zip(place(STORY_END));
+        let round = match (story, self.level.goal) {
+            (Some((from, to)), _) => {
+                survey::nearest_walkable(grid, *origin, from).zip(survey::nearest_walkable(grid, *origin, to))
+            }
             // Something in the model is the thing to find, so the walk to it should be as long as
             // the maze allows.
-            Some(goal) => {
+            (None, Some(goal)) => {
                 let exit = survey::nearest_walkable(grid, *origin, goal);
                 exit.and_then(|exit| grid.farthest_from(exit).map(|(start, _)| (start, exit)))
             }
-            None => layout::plan_round(grid, |n| rng.below(n)),
+            (None, None) => layout::plan_round(grid, |n| rng.below(n)),
         };
         let Some((start, exit)) = round else {
             Log::err("Maze: found no walkable ground to play on");
@@ -966,6 +979,10 @@ impl MazeGame {
         self.set_banner(ctx, "");
         self.start_royale(ctx);
         self.start_heist(ctx);
+        self.story = story.is_some();
+        if self.story {
+            self.hud.show_note("Story: off the train at the station. Find the way to Summa, the tallest tower.".to_string());
+        }
     }
 
     /// A map with starts for everyone, and no flags, is played as battle royale: the player at
@@ -3532,6 +3549,7 @@ impl Plugin for MazeGame {
                             "{} in {}{}\nPress N for {}",
                             match self.ctf {
                                 Some(_) => format!("You captured {}'s flag", ENEMY.name()),
+                                None if self.story => "You reached Summa".to_string(),
                                 None => "You escaped".to_string(),
                             },
                             hud::format_time(self.round_time),
