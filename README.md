@@ -109,16 +109,18 @@ their animations; the crate decides what they make of what is round them.
 8 October 2026:
 
 - **Urbs**, `data/story/story_urbs.glb`, a whole city for a story mode to come, built by
-  `data/story/story_urbs.py` with Nexus's helpers: six by six blocks between streets 16 m wide,
-  on a platform 400 m across in the void - four times Nexus's ground - and every building its own.
+  `data/story/story_urbs.py` with Nexus's helpers: ten by ten blocks between streets 16 m wide,
+  on a platform 656 m across in the void - eleven times Nexus's ground - and nearly 500
+  buildings, every one its own.
   Downtown, towers 70 to 150 m: stepped back as they rise, round, twisting a quarter turn,
   tapering to a point, wedges with a sloping face, towers on podiums of shops, and twin towers
   joined by a skybridge; Summa, the tallest, 185 m, over a terrace climbed from the street.
   Round it, midtown: mid-rise towers, apartment blocks with balconies, courtyard blocks round a
   garden, buildings on stilts over a lit open floor, and rows of shops with awnings and signs.
-  Further out, low apartments, townhouses, terraced housing climbed by stairs; south of a canal,
+  Further out, low apartments, townhouses, terraced housing climbed by stairs, and out to the
+  edge the suburbs, streets of townhouses and terraces with yards between; south of a canal,
   the docks, with warehouses, sawtooth-roofed works, cooling towers, container stacks and a crane.
-  And the central plaza and its monument, two parks with ponds, the market, the civic hall under
+  And the central plaza and its monument, four parks with ponds, the market, the civic hall under
   a ribbed dome behind its colonnade, the arena, an elevated railway down the middle avenue with
   a station climbed by stairs, bridges over the canal at every street with steps down to its
   water, and gates out east and west to pads over the void. Windows are lit or dark at random,
