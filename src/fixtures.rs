@@ -294,6 +294,15 @@ fn surface_bounds(data: &SurfaceResource, transform: &Matrix4<f32>) -> AxisAlign
     bounds
 }
 
+/// Whether `mesh` is nothing but a lamp's glass, which is no prop to be found.
+pub fn is_lamp_glass(mesh: &Mesh) -> bool {
+    !mesh.surfaces().is_empty()
+        && mesh
+            .surfaces()
+            .iter()
+            .all(|surface| surface.material().state().data_ref().is_some_and(is_glass_marker))
+}
+
 /// The glass of the maze model: surfaces colored pure magenta.
 fn is_glass_marker(material: &Material) -> bool {
     matches!(

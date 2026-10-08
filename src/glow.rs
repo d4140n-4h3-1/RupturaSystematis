@@ -212,6 +212,20 @@ mod tests {
     }
 
     #[test]
+    fn urbs_has_its_lines_of_light_near_the_ground() {
+        let path = format!("{}/{}", env!("CARGO_MANIFEST_DIR"), crate::ctf::URBS.path);
+        let glow = GlowLights::load(&path).expect("lines of light");
+        assert!(glow.pieces.len() > 1000);
+        for piece in &glow.pieces {
+            let [u, w] = piece.light.edges;
+            assert!(u.norm() <= 3.01 && w.norm() <= u.norm() + 1.0e-3, "{u} {w}");
+            // On the platform, its gates or its railway, and no higher than lines are lit.
+            assert!(piece.middle.x.abs() < 265.0 && piece.middle.z.abs() < 265.0, "{}", piece.middle);
+            assert!(piece.middle.y > -3.0 && piece.middle.y < 12.0, "{}", piece.middle);
+        }
+    }
+
+    #[test]
     fn the_grid_and_nexus_have_their_lines_of_light() {
         for map in ["br_grid", "br_nexus"] {
             let path = format!("{}/data/arena/{map}.glb", env!("CARGO_MANIFEST_DIR"));

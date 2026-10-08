@@ -106,6 +106,32 @@ their animations; the crate decides what they make of what is round them.
 
 ### The game
 
+8 October 2026:
+
+- **Urbs**, `data/story/story_urbs.glb`, a whole city for a story mode to come, built by
+  `data/story/story_urbs.py` with Nexus's helpers: six by six blocks between streets 16 m wide,
+  on a platform 400 m across in the void - four times Nexus's ground - and every building its own.
+  Downtown, towers 70 to 150 m: stepped back as they rise, round, twisting a quarter turn,
+  tapering to a point, wedges with a sloping face, towers on podiums of shops, and twin towers
+  joined by a skybridge; Summa, the tallest, 185 m, over a terrace climbed from the street.
+  Round it, midtown: mid-rise towers, apartment blocks with balconies, courtyard blocks round a
+  garden, buildings on stilts over a lit open floor, and rows of shops with awnings and signs.
+  Further out, low apartments, townhouses, terraced housing climbed by stairs; south of a canal,
+  the docks, with warehouses, sawtooth-roofed works, cooling towers, container stacks and a crane.
+  And the central plaza and its monument, two parks with ponds, the market, the civic hall under
+  a ribbed dome behind its colonnade, the arena, an elevated railway down the middle avenue with
+  a station climbed by stairs, bridges over the canal at every street with steps down to its
+  water, and gates out east and west to pads over the void. Windows are lit or dark at random,
+  warm in homes, cool in offices, in facades of glass, bronze, concrete, stone, brick and sand;
+  streets have dashed lines, crossings, lamps, trees and parked light cycles. Empties named
+  `place_*` mark its landmarks for a story to use. Until there is one, play it as a maze, a
+  crossing of the city: `MAZE_MODEL=data/story/story_urbs.glb`.
+- **No more walking under the platform.** On maps in the void, a street too close to a wall to
+  stand on had the platform's underside taken for its ground, and from there the walk spread
+  under the whole platform: more than half of what was walkable in Nexus and Helix was under it,
+  where droids could be put down. Now a floor under one with no room round it is only walked to,
+  never taken for the ground.
+
 6 October 2026:
 
 - **Battle royale.** Battle Royale in the main menu, on the map of your choice - the Grid or

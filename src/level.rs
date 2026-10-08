@@ -275,7 +275,8 @@ fn landmark(graph: &Graph, root: Handle<Node>) -> Option<Vector3<f32>> {
     let mut groups: Vec<AxisAlignedBoundingBox> = Vec::new();
     for handle in graph.traverse_handle_iter(root) {
         let node = &graph[handle];
-        if node.cast::<Mesh>().is_none() {
+        // A lamp's glass is small, but it is the lamp, not something to find.
+        if node.cast::<Mesh>().is_none_or(fixtures::is_lamp_glass) {
             continue;
         }
         let bounds = node.world_bounding_box();

@@ -925,6 +925,9 @@ impl MazeGame {
         // On their floors: up on a balcony, say, rather than in the ground under it.
         let start_position = grid.on_floor(*origin, start);
         let exit_position = grid.on_floor(*origin, exit);
+        if platform::var("MAZE_DEBUG").is_some() {
+            Log::info(format!("Maze: starts at {start_position:?}, ends at {exit_position:?}"));
+        }
 
         let scene = &mut ctx.scenes[self.scene];
         // Light whatever marks the end: the model's own landmark if it has one, otherwise the

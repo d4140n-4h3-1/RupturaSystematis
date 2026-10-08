@@ -91,12 +91,31 @@ pub const HELIX: Map = Map {
 /// The districts heists are played in, picked from in the main menu (see [`crate::heist`]).
 pub const HEIST_MAPS: [Map; 3] = [AURUM, CORTEX, HELIX];
 
+/// Urbs: a whole city in the void, for a story to be told in. As yet it is played as a maze,
+/// with `MAZE_MODEL=data/story/story_urbs.glb`: the round is to find the way across it.
+pub const URBS: Map = Map {
+    name: "Urbs",
+    path: "data/story/story_urbs.glb",
+    about: "A whole city: towers downtown, homes and shops round them, the docks over the canal.",
+    void: true,
+    open_sky: true,
+    night: true,
+    echoes: true,
+};
+
+/// The places a story could be told in.
+pub const STORY_MAPS: [Map; 1] = [URBS];
+
 /// The sky round a map in the void, each face of it.
 pub const VOID_SKY: &str = "data/skybox.png";
 
 /// The map whose model is at `path`, if one is.
 pub fn map_at(path: &str) -> Option<&'static Map> {
-    MAPS.iter().chain(&ROYALE_MAPS).chain(&HEIST_MAPS).find(|map| map.path == path)
+    MAPS.iter()
+        .chain(&ROYALE_MAPS)
+        .chain(&HEIST_MAPS)
+        .chain(&STORY_MAPS)
+        .find(|map| map.path == path)
 }
 
 /// The maps it can be played on, picked from in the main menu.
@@ -219,7 +238,7 @@ mod tests {
         for map in MAPS {
             assert!(dir.join(map.path).is_file(), "{} has no model at {}", map.name, map.path);
         }
-        for map in ROYALE_MAPS.iter().chain(&HEIST_MAPS) {
+        for map in ROYALE_MAPS.iter().chain(&HEIST_MAPS).chain(&STORY_MAPS) {
             assert!(dir.join(map.path).is_file(), "{} has no model at {}", map.name, map.path);
         }
         assert!(dir.join(VOID_SKY).is_file(), "no sky for the void at {VOID_SKY}");

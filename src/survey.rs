@@ -67,10 +67,14 @@ pub fn survey(
     // it all, and never less far down than a meter under the ground.
     let bottom = (min.y - 1.0).min(-1.0);
     let mut floors: Vec<Vec<f32>> = Vec::with_capacity(width * depth);
+    // Whether each cell's topmost floor is the first floor down, with open air over it.
+    let mut open: Vec<bool> = Vec::with_capacity(width * depth);
     for z in 0..depth {
         for x in 0..width {
             let spot = cell_center(origin, x, z);
-            floors.push(floors_at(graph, maze, spot, (max.y + 1.0, bottom), open_sky));
+            let (cell, is_open) = floors_at(graph, maze, spot, (max.y + 1.0, bottom), open_sky);
+            floors.push(cell);
+            open.push(is_open);
         }
     }
     let storeys = floors.iter().map(Vec::len).max().unwrap_or(1).clamp(1, MOST_STOREYS);
@@ -89,7 +93,7 @@ pub fn survey(
     let mut queue = VecDeque::new();
     for (i, cell) in floors.iter().enumerate() {
         if let Some((storey, &floor)) = cell.iter().enumerate().take(storeys).last() {
-            if floor <= GROUND {
+            if open[i] && floor <= GROUND {
                 queue.push_back(grid.on_storey((i % width, i / width), storey));
             }
         }
@@ -105,7 +109,10 @@ pub fn survey(
         let here = grid.floor(cell.0, cell.1);
         // The first floor down at each spot - the last, bottom up - has open air over it; only a
         // floor under another could be the inside of something solid, and needs a clear way in.
-        let first = |plan: (usize, usize), storey: usize| storey + 1 == floors[plan.1 * width + plan.0].len().min(storeys);
+        let first = |plan: (usize, usize), storey: usize| {
+            let i = plan.1 * width + plan.0;
+            open[i] && storey + 1 == floors[i].len().min(storeys)
+        };
         let here_first = first((x, z), grid.storey(cell));
         let neighbours = [(x.wrapping_sub(1), z), (x + 1, z), (x, z.wrapping_sub(1)), (x, z + 1)];
         for (nx, nz) in neighbours {
@@ -210,7 +217,8 @@ pub fn draw_map(grid: &WalkGrid, start: (usize, usize), exit: (usize, usize)) ->
     text
 }
 
-/// The floors at `spot`, bottom up: every surface with headroom over it (see [`roomy`] for room
+/// The floors at `spot`, bottom up, and whether the topmost of them is the first floor down,
+/// with open air over it: every surface with headroom over it (see [`roomy`] for room
 /// round it, which is asked later), found
 /// by dropping a ray from `top`, over everything, down to `bottom`, under everything, through all
 /// of the maze, surface by surface - a cast meets only the first surface of a collider. The first
@@ -224,7 +232,7 @@ fn floors_at(
     spot: Vector3<f32>,
     (top, bottom): (f32, f32),
     open_sky: bool,
-) -> Vec<f32> {
+) -> (Vec<f32>, bool) {
     /// Below a surface, to cast on from past it; and the most surfaces a cell is looked through.
     const PAST: f32 = 0.01;
     const MOST: usize = 32;
@@ -240,13 +248,16 @@ fn floors_at(
         heights.push(hit.y);
         from = hit.y - PAST;
     }
-    // The first floor down is the topmost with room round it, as it always was; those under it
-    // are asked for room only if the survey walks to them.
+    // The first floor down needs room round it to be stood on. Without, it is no floor, and
+    // those under it are not the first floor down either: they may be inside something solid -
+    // under a street too close to a wall, a platform's underside - and can only be walked to.
     let mut floors = floors_of(&heights, open_sky);
-    let first = floors.iter().position(|&floor| roomy(graph, spot, floor)).unwrap_or(floors.len());
-    floors.drain(..first);
+    let open = floors.first().is_some_and(|&floor| roomy(graph, spot, floor));
+    if !open && !floors.is_empty() {
+        floors.remove(0);
+    }
     floors.reverse();
-    floors
+    (floors, open)
 }
 
 /// Whether there is room round the middle of a cell at `spot` to stand on `floor`: nothing
