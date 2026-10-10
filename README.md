@@ -108,6 +108,8 @@ their animations; the crate decides what they make of what is round them.
 
 10 October 2026:
 
+- **Reparators in orange**, no longer near enough red to pass for a hostile droid.
+
 - **Stores and banks to rob in Urbs.** Thirteen stores to walk into, each with a computer at the
   back keeping its takings, 40 to 600 CR. Six banks, each with four computers holding 1,000 to
   5,000 CR apiece behind a longer breach against a faster trace; clearing one sets off the alarm

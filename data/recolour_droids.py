@@ -21,9 +21,10 @@ LIVERIES = {
         "Material.003": [1, 0, 0, 1],
         "Material.004": [1, 0, 0, 1],
     },
+    # The Reparators, orange (as ~/Documents/blender/maintenance/droid_full.blend has them).
     "droid_maintenance.glb": {
-        "Material.003": [0.9734454154968262, 0.07036012411117554, 0.002428215928375721, 1],
-        "Material.004": [0.9734454154968262, 0.07036012411117554, 0.002428215928375721, 1],
+        "Material.003": [1, 0.3, 0, 1],
+        "Material.004": [1, 0.3, 0, 1],
     },
     "droid_security.glb": {
         "Material.003": [0, 0, 1, 1],
