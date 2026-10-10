@@ -29,8 +29,10 @@ fn main() {
     let moving = effects.moving_things();
     // And what glows: the computers' frames.
     let area_lights = effects.area_lights();
+    // And where nothing should cast shadows: the cities traced in light.
+    let shadows = effects.shadow_switch();
     executor.add_plugin(effects);
-    executor.add_plugin(MazeGame::new(moving, area_lights));
+    executor.add_plugin(MazeGame::new(moving, area_lights, shadows));
     executor.run()
 }
 

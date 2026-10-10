@@ -265,6 +265,11 @@ pub struct MazeGame {
     #[visit(skip)]
     #[reflect(hidden)]
     area_lights: fyrox_gfx::AreaLights,
+    /// Whether anything casts shadows: not in a city traced in light (see [`ctf::Map::night`]),
+    /// whose look is its glow, and where a lamp's shadow is not worth what it costs.
+    #[visit(skip)]
+    #[reflect(hidden)]
+    shadows: fyrox_gfx::ShadowSwitch,
     /// The level's lines of light, lighting what is round them, if it has any (see [`glow`]).
     #[visit(skip)]
     #[reflect(hidden)]
@@ -581,12 +586,17 @@ pub struct MazeGame {
 }
 
 impl MazeGame {
-    /// The game, telling the graphics effects what moves through `moving`, and what glows through
-    /// `area_lights`.
-    pub fn new(moving: fyrox_gfx::MovingThings, area_lights: fyrox_gfx::AreaLights) -> Self {
+    /// The game, telling the graphics effects what moves through `moving`, what glows through
+    /// `area_lights`, and whether anything casts shadows through `shadows`.
+    pub fn new(
+        moving: fyrox_gfx::MovingThings,
+        area_lights: fyrox_gfx::AreaLights,
+        shadows: fyrox_gfx::ShadowSwitch,
+    ) -> Self {
         Self {
             moving,
             area_lights,
+            shadows,
             health_sounds: HealthSounds::make(),
             alarm_sound: AlarmSound::make(),
             latency: OutputLatency::watch(),
@@ -685,6 +695,9 @@ impl MazeGame {
             Game::Story(map) => Some(ctf::STORY_MAPS[map].path.to_string()),
             Game::Maze => platform::var("MAZE_MODEL"),
         };
+        // No shadows in a city traced in light.
+        let night = model.as_deref().and_then(ctf::map_at).is_some_and(|map| map.night);
+        self.shadows.set_enabled(!night);
         match model {
             Some(path) => {
                 self.model = Some(resources.request::<Model>(&path));
@@ -693,7 +706,7 @@ impl MazeGame {
                     .map(|_| resources.request::<Texture>(ctf::VOID_SKY));
                 self.firewalls = Firewalls::request(resources);
                 self.doors = Doors::request(resources);
-                // Only where shadows are traced: elsewhere their light would shine through walls.
+                // Not on the web, which has never had them.
                 self.glow = if cfg!(target_arch = "wasm32") { None } else { GlowLights::load(&path) };
                 self.model_path = path;
             }

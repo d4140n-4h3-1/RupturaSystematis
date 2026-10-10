@@ -1,6 +1,7 @@
 //! Lines of light that light what is round them: the glowing trim of a map such as the Grid,
 //! shining on the walls and the floor by it - and on whoever is near it, in its colour, so that
-//! a droid by a lit wall stands out against it - with traced, soft shadows.
+//! a droid by a lit wall stands out against it. Every map with them is a city traced in light,
+//! where nothing casts shadows, so their light reaches through walls as far as it goes.
 //!
 //! A map's lines come from `<model>.glow.json` beside its model (see `data/arena/br_grid.py`),
 //! already cut into pieces a few meters long. There are thousands; the renderer lights only
