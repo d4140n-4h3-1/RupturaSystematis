@@ -106,6 +106,12 @@ their animations; the crate decides what they make of what is round them.
 
 ### The game
 
+10 October 2026:
+
+- **Droids a quarter the size** - each droid's file is 3.3 MB rather than 12, for the same 98
+  clips moving the same way: the bones that never move in any clip are no longer keyed in all
+  of them, nor the keys a straight line puts back. The site downloads 44 MB less.
+
 9 October 2026:
 
 - **Nothing ray traced in the cities traced in light** - the Grid, Nexus, the heist districts
