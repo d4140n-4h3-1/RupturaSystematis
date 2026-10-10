@@ -108,10 +108,10 @@ their animations; the crate decides what they make of what is round them.
 
 9 October 2026:
 
-- **No shadows in the cities traced in light** - the Grid, Nexus, the heist districts and Urbs:
-  their look is their glow, and a shadow from each of hundreds of street lamps cost more than it
-  showed. Urbs runs at about 20 frames a second where it ran at 8, the Grid at 58 where it ran at
-  43. Every other map still traces its shadows. The droids glow their own colours there, to be
+- **Nothing ray traced in the cities traced in light** - the Grid, Nexus, the heist districts
+  and Urbs: no shadows and no reflections. Their look is their glow, and a shadow from each of
+  hundreds of street lamps cost more than it showed. Urbs runs at about 20 frames a second where
+  it ran at 8, the Grid at 58 where it ran at 43. Every other map still traces its shadows. The droids glow their own colours there, to be
   seen across the dark.
 
 8 October 2026:

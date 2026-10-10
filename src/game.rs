@@ -265,11 +265,12 @@ pub struct MazeGame {
     #[visit(skip)]
     #[reflect(hidden)]
     area_lights: fyrox_gfx::AreaLights,
-    /// Whether anything casts shadows: not in a city traced in light (see [`ctf::Map::night`]),
-    /// whose look is its glow, and where a lamp's shadow is not worth what it costs.
+    /// Whether anything casts shadows, and whether the floors reflect: neither in a city traced
+    /// in light (see [`ctf::Map::night`]), whose look is its glow, and where no ray traced there
+    /// is worth what it costs.
     #[visit(skip)]
     #[reflect(hidden)]
-    shadows: fyrox_gfx::ShadowSwitch,
+    ray_tracing: [fyrox_gfx::Switch; 2],
     /// The level's lines of light, lighting what is round them, if it has any (see [`glow`]).
     #[visit(skip)]
     #[reflect(hidden)]
@@ -587,16 +588,17 @@ pub struct MazeGame {
 
 impl MazeGame {
     /// The game, telling the graphics effects what moves through `moving`, what glows through
-    /// `area_lights`, and whether anything casts shadows through `shadows`.
+    /// `area_lights`, and whether anything casts shadows or reflects through `ray_tracing`'s
+    /// switches.
     pub fn new(
         moving: fyrox_gfx::MovingThings,
         area_lights: fyrox_gfx::AreaLights,
-        shadows: fyrox_gfx::ShadowSwitch,
+        ray_tracing: [fyrox_gfx::Switch; 2],
     ) -> Self {
         Self {
             moving,
             area_lights,
-            shadows,
+            ray_tracing,
             health_sounds: HealthSounds::make(),
             alarm_sound: AlarmSound::make(),
             latency: OutputLatency::watch(),
@@ -695,9 +697,11 @@ impl MazeGame {
             Game::Story(map) => Some(ctf::STORY_MAPS[map].path.to_string()),
             Game::Maze => platform::var("MAZE_MODEL"),
         };
-        // No shadows in a city traced in light.
+        // No shadows or reflections - nothing ray traced - in a city traced in light.
         let night = model.as_deref().and_then(ctf::map_at).is_some_and(|map| map.night);
-        self.shadows.set_enabled(!night);
+        for switch in &self.ray_tracing {
+            switch.set_enabled(!night);
+        }
         match model {
             Some(path) => {
                 self.model = Some(resources.request::<Model>(&path));
