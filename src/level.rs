@@ -24,6 +24,7 @@ use fyrox::{
         base::BaseBuilder,
         collider::{Collider, ColliderBuilder, ColliderShape, GeometrySource},
         graph::Graph,
+        light::point::PointLight,
         mesh::Mesh,
         node::Node,
         rigidbody::{RigidBodyBuilder, RigidBodyType},
@@ -54,6 +55,10 @@ pub struct Marker {
 
 /// FBX models are authored in centimeters.
 const FBX_SCALE: f32 = 0.01;
+/// Out in the open, how far from the player a lamp lights its full, then fading out to nothing
+/// at the further distance, in meters. A city has hundreds of lamps in view, each of them lit
+/// separately whatever the few pixels it lights; further off, its glass still glows.
+const LAMPS_FADE: (f32, f32) = (50.0, 70.0);
 
 #[derive(Debug, Default, PartialEq)]
 pub struct Level {
@@ -65,8 +70,12 @@ pub struct Level {
     fixtures: Vec<AxisAlignedBoundingBox>,
     /// How close together fixtures can be and still share a lamp.
     lamp_sharing: f32,
-    /// The lamps, once the level is finished.
+    /// The lamps, once the level is finished, with how bright each was made and is lit now -
+    /// less, out in the open, far from the player (see [`LAMPS_FADE`]).
     lamps: Vec<Handle<Node>>,
+    lamp_brightness: Vec<(f32, f32)>,
+    /// Whether the lamps are switched on.
+    lamps_on: bool,
     /// What glows by itself - the fixtures' glass and the bulbs behind it - and goes dark with
     /// the lamps.
     glow: Glow,
@@ -201,6 +210,8 @@ impl Level {
             // fixture gets its own, since tiles are spaced for one each.
             lamp_sharing: if fixed { 4.0 } else { 0.0 },
             lamps: Vec::new(),
+            lamp_brightness: Vec::new(),
+            lamps_on: true,
             glow,
             goal,
             markers,
@@ -221,13 +232,25 @@ impl Level {
             culling.add_lamps(graph, &lamps);
         }
         self.nodes.extend(lamps.iter().copied());
+        self.lamp_brightness = lamps
+            .iter()
+            .map(|&lamp| {
+                let made = graph[lamp].cast::<PointLight>().map_or(1.0, |light| light.base_light_ref().intensity());
+                (made, made)
+            })
+            .collect();
         self.lamps = lamps;
     }
 
     /// Switches the level's lamps on or off, and everything that glows around them with them.
     pub fn set_lights(&mut self, graph: &mut Graph, on: bool) {
+        self.lamps_on = on;
         for &lamp in &self.lamps {
             graph[lamp].set_visibility(on);
+        }
+        // Out in the open, those too far off stay out: see to them afresh on the next update.
+        for (made, now) in &mut self.lamp_brightness {
+            *now = -*made;
         }
         // With culling, only the lamps near what the player can see are shown; it works out
         // which on its next update.
@@ -238,9 +261,31 @@ impl Level {
     }
 
     /// Draws and lights only what can be seen from where the player is, if the level is culled.
+    /// Without culling - a model rather than a random maze - the lamps far from the player fade
+    /// out instead (see [`LAMPS_FADE`]).
     pub fn cull(&mut self, graph: &mut Graph, player: Vector3<f32>) {
         if let Some(culling) = self.culling.as_mut() {
             culling.update(graph, player);
+        } else if self.lamps_on {
+            self.fade_lamps(graph, player);
+        }
+    }
+
+    /// Dims each lamp with how far it is from `player`, and puts out those too far to light
+    /// anything worth lighting.
+    fn fade_lamps(&mut self, graph: &mut Graph, player: Vector3<f32>) {
+        let (near, far) = LAMPS_FADE;
+        for (&lamp, (made, now)) in self.lamps.iter().zip(&mut self.lamp_brightness) {
+            let away = (graph[lamp].global_position() - player).norm();
+            let brightness = *made * ((far - away) / (far - near)).clamp(0.0, 1.0);
+            if brightness == *now {
+                continue;
+            }
+            *now = brightness;
+            graph[lamp].set_visibility(brightness > 0.0);
+            if let Some(light) = graph[lamp].cast_mut::<PointLight>() {
+                light.base_light_mut().set_intensity(brightness);
+            }
         }
     }
 
