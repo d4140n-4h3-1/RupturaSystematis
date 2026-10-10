@@ -71,7 +71,7 @@ mod third_person;
 mod view;
 mod viewmodel;
 
-pub use avatar::DROID_MODEL;
+pub use avatar::{set_body_glow, DROID_MODEL};
 use avatar::{heading, Avatar, Going};
 use fyrox::{
     core::{

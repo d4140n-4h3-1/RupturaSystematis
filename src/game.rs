@@ -42,7 +42,7 @@ use crate::{
     level::Level,
     menu::{Choice, Game, MainMenu, PauseMenu, Start},
     platform,
-    player::{Player, DROID_MODEL},
+    player::{set_body_glow, Player, DROID_MODEL},
     survey,
     tiles::{self, Measured, Prefabs},
 };
@@ -118,6 +118,9 @@ const STORY_END: &str = "place_summa";
 
 /// How close to the exit counts as reaching it.
 const EXIT_RADIUS: f32 = 1.5;
+/// How brightly the droids glow their own colours on a night map, as a share of the colour
+/// itself: enough to be seen across the dark, not so much as to lose their shape.
+const DROID_GLOW: f32 = 0.25;
 /// In capture the flag, how close to the middle of the player's own flag counts as having
 /// brought the enemy's home - from beside its plinth - and how high over a flag the marker shows where to go.
 const HOME_REACH: f32 = 2.5;
@@ -1435,13 +1438,26 @@ impl MazeGame {
         self.hostile_model = recoloured.then(|| resources.request::<Model>(HOSTILE_MODEL));
     }
 
+    /// Has the droids glow their own colours all over at night, the player's among them, or not
+    /// at all by day (see [`set_body_glow`]): the models are shared from one level to the next.
+    fn light_up_droids(&self) {
+        let glow = if self.night() { DROID_GLOW } else { 0.0 };
+        let models = self.kind_models.iter().flatten().chain(&self.hostile_model).chain(&self.droid_model);
+        for model in models.filter(|model| model.is_ok()) {
+            set_body_glow(model, glow);
+        }
+    }
+
     /// Puts the maze's inhabitants into it once there are droids to make them from, and moves
     /// them along. Whether any caught the player, and whose phase changed.
     fn update_inhabitants(&mut self, ctx: &mut PluginContext) -> News {
         let liveries = match self.inhabitants.is_populated() {
             true => None,
             false => match self.liveries() {
-                Some(liveries) => Some(liveries),
+                Some(liveries) => {
+                    self.light_up_droids();
+                    Some(liveries)
+                }
                 None => return News::default(),
             },
         };

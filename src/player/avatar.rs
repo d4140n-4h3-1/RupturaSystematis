@@ -446,6 +446,42 @@ fn claim_eyes(graph: &mut Graph, eyes: Handle<Node>) -> Option<Eyes> {
     Some(eyes)
 }
 
+/// The droid's body, all of it one colour: its kind's.
+const BODY: &str = "mesh_node";
+
+/// Has every droid made from `model` glow its own colour all over, `strength` as bright as the
+/// colour itself - its body, and the rim round its eyes, which is the body's colour - or not at
+/// all, with 0. In the dark of a night map, a droid with nothing to light it is still seen.
+///
+/// It is the model's own materials that glow, shared by every droid made from it, the player's
+/// too. The eyes' own glow is left as it is: the first of their surfaces, as [`claim_eyes`]
+/// finds it, with the rim the others.
+pub fn set_body_glow(model: &ModelResource, strength: f32) {
+    let model = model.data_ref();
+    let graph = &model.get_scene().graph;
+    let mut glowing: Vec<MaterialResource> = Vec::new();
+    for name in [BODY, EYES] {
+        let Some((_, node)) = graph.find_by_name_from_root(name) else {
+            continue;
+        };
+        let Some(mesh) = node.cast::<Mesh>() else {
+            continue;
+        };
+        let skip = if name == EYES { mesh.surfaces().first().map(|s| s.material().key()) } else { None };
+        for surface in mesh.surfaces() {
+            let material = surface.material();
+            if Some(material.key()) != skip && !glowing.iter().any(|had| had.key() == material.key()) {
+                glowing.push(material.clone());
+            }
+        }
+    }
+    for material in glowing {
+        material
+            .data_ref()
+            .set_property(EMISSION_STRENGTH, MaterialProperty::Vector3(Vector3::repeat(strength)));
+    }
+}
+
 /// The crosshair on the pistol's screen: a copy of its glowing material for the droid to itself,
 /// to flash, and how brightly it glows as it came.
 #[derive(Debug, Clone, PartialEq)]
