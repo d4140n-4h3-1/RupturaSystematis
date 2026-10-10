@@ -3,13 +3,19 @@
 //!
 //! Every computer carries some, whatever else it has on it - a random amount, most of them a few
 //! credits and now and then a good deal more (see [`Credits::random`]) - which clearing its hack
-//! transfers to the player (see [`crate::computer`]).
+//! transfers to the player (see [`crate::computer`]). A store's till keeps more, and a bank's
+//! computers a great deal more (see [`Credits::store`] and [`Credits::bank`]).
 
 use serde::{Deserialize, Deserializer};
 use std::{fmt, ops::AddAssign};
 
 /// How many credits a computer can carry at most, in whole credits.
 const MOST: f64 = 500.0;
+/// The least and the most a store's computer holds, and each of a bank's, in whole credits.
+const STORE: (f64, f64) = (40.0, 600.0);
+const BANK: (f64, f64) = (1_000.0, 5_000.0);
+/// And what a bank's vault holds.
+const VAULT: (f64, f64) = (10_000.0, 30_000.0);
 
 /// An amount of credits, in hundredths of a credit.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -39,6 +45,28 @@ impl Credits {
         let whole = (chance.powi(3) * MOST) as u64;
         let cents = below(100) as u64;
         Self::new(whole, cents).max(Self(1))
+    }
+
+    /// A store's takings, from `below` as [`Credits::random`]'s are: between [`STORE`]'s, mostly
+    /// toward the least.
+    pub fn store(below: impl FnMut(usize) -> usize) -> Self {
+        Self::between(below, STORE)
+    }
+
+    /// What each of a bank's computers holds: between [`BANK`]'s, mostly toward the least.
+    pub fn bank(below: impl FnMut(usize) -> usize) -> Self {
+        Self::between(below, BANK)
+    }
+
+    /// What a bank's vault holds: between [`VAULT`]'s, mostly toward the least.
+    pub fn vault(below: impl FnMut(usize) -> usize) -> Self {
+        Self::between(below, VAULT)
+    }
+
+    fn between(mut below: impl FnMut(usize) -> usize, (least, most): (f64, f64)) -> Self {
+        let chance = below(1001) as f64 / 1000.0;
+        let whole = (least + chance.powi(2) * (most - least)) as u64;
+        Self::new(whole, below(100) as u64)
     }
 }
 
@@ -119,6 +147,18 @@ mod tests {
         assert_eq!(wallet, Credits::new(7, 50));
         assert_eq!(serde_json::from_str::<Credits>("12.5").unwrap(), Credits(1250));
         assert!(serde_json::from_str::<Credits>("-1").is_err());
+    }
+
+    #[test]
+    fn a_bank_holds_more_than_any_store_and_a_store_more_than_most_computers() {
+        for chance in [0, 500, 1000] {
+            let roll = |n: usize| if n == 1001 { chance } else { 99 };
+            let (store, bank) = (Credits::store(roll), Credits::bank(roll));
+            assert!(store >= Credits::new(40, 0) && store < Credits::new(601, 0), "{store}");
+            assert!(bank >= Credits::new(1_000, 0) && bank < Credits::new(5_001, 0), "{bank}");
+        }
+        assert!(Credits::store(|_| 1000) < Credits::bank(|_| 0));
+        assert!(Credits::bank(|_| 1000) < Credits::vault(|_| 0));
     }
 
     #[test]

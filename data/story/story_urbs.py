@@ -22,6 +22,13 @@ hall under a dome behind its colonnade, the arena, and the elevated railway down
 avenue, with a station on it out in the north, climbed by stairs. Bridges cross the canal at every street, steps go
 down to its water, and gates lead out over the void east and west, to pads with an obelisk each.
 
+Stores and banks to rob: some of the shops are stores to walk into, with shelves, a counter and a
+computer at the back keeping the takings (store_<n>); and six blocks have a bank on a corner, a hall
+behind a colonnade with a gold credit sign, a tellers' counter, four computers (bank_<n>_vault,
+which opens the vault, and bank_<n>_2 to _4) and at the back the vault: a strongroom of gold behind
+a door that swings open (vault_door_<n>, with vault_<n> in the middle of the strongroom). They have
+a stream of chance of their own.
+
 Windows are lit or dark at random, warm in homes and cool in offices. Streets have dashed lines,
 crossings at every junction, lamps, trees and parked light cycles. Every coloured line of light
 near the ground glows and is written to story_urbs.glow.json for the game to light with; those
@@ -73,6 +80,20 @@ GATE = (22.0, 6.0, 24.0)      # the gates' bridges: how long and wide, and their
 TILE = 64.0                   # the meshes are gathered by tiles of this size
 LIGHT_BELOW = 10.0            # lines of light lower than this light their surroundings in the game
 TRIM = 0.12
+WALL = 0.3                    # a store's or a bank's walls, inside
+STORE_SIZE = (7.0, 9.0)       # the least a shop needs, along the street and in, to be a store to walk into
+STORE_CHANCE = 0.07           # the chance a shop that big is one
+STORE_HEIGHT = 4.0            # a store's ceiling
+STORE_DOOR = (2.4, 2.9)       # its doorway, wide and high
+BANKS = ((6, 4), (9, 6), (4, 9), (7, 10), (11, 8), (2, 4))   # the blocks with a bank on a corner
+BANK_LOT = 12.5               # the least a lot's narrower side can be, for a bank
+BANK_SIZE = (22.0, 18.0)      # its hall, along the street and in, at most
+BANK_FORECOURT = 3.5          # how far back from the street, behind its colonnade
+BANK_HEIGHT = 6.5             # its hall's ceiling
+BANK_DOOR = (3.2, 4.2)
+BANK_DEEP = 14.0              # how deep a bank would be, to have room for its vault behind its hall
+VAULT = 3.6                   # the vault, from its wall to the back
+VAULT_DOOR = (1.8, 2.6)       # its doorway, wide and high
 
 
 def rect(x0, x1, y0, y1):
@@ -138,6 +159,10 @@ class Urbs(Nexus):
         self.marking = glow("Marking", (0.8, 0.82, 0.85), 0.6)
         self.buckets = {}      # (collection, tile) -> [verts, faces, material per face]
         self.n_buildings = 0
+        # The stores and banks have a stream of chance of their own, so the city is the same with them.
+        self.trade = random.Random(0)
+        self.n_stores = self.n_banks = 0
+        self.bank_here = False
 
     # The geometry, gathered by tile.
 
@@ -610,10 +635,15 @@ def shops(m, rng, poly, district, street_faces):
         a, b = start + u * t, start + u * (t + w)
         p = [a, b, b + v * depth, a + v * depth]
         mat, shade = facade(m, rng, district), m.shade()
-        m.prism(p, 0.0, h, mat)
-        # The shop window, lit warm, and a sign over the awning.
-        m.line(a + u * 0.6 - v * 0.05 + Vector((0, 0, 1.6)), b - u * 0.6 - v * 0.05 + Vector((0, 0, 1.6)),
-               m.windows["warm"], width=2.2, height=0.06, across=Z, light=False)
+        if w >= STORE_SIZE[0] and depth >= STORE_SIZE[1] and m.trade.random() < STORE_CHANCE:
+            # A store to walk into, with a computer at the back to hack.
+            store(m, a, u, v, w, depth, h, mat, shade)
+        else:
+            m.prism(p, 0.0, h, mat)
+            # The shop window, lit warm.
+            m.line(a + u * 0.6 - v * 0.05 + Vector((0, 0, 1.6)), b - u * 0.6 - v * 0.05 + Vector((0, 0, 1.6)),
+                   m.windows["warm"], width=2.2, height=0.06, across=Z, light=False)
+        # A sign over the awning.
         q0, q1 = a + u * 0.2, b - u * 0.2
         m.solid([q0, q1, q1 - v * 1.6, q0 - v * 1.6], 3.1, 3.25, m.struct, m.rail)
         m.line(q0 - v * 1.6 + Vector((0, 0, 3.17)), q1 - v * 1.6 + Vector((0, 0, 3.17)), m.lines[shade],
@@ -635,6 +665,200 @@ def shops(m, rng, poly, district, street_faces):
         else:
             c = middle(p)
             m.tree(c.x, c.y, rng)
+
+
+def quad(at, u, v, u0, u1, v0, v1):
+    """The rectangle from u0 to u1 along `u` and v0 to v1 along `v`, from `at`."""
+    return [at + u * u0 + v * v0, at + u * u1 + v * v0, at + u * u1 + v * v1, at + u * u0 + v * v1]
+
+
+def slab(base, z0, z1):
+    """The vertices and faces of a solid on the polygon `base` from z0 to z1."""
+    n = len(base)
+    verts = [Vector((p.x, p.y, z0)) for p in base] + [Vector((p.x, p.y, z1)) for p in base]
+    faces = [tuple(range(n)), tuple(range(n, 2 * n))] + [(i, (i + 1) % n, n + (i + 1) % n, n + i) for i in range(n)]
+    return verts, faces
+
+
+def bar(p, q, width, out):
+    """The vertices and faces of a square bar from `p` to `q`, `width` across, flat to `out`."""
+    d = (q - p).normalized()
+    a = d.cross(out).normalized() * (width / 2)
+    b = out.normalized() * (width / 2)
+    verts = [e + sa * a + sb * b for e in (p, q) for sa, sb in ((-1, -1), (1, -1), (1, 1), (-1, 1))]
+    return verts, [(0, 1, 2, 3), (4, 5, 6, 7), (0, 1, 5, 4), (1, 2, 6, 5), (2, 3, 7, 6), (3, 0, 4, 7)]
+
+
+def facing(direction):
+    """The turn round from +x that faces along `direction`, for a marker."""
+    return math.atan2(direction.y, direction.x)
+
+
+def room(m, at, u, v, w, depth, h, mat, door):
+    """A room to walk into, `w` along the street (`u`) and `depth` in (`v`) from `at`, `h` high to
+    its roof: walls WALL thick, and a doorway in the middle of the front `door` (wide, high)."""
+    t = WALL
+    dw, dh = door
+    d0, d1 = (w - dw) / 2, (w + dw) / 2
+    for u0, u1 in ((0.0, d0), (d1, w)):
+        m.prism(quad(at, u, v, u0, u1, 0.0, t), 0.0, h, mat)
+    m.prism(quad(at, u, v, d0, d1, 0.0, t), dh, h, mat)
+    m.prism(quad(at, u, v, 0.0, w, depth - t, depth), 0.0, h, mat)
+    for u0, u1 in ((0.0, t), (w - t, w)):
+        m.prism(quad(at, u, v, u0, u1, t, depth - t), 0.0, h, mat)
+    m.prism(quad(at, u, v, 0.0, w, 0.0, depth), h - 0.3, h, mat)
+
+
+def store(m, a, u, v, w, depth, h, mat, shade):
+    """A store, open to walk into: shelves down its sides, a counter, lights along its ceiling,
+    and against the back wall the computer that keeps its takings - a store_* marker."""
+    inside = STORE_HEIGHT
+    room(m, a, u, v, w, depth, inside, mat, STORE_DOOR)
+    if h > inside + 0.5:
+        m.prism(quad(a, u, v, 0.0, w, 0.0, depth), inside, h, mat)
+    up = Vector((0, 0, 1))
+    d0, d1 = (w - STORE_DOOR[0]) / 2, (w + STORE_DOOR[0]) / 2
+    # The shop window, lit warm, either side of the door.
+    for u0, u1 in ((0.6, d0 - 0.3), (d1 + 0.3, w - 0.6)):
+        if u1 - u0 > 0.5:
+            m.line(a + u * u0 - v * 0.05 + up * 1.6, a + u * u1 - v * 0.05 + up * 1.6,
+                   m.windows["warm"], width=2.2, height=0.06, across=Z, light=False)
+    # Its doorway outlined in its colour, and its ceiling lit with it.
+    lines = m.lines[shade]
+    for k in (d0, d1):
+        m.line(a + u * k - v * 0.06 + up * KERB, a + u * k - v * 0.06 + up * STORE_DOOR[1], lines, width=0.08)
+    m.line(a + u * d0 - v * 0.06 + up * STORE_DOOR[1], a + u * d1 - v * 0.06 + up * STORE_DOOR[1], lines, width=0.08)
+    for k in (w * 0.35, w * 0.65):
+        m.line(a + u * k + v * 1.2 + up * (inside - 0.36), a + u * k + v * (depth - 1.2) + up * (inside - 0.36),
+               lines, width=0.12)
+    # Shelves down both sides, short of the back, each shelf's edge lit.
+    t = WALL
+    for u0, u1 in ((t, t + 0.6), (w - t - 0.6, w - t)):
+        m.prism(quad(a, u, v, u0, u1, 1.4, depth - 2.6), 0.0, 1.8, m.crate, col=m.cover)
+        for z in (0.7, 1.25, 1.8):
+            edge = u1 if u0 < w / 2 else u0
+            m.line(a + u * edge + v * 1.4 + up * z, a + u * edge + v * (depth - 2.6) + up * z, m.white,
+                   width=0.03, light=False)
+    # The counter, to one side of the back, and the computer behind it in the middle.
+    m.prism(quad(a, u, v, t + 0.9, w / 2 - 1.3, depth - 2.8, depth - 2.2), 0.0, 1.05, m.rail, col=m.cover)
+    m.line(a + u * (t + 0.9) + v * (depth - 2.83) + up * 1.05, a + u * (w / 2 - 1.3) + v * (depth - 2.83) + up * 1.05,
+           lines, width=0.05)
+    spot = a + u * (w / 2) + v * (depth - WALL - 0.45)
+    br_town.marker(f"store_{m.n_stores + 1}", spot.x, spot.y, KERB, facing(-v))
+    m.n_stores += 1
+
+
+def bank(m, poly, street_faces):
+    """A bank: a hall behind a colonnade, its credit sign in gold over the door, a teller's counter
+    across it, and at the back the vault: a strongroom of gold behind a door that swings open -
+    vault_door_<n>, a piece of its own for the game to move, and vault_<n> marking the middle of
+    the strongroom. Four computers: bank_<n>_vault beside the vault's door, which opens it, another
+    on its other side, and one on each side wall of the lobby, before the counter. Its own stream
+    of chance, so the rest of the city is as it was."""
+    rng = m.trade
+    x0, y0, x1, y1 = poly[0].x, poly[0].y, poly[2].x, poly[2].y
+    # Facing the street that leaves it deep enough for its vault, the longest of those.
+    def along(f):
+        return x1 - x0 if f in (0, 2) else y1 - y0
+    def into(f):
+        return y1 - y0 if f in (0, 2) else x1 - x0
+    deep = [f for f in street_faces if into(f) - BANK_FORECOURT >= BANK_DEEP]
+    side = max(deep or street_faces, key=along if deep else into)
+    start, u, v, length, reach = {
+        0: (Vector((x0, y0, 0)), Vector((1, 0, 0)), Vector((0, 1, 0)), x1 - x0, y1 - y0),
+        2: (Vector((x1, y1, 0)), Vector((-1, 0, 0)), Vector((0, -1, 0)), x1 - x0, y1 - y0),
+        1: (Vector((x1, y0, 0)), Vector((0, 1, 0)), Vector((-1, 0, 0)), y1 - y0, x1 - x0),
+        3: (Vector((x0, y1, 0)), Vector((0, -1, 0)), Vector((1, 0, 0)), y1 - y0, x1 - x0),
+    }[side]
+    w, depth = min(length - 1.0, BANK_SIZE[0]), min(reach - BANK_FORECOURT, BANK_SIZE[1])
+    a = start + u * ((length - w) / 2) + v * BANK_FORECOURT
+    hall = BANK_HEIGHT
+    mat = m.facades[rng.choice(("stone", "white", "sand"))]
+    gold = m.lines["yellow"]
+    up = Vector((0, 0, 1))
+    room(m, a, u, v, w, depth, hall, mat, BANK_DOOR)
+    top = hall + rng.uniform(4.0, 9.0)
+    m.prism(quad(a, u, v, -0.4, w + 0.4, -0.4, depth + 0.4), hall, hall + 0.6, mat)
+    m.prism(quad(a, u, v, 0.0, w, 0.0, depth), hall + 0.6, top, mat)
+    m.facade_windows(quad(a, u, v, 0.0, w, 0.0, depth), hall + 1.5, top, 3.0, "office", rng, lit=0.4)
+    m.ring(quad(a, u, v, -0.4, w + 0.4, -0.4, depth + 0.4), hall + 0.62, gold, width=0.1)
+    m.ring(quad(a, u, v, 0.0, w, 0.0, depth), top + 0.02, gold, width=0.1, light=False)
+    # The colonnade, out in the forecourt, with a gold line up each column.
+    columns = max(4, int(w // 3.2))
+    for k in range(columns):
+        cu = 0.8 + (w - 1.6) * k / (columns - 1)
+        if abs(cu - w / 2) < BANK_DOOR[0] / 2 + 0.6:
+            continue
+        c = a + u * cu - v * 2.2
+        m.solid(polygon(0.4, 12, 0, c.x, c.y), KERB, hall, m.struct, mat)
+        m.line(c - v * 0.42 + up * KERB, c - v * 0.42 + up * hall, gold, width=0.06, light=False)
+    m.prism(quad(a, u, v, 0.0, w, -3.0, 0.0), hall - 0.5, hall, mat)
+    # The credit sign over the door: a ring of gold, a bar down through it.
+    sign = a + u * (w / 2) - v * 3.05 + up * (hall - 1.6)
+    ring = [sign + u * (0.9 * math.cos(t)) + up * (0.9 * math.sin(t)) for t in (k * math.tau / 16 for k in range(17))]
+    for p, q in zip(ring, ring[1:]):
+        m.line(p, q, gold, width=0.12, across=-v, light=False)
+    m.line(sign - up * 1.2, sign + up * 1.2, gold, width=0.12, across=-v, light=False)
+    # The doorway in gold, and the hall lit gold.
+    d0, d1 = (w - BANK_DOOR[0]) / 2, (w + BANK_DOOR[0]) / 2
+    for k in (d0, d1):
+        m.line(a + u * k - v * 0.06 + up * KERB, a + u * k - v * 0.06 + up * BANK_DOOR[1], gold, width=0.1)
+    for k in (w * 0.3, w * 0.7):
+        m.line(a + u * k + v * 1.5 + up * (hall - 0.4), a + u * k + v * (depth - 1.5) + up * (hall - 0.4),
+               gold, width=0.14)
+    # The vault across the back of the hall: a wall with a doorway, and its door in it.
+    front = depth - VAULT - WALL                 # the hall side of the vault's wall
+    half, high = VAULT_DOOR[0] / 2, VAULT_DOOR[1]
+    for u0, u1 in ((WALL, w / 2 - half), (w / 2 + half, w - WALL)):
+        m.prism(quad(a, u, v, u0, u1, front, front + WALL), 0.0, hall, mat)
+    m.prism(quad(a, u, v, w / 2 - half, w / 2 + half, front, front + WALL), high, hall, mat)
+    m.n_banks += 1
+    door = quad(a, u, v, w / 2 - half + 0.02, w / 2 + half - 0.02, front + 0.03, front + WALL - 0.03)
+    Nexus.mesh(m, *slab(door, KERB + 0.02, high - 0.02), m.struct, m.facades["bronze"]).name = f"vault_door_{m.n_banks}"
+    # Its wheel and bolts in gold, on the door, to swing open with it.
+    hub = a + u * (w / 2) + v * (front - 0.02) + up * (KERB + high / 2)
+    spokes = []
+    for k in range(4):
+        t = k * math.pi / 4
+        d = u * math.cos(t) + up * math.sin(t)
+        spokes.append(bar(hub - d * 0.55, hub + d * 0.55, 0.07, -v))
+    for k in range(-1, 2):
+        spokes.append(bar(hub + u * (half - 0.2) + up * (k * 0.7) - u * 0.25, hub + u * (half - 0.2) + up * (k * 0.7), 0.1, -v))
+    verts, faces = [], []
+    for vs, fs in spokes:
+        faces += [tuple(len(verts) + i for i in f) for f in fs]
+        verts += vs
+    Nexus.mesh(m, verts, faces, m.struct, gold).name = f"vault_door_{m.n_banks}_wheel"
+    # The doorway framed in gold.
+    for k in (w / 2 - half - 0.1, w / 2 + half + 0.1):
+        m.line(a + u * k + v * (front - 0.04) + up * KERB, a + u * k + v * (front - 0.04) + up * (high + 0.1), gold, width=0.14)
+    m.line(a + u * (w / 2 - half - 0.1) + v * (front - 0.04) + up * (high + 0.1),
+           a + u * (w / 2 + half + 0.1) + v * (front - 0.04) + up * (high + 0.1), gold, width=0.14)
+    # In the strongroom: gold stacked along its walls, lit gold.
+    for u0, u1, v0, v1 in ((WALL + 0.2, w / 2 - half - 0.6, depth - WALL - 1.0, depth - WALL - 0.2),
+                           (w / 2 + half + 0.6, w - WALL - 0.2, depth - WALL - 1.0, depth - WALL - 0.2)):
+        if u1 - u0 > 0.8:
+            for layer in range(3):
+                m.prism(quad(a, u, v, u0, u1, v0, v1), KERB + layer * 0.3, KERB + layer * 0.3 + 0.26,
+                        m.lines["yellow"] if layer % 2 == 0 else m.facades["bronze"], col=m.cover)
+    m.line(a + u * (w / 2 - 2.0) + v * (front + WALL + VAULT / 2) + up * 2.9,
+           a + u * (w / 2 + 2.0) + v * (front + WALL + VAULT / 2) + up * 2.9, gold, width=0.14)
+    middle_ = a + u * (w / 2) + v * (front + WALL + VAULT / 2)
+    br_town.marker(f"vault_{m.n_banks}", middle_.x, middle_.y, KERB, facing(-v))
+    # The tellers' counter across the hall, but for a way through in the middle.
+    across_at = front * 0.45
+    for u0, u1 in ((WALL, w / 2 - 1.5), (w / 2 + 1.5, w - WALL)):
+        m.prism(quad(a, u, v, u0, u1, across_at, across_at + 0.7), 0.0, 1.15, m.rail, col=m.cover)
+        m.line(a + u * u0 + v * (across_at - 0.03) + up * 1.15, a + u * u1 + v * (across_at - 0.03) + up * 1.15,
+               gold, width=0.05)
+    # Its computers: either side of the vault's door, the left one opening it, and one on each
+    # side wall of the lobby.
+    off = min(3.0, w / 2 - 1.2)
+    spots = [("vault", w / 2 - off, front - 0.45, -v), ("2", w / 2 + off, front - 0.45, -v),
+             ("3", WALL + 0.45, across_at * 0.55, u), ("4", w - WALL - 0.45, across_at * 0.55, -u)]
+    for name, su, sv, face in spots:
+        spot = a + u * su + v * sv
+        br_town.marker(f"bank_{m.n_banks}_{name}", spot.x, spot.y, KERB, facing(face))
 
 
 def townhouses(m, rng, poly, district, street_faces):
@@ -871,6 +1095,11 @@ def build_lot(m, rng, district, lot, block):
         m.tree(c.x, c.y, rng, size=1.2)
         return
     build = rng.choice(options)
+    if m.bank_here and street and small >= BANK_LOT:
+        m.bank_here = False
+        bank(m, poly, street)
+        m.n_buildings += 1
+        return
     if build in (apartments, courtyard, shops, townhouses, terraces):
         build(m, rng, poly, district, street)
     else:
@@ -999,8 +1228,12 @@ def block(m, rng, i, j):
     if special:
         special(m, rng, cx, cy, inner)
         return
+    m.bank_here = (i, j) in BANKS
     for lot in lots(rng, district, *inner):
         build_lot(m, rng, district, lot, inner)
+    if m.bank_here:
+        print(f"[map] no lot for a bank in block {(i, j)}")
+    m.bank_here = False
 
 
 def parked(m, rng):
@@ -1370,6 +1603,7 @@ def main():
     rng = random.Random(seed)
     bpy.ops.wm.read_factory_settings(use_empty=True)
     m = Urbs(random.Random(seed + 1))
+    m.trade = random.Random(seed + 2)
     ground(m)
     streets(m, rng)
     for i in range(BLOCKS):
@@ -1393,7 +1627,7 @@ def main():
     os.makedirs(os.path.dirname(out), exist_ok=True)
     bpy.ops.wm.save_as_mainfile(filepath=out)
     print(f"[map] seed={seed} {HALF * 2:.0f} m across, buildings={m.n_buildings} lights={m.n_lights} "
-          f"cover={m.n_cover} pieces of light={len(m.pieces)} -> {out}")
+          f"cover={m.n_cover} stores={m.n_stores} banks={m.n_banks} pieces of light={len(m.pieces)} -> {out}")
     if glb:
         glow_path = os.path.splitext(os.path.abspath(glb))[0] + ".glow.json"
         with open(glow_path, "w") as f:

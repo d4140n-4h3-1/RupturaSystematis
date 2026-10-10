@@ -92,7 +92,8 @@ pub const HELIX: Map = Map {
 pub const HEIST_MAPS: [Map; 3] = [AURUM, CORTEX, HELIX];
 
 /// Urbs: a whole city in the void, for a story to be told in. As yet it is played as a maze,
-/// with `MAZE_MODEL=data/story/story_urbs.glb`: the round is to find the way across it.
+/// with `MAZE_MODEL=data/story/story_urbs.glb`: the round is to find the way across it, robbing its
+/// stores and banks on the way (see [`crate::computer::Kind`] and [`crate::vault`]).
 pub const URBS: Map = Map {
     name: "Urbs",
     path: "data/story/story_urbs.glb",

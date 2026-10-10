@@ -108,6 +108,13 @@ their animations; the crate decides what they make of what is round them.
 
 10 October 2026:
 
+- **Stores and banks to rob in Urbs.** Thirteen stores to walk into, each with a computer at the
+  back keeping its takings, 40 to 600 CR. Six banks, each with four computers holding 1,000 to
+  5,000 CR apiece behind a longer breach against a faster trace; clearing one sets off the alarm
+  and brings a drone. The one beside the vault's door lists OPEN VAULT once it is breached: the
+  door swings open on a strongroom of gold, 10,000 to 30,000 CR to whoever walks in - and two
+  more drones on their way.
+
 - **Droids a quarter the size** - each droid's file is 3.3 MB rather than 12, for the same 98
   clips moving the same way: the bones that never move in any clip are no longer keyed in all
   of them, nor the keys a straight line puts back. The site downloads 44 MB less.

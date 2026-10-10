@@ -18,6 +18,9 @@
 //!
 //! Every computer carries credits too, a random amount whatever its files are (see
 //! [`crate::credits`]); clearing it transfers them to the player, and the terminal says how many.
+//! A city's stores and banks have computers of their own ([`Kind`]): a store's keeps more, and
+//! each of a bank's several far more, behind a longer breach against a faster trace. One of a
+//! bank's opens its vault: cleared, its listing starts with OPEN VAULT (see [`crate::vault`]).
 //!
 //! Once cleared, the computer's files are open to read: notes and diary entries, shared out among
 //! the maze's computers (see [`crate::notes`]). Up and down pick one, Enter opens it, up and down
@@ -195,6 +198,9 @@ const COMMANDS: &[&str] = &[
 /// is; and how much a wrong key takes off it.
 const BREACH_LINES: usize = 6;
 const LINE_TIME: f32 = 15.0;
+/// A bank's breach: more commands, and less time for each.
+const BANK_BREACH_LINES: usize = 9;
+const BANK_LINE_TIME: f32 = 11.0;
 const WRONG_KEY: f32 = 0.5;
 /// How long a wrong key shows, and how often the cursor blinks, in seconds.
 const FLASH: f32 = 0.25;
@@ -208,6 +214,50 @@ const FADE: f32 = 0.25;
 const TYPE_OUT: f32 = 240.0;
 const JOLT: f32 = 0.15;
 const JOLT_SIZE: f32 = 0.012;
+
+/// Whose a computer is.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    /// The maze's own, with notes on it and a few credits.
+    #[default]
+    Computer,
+    /// A store's, at the back behind its counter, with its takings.
+    Store,
+    /// One of a bank's, by its vault or round its hall: a great deal of credits, a harder breach,
+    /// and an alarm when it is cleared.
+    Bank,
+}
+
+impl Kind {
+    /// What a model's marker named `name` puts there, if a store's or a bank's computer:
+    /// `store_*` or `bank_*`.
+    pub fn of_marker(name: &str) -> Option<Self> {
+        if name.starts_with("store_") {
+            Some(Self::Store)
+        } else if name.starts_with("bank_") {
+            Some(Self::Bank)
+        } else {
+            None
+        }
+    }
+
+    /// What the player is told they are at.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Computer => "Computer",
+            Self::Store => "Store terminal",
+            Self::Bank => "Bank terminal",
+        }
+    }
+
+    /// How many commands its breach takes, and how long the trace gives each.
+    fn breach(self) -> (usize, f32) {
+        match self {
+            Self::Bank => (BANK_BREACH_LINES, BANK_LINE_TIME),
+            _ => (BREACH_LINES, LINE_TIME),
+        }
+    }
+}
 
 /// How far the hack has got.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -261,6 +311,11 @@ pub struct Hack {
     /// The credits it carries, and whether they have been transferred to the player yet.
     credits: Credits,
     paid: bool,
+    kind: Kind,
+    /// Whether it opens a vault, from its listing once it is cleared: None if not, and otherwise
+    /// whether it has; and whether that is still to be told.
+    vault: Option<bool>,
+    vault_opened: bool,
 }
 
 /// What the terminal is showing, for it to type itself out afresh when that changes: the stage
@@ -285,6 +340,9 @@ impl Hack {
             scroll: 0,
             credits: Credits::default(),
             paid: false,
+            kind: Kind::Computer,
+            vault: None,
+            vault_opened: false,
         };
         hack.credits = Credits::random(|n| hack.below(n));
         hack
@@ -324,7 +382,7 @@ impl Hack {
         }
         let (at, most) = match &self.reading {
             Some((_, lines)) => (&mut self.scroll, lines.len().saturating_sub(PAGE)),
-            None => (&mut self.picked, self.files.len().saturating_sub(1)),
+            None => (&mut self.picked, (self.files.len() + usize::from(self.vault.is_some())).saturating_sub(1)),
         };
         let to = at.saturating_add_signed(by as isize).min(most);
         std::mem::replace(at, to) != to
@@ -348,22 +406,57 @@ impl Hack {
         ((self.dice.wrapping_mul(0x2545_f491_4f6c_dd1d) >> 33) as usize) % n
     }
 
+    /// Makes it the computer that opens a vault, from the top of its listing once cleared.
+    pub fn open_vault_from_here(&mut self) {
+        self.vault = Some(false);
+    }
+
+    /// Whether the vault has just been opened from it, the first time it is asked.
+    pub fn take_vault_opened(&mut self) -> bool {
+        std::mem::take(&mut self.vault_opened)
+    }
+
+    /// How many rows the listing starts with before the files: the vault's, if it opens one.
+    fn actions(&self) -> usize {
+        usize::from(self.vault.is_some())
+    }
+
+    /// Makes it a `kind` of computer, with the credits that kind keeps.
+    pub fn set_kind(&mut self, kind: Kind) {
+        self.kind = kind;
+        self.credits = match kind {
+            Kind::Computer => Credits::random(|n| self.below(n)),
+            Kind::Store => Credits::store(|n| self.below(n)),
+            Kind::Bank => Credits::bank(|n| self.below(n)),
+        };
+    }
+
     /// Enter: starts a breach, from locked or denied, or once cleared opens the file picked in
     /// the listing. Nothing otherwise. Whether it did.
     pub fn enter(&mut self) -> bool {
         if self.stage == Stage::Cleared {
-            let Some(file) = self.files.get(self.picked).filter(|_| self.reading.is_none()) else {
+            if self.reading.is_none() && self.picked < self.actions() {
+                let open = self.vault == Some(false);
+                if open {
+                    self.vault = Some(true);
+                    self.vault_opened = true;
+                }
+                return open;
+            }
+            let n = self.picked - self.actions();
+            let Some(file) = self.files.get(n).filter(|_| self.reading.is_none()) else {
                 return false;
             };
-            self.reading = Some((self.picked, notes::wrap(&file.text, PAGE_WIDTH)));
+            self.reading = Some((n, notes::wrap(&file.text, PAGE_WIDTH)));
             self.scroll = 0;
             return true;
         }
         if !matches!(self.stage, Stage::Locked | Stage::Denied) {
             return false;
         }
-        let mut lines: Vec<&'static str> = Vec::with_capacity(BREACH_LINES);
-        while lines.len() < BREACH_LINES.min(COMMANDS.len()) {
+        let count = self.kind.breach().0;
+        let mut lines: Vec<&'static str> = Vec::with_capacity(count);
+        while lines.len() < count.min(COMMANDS.len()) {
             let line = COMMANDS[self.below(COMMANDS.len())];
             if !lines.contains(&line) {
                 lines.push(line);
@@ -378,7 +471,7 @@ impl Hack {
 
     fn next_line(&mut self) {
         self.typed = 0;
-        self.limit = LINE_TIME;
+        self.limit = self.kind.breach().1;
         self.left = self.limit;
     }
 
@@ -528,19 +621,26 @@ impl Hack {
                         plain(&format!("CREDITS {} TRANSFERRED", self.credits)),
                         Vec::new(),
                     ]);
-                    if self.files.is_empty() {
+                    if self.files.is_empty() && self.vault.is_none() {
                         output.push(plain("NO FILES"));
                     } else {
                         output.push(plain(&format!("FILES: {}", self.files.len())));
+                        // The vault's row first, if it opens one, then the files.
+                        let vault = self.vault.map(|open| match open {
+                            false => format!("{:<24} {:>8}", "OPEN VAULT", "COMMAND"),
+                            true => format!("{:<24} {:>8}", "VAULT OPEN", "DONE"),
+                        });
+                        let files = self.files.iter().map(|file| {
+                            let (title, kind) = (clipped(&file.title, 24), clipped(&file.kind, 8));
+                            format!("{title:<24} {:>8}", kind.to_uppercase())
+                        });
                         let first = self.picked.saturating_sub(LISTED - 1);
-                        for (n, file) in self.files.iter().enumerate().skip(first).take(LISTED) {
+                        for (n, text) in vault.into_iter().chain(files).enumerate().skip(first).take(LISTED) {
                             let (mark, colour) = match n == self.picked {
                                 true => ("> ", BRIGHT),
                                 false => ("  ", GREEN),
                             };
-                            let (title, kind) = (clipped(&file.title, 24), clipped(&file.kind, 8));
-                            let row = format!("{mark}{title:<24} {:>8}", kind.to_uppercase());
-                            output.push(vec![(row, colour)]);
+                            output.push(vec![(format!("{mark}{text}"), colour)]);
                         }
                     }
                     typed = "ls".to_string();
@@ -561,7 +661,8 @@ impl Hack {
                     "↑↓ SCROLL  BKSP BACK  TAB LEAVE  ▼ MORE"
                 }
                 Some(_) => "↑↓ SCROLL  BKSP BACK  TAB LEAVE",
-                None if self.files.is_empty() => "TAB  LEAVE",
+                None if self.files.is_empty() && self.vault.is_none() => "TAB  LEAVE",
+                None if self.picked < self.actions() => "↑↓ PICK  ENTER RUN  TAB LEAVE",
                 None => "↑↓ PICK  ENTER READ  TAB LEAVE",
             },
         };
@@ -1325,6 +1426,25 @@ impl Computer {
         self.hack.credits = credits;
     }
 
+    /// Makes it a store's or a bank's, say, with what that kind keeps, until it is next placed.
+    pub fn set_kind(&mut self, kind: Kind) {
+        self.hack.set_kind(kind);
+    }
+
+    pub fn kind(&self) -> Kind {
+        self.hack.kind
+    }
+
+    /// Makes it the computer that opens a vault, until it is next placed.
+    pub fn open_vault_from_here(&mut self) {
+        self.hack.open_vault_from_here();
+    }
+
+    /// Whether its vault has just been opened from it, the first time it is asked.
+    pub fn take_vault_opened(&mut self) -> bool {
+        self.hack.take_vault_opened()
+    }
+
     /// Enter, beeping if it starts a breach or opens a file.
     pub fn enter(&mut self, graph: &mut Graph) {
         if self.hack.enter() {
@@ -1608,6 +1728,36 @@ mod tests {
             assert_ne!(hack.type_char(without_caps_lock(c, shift)), Keystroke::Wrong, "{c:?}");
         }
         assert_eq!(hack.stage(), Stage::Cleared);
+    }
+
+    #[test]
+    fn a_vault_opens_from_the_top_of_its_computers_listing_once() {
+        let mut hack = cleared(vec![note("a", "one")]);
+        hack.open_vault_from_here();
+        assert!(hack.enter(), "OPEN VAULT, picked first");
+        assert!(hack.take_vault_opened());
+        assert!(!hack.take_vault_opened(), "told once");
+        assert!(!hack.enter(), "open already");
+        assert!(hack.step(1));
+        assert!(hack.enter(), "the file under it");
+        assert_eq!(hack.view().1, Some(0));
+    }
+
+    #[test]
+    fn a_bank_breach_is_longer_against_a_faster_trace_for_far_more() {
+        let mut hack = Hack::new(5);
+        hack.set_kind(Kind::Bank);
+        assert!(hack.enter());
+        assert_eq!(hack.lines.len(), BANK_BREACH_LINES);
+        assert_eq!(hack.limit, BANK_LINE_TIME);
+        assert!(hack.credits >= Credits::new(1_000, 0));
+        let mut store = Hack::new(5);
+        store.set_kind(Kind::Store);
+        store.enter();
+        assert_eq!((store.lines.len(), store.limit), (BREACH_LINES, LINE_TIME));
+        assert_eq!(Kind::of_marker("bank_3"), Some(Kind::Bank));
+        assert_eq!(Kind::of_marker("store_12"), Some(Kind::Store));
+        assert_eq!(Kind::of_marker("computer_red"), None);
     }
 
     fn cleared(files: Vec<Entry>) -> Hack {

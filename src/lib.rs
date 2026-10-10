@@ -58,3 +58,4 @@ mod royale;
 mod survey;
 mod tiles;
 mod trip;
+mod vault;

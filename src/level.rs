@@ -8,6 +8,7 @@
 use crate::{
     culling::Culling,
     ferry::Ferries,
+    vault::Vaults,
     fixtures::{self, Glow},
     generate::Maze,
     inward,
@@ -38,10 +39,11 @@ const FLAG_MIDDLE: f32 = 2.0;
 /// the computer that opens it (see [`crate::firewall`]), a droid's post (see [`crate::ctf`]),
 /// where someone starts in battle royale (see [`crate::royale`]), or a heist's way in, doors,
 /// vault and its terminals, ways out, guards, drones and where its waves come from (see
-/// [`crate::heist`]).
-const MARKERS: [&str; 13] = [
+/// [`crate::heist`]), or a city's stores and banks, each with a computer keeping its takings (see
+/// [`crate::computer::Kind`]).
+const MARKERS: [&str; 16] = [
     "flag_", "computer_", "post_", "spawn_", "heist_start", "door_", "loot", "extract_", "guard_", "drone_",
-    "terminal_", "wave_", "place_",
+    "terminal_", "wave_", "place_", "store_", "bank_", "vault_",
 ];
 
 /// Somewhere a maze model marks with an empty, by the empty's name, for the game to put
@@ -89,6 +91,8 @@ pub struct Level {
     culling: Option<Culling>,
     /// What of the level moves: see [`Ferries`].
     pub ferries: Ferries,
+    /// The banks' vaults' doors, which open: see [`Vaults`].
+    pub vaults: Vaults,
 }
 
 impl Level {
@@ -183,6 +187,11 @@ impl Level {
         } else {
             Default::default()
         };
+        let (vaults, vault_bodies) = if fixed {
+            Vaults::claim(&mut scene.graph, root, &markers)
+        } else {
+            Default::default()
+        };
         scene.graph.update_hierarchical_data();
 
         let meshes: Vec<GeometrySource> = scene
@@ -202,6 +211,7 @@ impl Level {
 
         let mut nodes = vec![root, body.to_base()];
         nodes.extend(ferry_bodies);
+        nodes.extend(vault_bodies);
         Self {
             nodes,
             collider,
@@ -218,6 +228,7 @@ impl Level {
             grid: None,
             culling: None,
             ferries,
+            vaults,
         }
     }
 
@@ -226,6 +237,9 @@ impl Level {
     /// `open_sky` is for a level with no ceiling over it.
     pub fn finish(&mut self, graph: &mut Graph, ignore: Handle<Node>, open_sky: bool) {
         self.grid = survey::survey(graph, self.collider, ignore, open_sky);
+        if let Some((grid, origin)) = self.grid.as_mut() {
+            self.vaults.keep_out(grid, *origin);
+        }
         let fixtures = std::mem::take(&mut self.fixtures);
         let lamps = fixtures::place_lamps(graph, &fixtures, self.lamp_sharing);
         if let Some(culling) = self.culling.as_mut() {

@@ -11,6 +11,7 @@ use fyrox::{
 use crate::{
     credits::Credits,
     computer::{self, Beeps, Computer, ScreenTerminal, Terminal, COMPUTER_MODEL},
+    vault,
     ctf::{self, Bases, Side, MAPS, PLAYERS},
     royale::{self, RingNews, RingPosts, Royale, Who},
     firewall::{self, Firewalls},
@@ -87,8 +88,13 @@ use fyrox::{
 
 /// How many junctions wide and deep a maze is, unless MAZE_SIZE says otherwise.
 const MAZE_SIZE: (usize, usize) = (20, 20);
-/// How many computers there are in a maze, to hack and read the notes on.
-const COMPUTERS: usize = 12;
+/// How many computers there are in a maze, to hack and read the notes on: enough for every store
+/// in a city, and the four in each of its banks.
+const COMPUTERS: usize = 40;
+/// How many drones a bank's alarm calls to each of its computers that is cleared.
+const BANK_ALARM_DRONES: usize = 1;
+/// How many drones come to a bank's vault when what is in it is taken.
+const VAULT_ALARM_DRONES: usize = 2;
 /// How many of them a maze or a capture-the-flag map puts out; a heist puts out as many as its
 /// doors and its vault's terminals.
 const MAZE_COMPUTERS: usize = 6;
@@ -866,6 +872,8 @@ impl MazeGame {
         self.rng();
         // The ferries set off afresh, from where they start.
         self.level.ferries.reset(&mut ctx.scenes[self.scene].graph);
+        // The banks' vaults shut, and full again.
+        self.level.vaults.reset(&mut ctx.scenes[self.scene].graph);
         // The firewalls first, closed again, so that the floor round them is out of the grid
         // before anything is put on it.
         if let Some((grid, origin)) = self.level.grid.as_mut() {
@@ -2333,9 +2341,9 @@ impl MazeGame {
             let ui = ctx.user_interfaces.first();
             match (&talkable, at_computer) {
                 (Some((_, who)), _) => self.dialogue.set_prompt(ui, Some(who)),
-                (None, Some((_, cleared))) => self.dialogue.set_action_prompt(
+                (None, Some((n, cleared))) => self.dialogue.set_action_prompt(
                     ui,
-                    Some(("Computer", if cleared { "Use" } else { "Hack" })),
+                    Some((self.computers[n].kind().name(), if cleared { "Use" } else { "Hack" })),
                 ),
                 (None, None) => self.dialogue.set_prompt(ui, None),
             }
@@ -2697,55 +2705,102 @@ impl MazeGame {
                 let colliders: Vec<_> = self.computers.iter().map(Computer::collider).collect();
                 let mut taken = Vec::new();
                 let mut placed = Vec::new();
-                // Each firewall answers to one of the last computers, put first after the one
-                // near the start, where the model marks for it or else near the firewall.
-                // A maze has so many; the rest, there for a heist's vault, out of sight.
-                let count = self.computers.len().min(MAZE_COMPUTERS);
-                for computer in &mut self.computers[count..] {
-                    computer.hide(graph);
-                }
-                let tied = self.firewalls.iter().count().min(count.saturating_sub(1));
-                let first_tied = count - tied;
-                let order = std::iter::once(0).chain(first_tied..count).chain(1..first_tied);
-                for n in order {
-                    let spot = match n {
-                        0 => computer::spot(grid, start),
-                        n if n >= first_tied => {
-                            let wall = self.firewalls.iter().nth(n - first_tied);
-                            wall.and_then(|wall| {
-                                let name = format!("computer_{}", wall.side);
-                                let marker = self.level.markers.iter().find(|m| m.name == name);
-                                match marker {
-                                    Some(marker) => computer::spot_marked(grid, *origin, marker.position, marker.yaw),
-                                    None => grid
-                                        .nearest_walkable(*origin, wall.position)
-                                        .and_then(|cell| computer::spot(grid, cell)),
-                                }
-                            })
-                        }
-                        _ => computer::spot_away(grid, start, &taken, rng),
-                    };
-                    let computer = &mut self.computers[n];
-                    match spot {
-                        Some(spot) => {
-                            computer.place(graph, grid, *origin, spot, &colliders);
-                            taken.push(spot.0);
-                            placed.push(n);
-                            if n >= first_tied {
-                                if let Some(wall) = self.firewalls.get_mut(n - first_tied) {
-                                    wall.computer = Some(n);
-                                    Log::info(format!("Firewall: {}'s opened by computer {n}", wall.side));
+                // A city's stores and banks: a computer at each, keeping its takings, and none
+                // anywhere else.
+                let mut trade: Vec<_> = self
+                    .level
+                    .markers
+                    .iter()
+                    .filter_map(|m| Some((computer::Kind::of_marker(&m.name)?, m.position, m.yaw, m.name.as_str())))
+                    .collect();
+                // The vaults' own first, so that MAZE_COMPUTER tries one.
+                trade.sort_by_key(|t| vault::opened_by(t.3).is_none());
+                if !trade.is_empty() {
+                    for (n, computer) in self.computers.iter_mut().enumerate() {
+                        let spot = trade.get(n).and_then(|&(_, at, yaw, _)| computer::spot_marked(grid, *origin, at, yaw));
+                        match spot {
+                            Some(spot) => {
+                                computer.place(graph, grid, *origin, spot, &colliders);
+                                computer.set_kind(trade[n].0);
+                                placed.push(n);
+                                // A bank's own, beside its vault's door, opens the vault.
+                                let bank = vault::opened_by(trade[n].3);
+                                let vault = self.level.vaults.vaults.iter_mut().find(|v| Some(v.bank) == bank);
+                                if let Some(vault) = vault {
+                                    computer.open_vault_from_here();
+                                    vault.computer = Some(n);
                                 }
                             }
+                            None => computer.hide(graph),
                         }
-                        None => computer.hide(graph),
                     }
-                }
-                if self.firewalls.iter().any(|wall| wall.computer.is_none()) {
-                    Log::warn("Maze: a firewall has no computer to open it, and stays open");
-                }
-                if placed.first() != Some(&0) {
-                    Log::warn("Maze: found no wall near the start to put a computer against");
+                    // With MAZE_VAULT=open, to try them out: every vault open from the start; with
+                    // MAZE_VAULT=in, the player in the first's strongroom, to take what is in it.
+                    let test = platform::var("MAZE_VAULT");
+                    if matches!(test.as_deref(), Some("open" | "in")) {
+                        for n in 0..self.computers.len() {
+                            self.level.vaults.open_from(n);
+                        }
+                    }
+                    if let Some(middle) = self.level.vaults.first_middle().filter(|_| test.as_deref() == Some("in")) {
+                        self.player.teleport(graph, middle + Vector3::new(0.0, 1.2, 0.0), 0.0);
+                    }
+                    let banks = trade.iter().filter(|t| t.0 == computer::Kind::Bank).count();
+                    Log::info(format!("City: {} stores and {banks} banks", trade.len() - banks));
+                    if trade.len() > self.computers.len() {
+                        Log::warn("City: more stores and banks than computers; some go without");
+                    }
+                } else {
+                    // Each firewall answers to one of the last computers, put first after the one
+                    // near the start, where the model marks for it or else near the firewall.
+                    // A maze has so many; the rest, there for a heist's vault, out of sight.
+                    let count = self.computers.len().min(MAZE_COMPUTERS);
+                    for computer in &mut self.computers[count..] {
+                        computer.hide(graph);
+                    }
+                    let tied = self.firewalls.iter().count().min(count.saturating_sub(1));
+                    let first_tied = count - tied;
+                    let order = std::iter::once(0).chain(first_tied..count).chain(1..first_tied);
+                    for n in order {
+                        let spot = match n {
+                            0 => computer::spot(grid, start),
+                            n if n >= first_tied => {
+                                let wall = self.firewalls.iter().nth(n - first_tied);
+                                wall.and_then(|wall| {
+                                    let name = format!("computer_{}", wall.side);
+                                    let marker = self.level.markers.iter().find(|m| m.name == name);
+                                    match marker {
+                                        Some(marker) => computer::spot_marked(grid, *origin, marker.position, marker.yaw),
+                                        None => grid
+                                            .nearest_walkable(*origin, wall.position)
+                                            .and_then(|cell| computer::spot(grid, cell)),
+                                    }
+                                })
+                            }
+                            _ => computer::spot_away(grid, start, &taken, rng),
+                        };
+                        let computer = &mut self.computers[n];
+                        match spot {
+                            Some(spot) => {
+                                computer.place(graph, grid, *origin, spot, &colliders);
+                                taken.push(spot.0);
+                                placed.push(n);
+                                if n >= first_tied {
+                                    if let Some(wall) = self.firewalls.get_mut(n - first_tied) {
+                                        wall.computer = Some(n);
+                                        Log::info(format!("Firewall: {}'s opened by computer {n}", wall.side));
+                                    }
+                                }
+                            }
+                            None => computer.hide(graph),
+                        }
+                    }
+                    if self.firewalls.iter().any(|wall| wall.computer.is_none()) {
+                        Log::warn("Maze: a firewall has no computer to open it, and stays open");
+                    }
+                    if placed.first() != Some(&0) {
+                        Log::warn("Maze: found no wall near the start to put a computer against");
+                    }
                 }
                 // The notes, among those put somewhere.
                 // The level's own: a capture-the-flag map's, or the maze's.
@@ -2795,9 +2850,14 @@ impl MazeGame {
         if !self.menu.is_open() {
             let mut denied = false;
             let mut taken = Credits::default();
+            let mut robbed = Vec::new();
+            let mut vaults_opened = Vec::new();
             let doors = self.doors.doors.len();
             for (n, computer) in self.computers.iter_mut().enumerate() {
                 denied |= computer.update(ctx.dt);
+                if computer.take_vault_opened() {
+                    vaults_opened.push(n);
+                }
                 // Cleared, it transfers its credits to the player - in a heist, stolen, theirs
                 // only once they are out.
                 if let Some(credits) = computer.take_credits() {
@@ -2807,14 +2867,47 @@ impl MazeGame {
                             self.hud.show_note(format!("+{credits} stolen: {} in all", heist.stolen));
                             Log::info(format!("Heist: +{credits} stolen, {} in all", heist.stolen));
                         }
-                        None => taken += credits,
+                        None => {
+                            taken += credits;
+                            // A bank's computer, cleared, sounds its alarm.
+                            if computer.kind() == computer::Kind::Bank {
+                                robbed.push(computer.position(&ctx.scenes[self.scene].graph));
+                            }
+                        }
                     }
                 }
             }
-            if taken > Credits::default() {
+            if !robbed.is_empty() {
+                self.credits += taken;
+                self.hud.show_note(format!("+{taken} from the bank. The alarm is up: drones on their way"));
+                Log::info(format!("Credits: +{taken} from a bank, {} in all; its alarm calls drones", self.credits));
+                for at in robbed {
+                    self.drone_calls.extend(std::iter::repeat_n(at, BANK_ALARM_DRONES));
+                }
+            } else if taken > Credits::default() {
                 self.credits += taken;
                 self.hud.show_note(format!("+{taken} transferred"));
                 Log::info(format!("Credits: +{taken}, {} in all", self.credits));
+            }
+            // A bank's vault, opened from its computer, swings open, and the alarm goes up; walked
+            // into, what is in it is the player's, and more drones come.
+            for n in vaults_opened {
+                if let Some(at) = self.level.vaults.open_from(n) {
+                    self.hud.show_note("Vault open. The alarm is up".into());
+                    self.drone_calls.push(at);
+                }
+            }
+            let graph = &mut ctx.scenes[self.scene].graph;
+            let feet = self.player.feet(graph);
+            if let Some(at) = self.level.vaults.update(graph, feet, ctx.dt) {
+                self.rng();
+                if let Some(rng) = self.rng.as_mut() {
+                    let gold = Credits::vault(|k| rng.below(k));
+                    self.credits += gold;
+                    self.hud.show_note(format!("+{gold} from the vault. Get out: drones on their way"));
+                    Log::info(format!("Credits: +{gold} from a vault, {} in all", self.credits));
+                    self.drone_calls.extend(std::iter::repeat_n(at, VAULT_ALARM_DRONES));
+                }
             }
             // A hacked computer opens its firewall.
             self.firewalls.update(&mut ctx.scenes[self.scene].graph, &self.computers, ctx.elapsed_time);
