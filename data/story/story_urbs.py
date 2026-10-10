@@ -1,9 +1,9 @@
 """
-Urbs: a whole city in the void, for a story mode - eleven times the ground of Nexus, every street
+Urbs: a whole city in the void, for a story mode - twenty times the ground of Nexus, every street
 lined with buildings that differ as a real city's do, in the traced-light style of the other
 cities (see data/arena/br_nexus.py, whose way of building this borrows).
 
-A grid of ten by ten blocks, each 48 m square, between streets 16 m wide, on a platform 656 m
+A grid of fourteen by fourteen blocks, each 48 m square, between streets 16 m wide, on a platform 912 m
 across - and a canal across its south. The blocks change from the middle out:
 
 - Downtown, the four blocks round the middle: towers 70 to 150 m - stepped back as they rise,
@@ -17,7 +17,7 @@ across - and a canal across its south. The blocks change from the middle out:
   trees between them.
 - South of the canal, the docks: warehouses, works with cooling towers and sawtooth roofs.
 
-And places of their own: the central plaza with its monument, four parks, the market, the civic
+And places of their own: the central plaza with its monument, six parks, the market, the civic
 hall under a dome behind its colonnade, the arena, and the elevated railway down the middle
 avenue, with a station on it out in the north, climbed by stairs. Bridges cross the canal at every street, steps go
 down to its water, and gates lead out over the void east and west, to pads with an obelisk each.
@@ -37,7 +37,7 @@ thousands of; each lamp's glass stays a piece of its own, as the game finds lamp
 
 Stairs are of 0.25 m steps, 0.35 m deep. Empties named place_* mark the city's landmarks for a
 story to use: place_summa, place_plaza, place_station, place_park_west, place_park_east,
-place_park_north, place_park_far_west, place_market, place_hall, place_arena, place_docks,
+place_park_north, place_park_far_west, place_park_far_east, place_park_far_north, place_market, place_hall, place_arena, place_docks,
 place_gate_east and place_gate_west.
 
 Made for Ruptura Systematis (MazeGame/maze).
@@ -60,15 +60,15 @@ from br_nexus import Nexus, Frame, WORLD, octagon, polygon, RISE, RUN, DECK  # n
 
 PITCH = 64.0            # from one street's middle to the next
 STREET = 16.0           # a street's width, kerb to kerb
-BLOCKS = 10             # blocks each way
+BLOCKS = 14             # blocks each way
 SIDEWALK = 3.0          # round the edge of each block
 KERB = 0.12             # how high a block's pavement stands: less than a step
-HALF = BLOCKS / 2 * PITCH + STREET / 2      # from the middle to the platform's edge: 328 m
+HALF = BLOCKS / 2 * PITCH + STREET / 2      # from the middle to the platform's edge: 456 m
 DEPTH = 3.0
-CANAL = (-192.0, 10.0, 1.0)   # the canal: its middle (y), its width, and how far down its water is
+CANAL = (-320.0, 10.0, 1.0)   # the canal: its middle (y), its width, and how far down its water is
 BRIDGE_WIDTH = 12.0
 RAIL = (9.5, 1.2, 1.4)        # the railway's beam: the top of it, how wide, how deep
-STATION = (204.0, 244.0, 8.0)  # the station: from and to (y), and its platforms' height
+STATION = (332.0, 372.0, 8.0)  # the station: from and to (y), and its platforms' height
 GATE = (22.0, 6.0, 24.0)      # the gates' bridges: how long and wide, and their pads' size
 TILE = 64.0                   # the meshes are gathered by tiles of this size
 LIGHT_BELOW = 10.0            # lines of light lower than this light their surroundings in the game
@@ -783,7 +783,7 @@ def district_of(i, j):
     if y < CANAL[0]:
         return "docks"
     r = max(abs(x), abs(y))
-    return "downtown" if r < 40 else "midtown" if r < 120 else "outer" if r < 200 else "suburbs"
+    return "downtown" if r < 40 else "midtown" if r < 200 else "outer" if r < 300 else "suburbs"
 
 
 def block_middle(i, j):
@@ -982,7 +982,8 @@ def block(m, rng, i, j):
     pave = rect(x0, x1, y0, y1)
     district = district_of(i, j)
     special = SPECIAL.get((i, j))
-    m.solid(pave, 0.0, KERB, m.ground, m.grass if special in (park, park_east, park_north, park_far_west) else m.pavement)
+    parks = (park, park_east, park_north, park_far_west, park_far_east, park_far_north)
+    m.solid(pave, 0.0, KERB, m.ground, m.grass if special in parks else m.pavement)
     m.ring(pave, KERB - 0.02, m.lines["cyan"] if district != "docks" else m.lines["orange"], out=0.03,
            width=0.06, light=False)
     # Lamps at two corners, trees along the pavement where it is not downtown.
@@ -1340,17 +1341,27 @@ def park_far_west(m, rng, cx, cy, inner):
     park(m, rng, cx, cy, inner, "place_park_far_west")
 
 
+def park_far_east(m, rng, cx, cy, inner):
+    park(m, rng, cx, cy, inner, "place_park_far_east")
+
+
+def park_far_north(m, rng, cx, cy, inner):
+    park(m, rng, cx, cy, inner, "place_park_far_north")
+
+
 SPECIAL.update({
-    (5, 4): plaza,
-    (4, 5): summa,
-    (3, 6): park,
-    (6, 5): park_east,
-    (3, 3): market,
-    (6, 3): civic_hall,
-    (6, 7): arena,
-    (4, 1): docks_place,
-    (7, 8): park_north,
-    (1, 6): park_far_west,
+    (7, 6): plaza,
+    (6, 7): summa,
+    (5, 8): park,
+    (8, 7): park_east,
+    (5, 5): market,
+    (8, 5): civic_hall,
+    (8, 9): arena,
+    (6, 1): docks_place,
+    (9, 10): park_north,
+    (2, 8): park_far_west,
+    (12, 6): park_far_east,
+    (4, 12): park_far_north,
 })
 
 

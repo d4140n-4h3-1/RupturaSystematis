@@ -220,7 +220,7 @@ mod tests {
             let [u, w] = piece.light.edges;
             assert!(u.norm() <= 3.01 && w.norm() <= u.norm() + 1.0e-3, "{u} {w}");
             // On the platform, its gates or its railway, and no higher than lines are lit.
-            assert!(piece.middle.x.abs() < 380.0 && piece.middle.z.abs() < 380.0, "{}", piece.middle);
+            assert!(piece.middle.x.abs() < 510.0 && piece.middle.z.abs() < 510.0, "{}", piece.middle);
             assert!(piece.middle.y > -3.0 && piece.middle.y < 12.0, "{}", piece.middle);
         }
     }
