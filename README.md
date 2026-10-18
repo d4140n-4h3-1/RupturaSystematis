@@ -117,7 +117,7 @@ their animations; the crate decides what they make of what is round them.
   administrator's order. Every line is checked by `data/system_latin/sl_parser.py`, and System
   Latin has the city's words now: urbs, turris, summa, argentaria, taberna, aurum, creditum,
   civis, fur, furtum, nox and dies.
-- **Urbs is peopled**: 48 droids rather than a maze's 6, and about half its security droids walk
+- **Urbs is peopled**: 200 droids rather than a maze's 6, and about half its security droids walk
   about in pairs, one keeping beside the other, waiting for it if it falls behind or is talked
   to. Turn one hostile and the other comes too.
 - **Droids keep to the pavements** in Urbs, stepping onto the road only at the crossings by the
@@ -128,8 +128,10 @@ their animations; the crate decides what they make of what is round them.
 - **A crowd that keeps up**: a droid's next walk is found by heading for a spot a walk away,
   rather than by mapping every way from where it stands over the whole city - 0.1 ms rather
   than half a second, in a debug build - and droids far from you are posed now and then rather
-  than every frame: ten times a second past 35 m, four past 80. Moving the 48 of them along
-  costs about 3 ms a frame rather than 13.
+  than every frame: ten times a second past 35 m, four past 80, twice past 160. Each makes way
+  only for those in the 3 m squares of ground round it rather than looking through everyone,
+  and works out how far it has left to go only as far as it takes to stop. Moving 240 droids
+  along costs about 5 ms a frame in a debug build, where at first 48 cost 13.
 
 10 October 2026:
 

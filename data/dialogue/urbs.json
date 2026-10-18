@@ -1,6 +1,6 @@
 {
   "about": "What the droids of Urbs say, in the story: as data/dialogue/droids.json has it for a maze - the same three kinds of droid, in the same models and voices, the same lines, replies, checks, bribes, moods, barks and 'threatened' - but about the city: the way to Summa, its tallest tower, where {exit_far} and {exit_way} point; and the stores and banks being robbed, by the player. 'inhabitants' is how many droids live in the city. A character's 'in_pairs' is the share of its kind that walk about in twos, one keeping beside the other: talk one round, or turn one hostile, and the other goes with it. Every line is checked by data/system_latin/sl_parser.py.",
-  "inhabitants": 48,
+  "inhabitants": 200,
   "characters": [
     {
       "name": "Defendator",

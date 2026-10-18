@@ -100,6 +100,7 @@ use crate::{
     ragdoll::{self, Ragdoll},
     survey,
 };
+use std::collections::HashMap;
 use fyrox::{
     core::{
         algebra::{Point3, Vector3},
@@ -135,11 +136,15 @@ const CATCH_UP: f32 = 3.0;
 /// makes for: where it will be by the time it gets there.
 const LEAD: f32 = 1.0;
 const WAIT_FOR: f32 = 6.0;
-/// How often a droid is posed, by how far it is from the player: every frame as near as the
-/// first, in meters; at most this often in seconds out to the second; and beyond, at most the
-/// last as often. A city has dozens of droids, nearly all of them a long way off, small, and
-/// posing each is most of what moving them along costs. Its body goes on moving every frame.
-const POSE_EVERY: (f32, f32, f32, f32) = (35.0, 80.0, 0.1, 0.25);
+/// How often a droid is posed, by how far it is from the player: within each distance in
+/// meters, at most this often in seconds - every frame, near. A city has a hundred droids or
+/// more, nearly all of them a long way off and small, and posing each is most of what moving them
+/// along costs. Its body goes on moving every frame.
+const POSE_EVERY: [(f32, f32); 4] = [(35.0, 0.0), (80.0, 0.1), (160.0, 0.25), (f32::INFINITY, 0.5)];
+/// How big the squares of the ground are, in meters, that droids are found near one another by:
+/// no smaller than anyone makes way for another from (see [`hydroxus_ai::steer`]), so that all
+/// of those near enough are in the square one is in or those round it.
+const NEIGHBOURS: f32 = 3.0;
 /// How much further than as the crow flies a droid going about its business will walk to get
 /// somewhere, before giving it up for somewhere else.
 const DETOUR: f32 = 2.5;
@@ -600,6 +605,11 @@ const SEARCH_APART: f32 = 4.0;
 const CUT_OFF: f32 = 10.0;
 const CLOSE_IN: f32 = 4.0;
 
+/// The square of the ground `at` is in (see [`NEIGHBOURS`]).
+fn square_of(at: Vector3<f32>) -> (i32, i32) {
+    ((at.x / NEIGHBOURS).floor() as i32, (at.z / NEIGHBOURS).floor() as i32)
+}
+
 /// Which way is to the right of one facing `heading`: facing +z, -x.
 fn right_of(heading: f32) -> Vector3<f32> {
     Vector3::new(-heading.cos(), 0.0, heading.sin())
@@ -941,20 +951,22 @@ impl Inhabitants {
             return;
         };
         let routes = grid.routes_from(start, f32::INFINITY);
-        let mut places: Vec<(usize, usize)> = routes
-            .costs
-            .iter()
-            .enumerate()
-            .filter(|&(i, cost)| cost.is_some_and(|c| c >= AWAY_FROM_PLAYER) && !on_road(i))
-            .map(|(i, _)| (i % grid.width, i / grid.width))
-            .collect();
-        let near: Vec<(usize, usize)> = routes
-            .costs
-            .iter()
-            .enumerate()
-            .filter(|&(i, cost)| cost.is_some_and(|c| (NEAR_PLAYER.0..=NEAR_PLAYER.1).contains(&c)) && !on_road(i))
-            .map(|(i, _)| (i % grid.width, i / grid.width))
-            .collect();
+        // Where they can be put down, away from the player and near them, in one look over a
+        // grid that can be a whole city's.
+        let (mut places, mut near) = (Vec::new(), Vec::new());
+        for (i, cost) in routes.costs.iter().enumerate() {
+            let Some(cost) = *cost else {
+                continue;
+            };
+            let far = cost >= AWAY_FROM_PLAYER;
+            if (far || (NEAR_PLAYER.0..=NEAR_PLAYER.1).contains(&cost)) && !on_road(i) {
+                let cell = (i % grid.width, i / grid.width);
+                match far {
+                    true => places.push(cell),
+                    false => near.push(cell),
+                }
+            }
+        }
         // In front of them if there is room, where they will see it.
         let ahead: Vec<(usize, usize)> = near
             .iter()
@@ -1098,7 +1110,7 @@ impl Inhabitants {
             partner: None,
             leads: false,
             // Not all posed on the same frame, far off.
-            unposed: between(rng, (0.0, POSE_EVERY.3)),
+            unposed: between(rng, (0.0, POSE_EVERY[POSE_EVERY.len() - 1].1)),
         });
         true
     }
@@ -1382,6 +1394,13 @@ impl Inhabitants {
             .chain(std::iter::once((player, None)))
             .collect();
         let the_player = everyone.len() - 1;
+        // Who is where, by squares of the ground: each makes way only for those near it (see
+        // [`NEIGHBOURS`]), and in a city of hundreds, looking through everyone for them would
+        // cost more than all the rest of moving them along.
+        let mut squares: HashMap<(i32, i32), Vec<usize>> = HashMap::new();
+        for (n, (at, _)) in everyone.iter().enumerate() {
+            squares.entry(square_of(*at)).or_default().push(n);
+        }
         // Those lying where they went down are in no one's way.
         let down: Vec<bool> = self.droids.iter().map(|droid| droid.down).collect();
         // Each one's partner, if it walks about with one, as of the start of this frame.
@@ -1554,16 +1573,23 @@ impl Inhabitants {
             // the other side, straight for it - the player coming first.
             let hunting = droid.alert == Some(Alert::Alert);
             let fighting = droid.foe.filter(|_| !hunting);
-            let others = everyone
+            let (x, z) = square_of(droid.feet);
+            let near: Vec<usize> = (-1..=1)
+                .flat_map(|dx| (-1..=1).map(move |dz| (x + dx, z + dz)))
+                .filter_map(|square| squares.get(&square))
+                .flatten()
+                .copied()
+                .collect();
+            let others = near
                 .iter()
-                .enumerate()
-                .filter(|&(other, _)| {
+                .copied()
+                .filter(|&other| {
                     other != me
                         && !down.get(other).copied().unwrap_or(false)
                         && !(hunting && other == the_player)
                         && Some(Foe::Droid(other)) != fighting
                 })
-                .map(|(_, &other)| other);
+                .map(|other| everyone[other]);
             // In capture the flag, whoever of the other side it sees to shoot at: the player
             // first, for the enemy's; and near enough, it stands to shoot.
             let target = match droid.side {
@@ -1901,12 +1927,16 @@ impl Inhabitants {
                         // Slower the further it has yet to turn, and slowing down to stop at the
                         // end of the way.
                         let off = droid.heading - droid.avatar.facing();
-                        let left: f32 = droid
-                            .route
-                            .windows(2)
-                            .map(|pair| flat(pair[0] - pair[1]).norm())
-                            .sum::<f32>()
-                            + to.norm();
+                        // How much of the way is left, as far as it matters: no further than it
+                        // takes to stop from its pace, from the next point on.
+                        let stopping = pace * pace / (2.0 * ACCELERATION);
+                        let mut left = to.norm();
+                        for pair in droid.route.windows(2).rev() {
+                            if left >= stopping {
+                                break;
+                            }
+                            left += flat(pair[0] - pair[1]).norm();
+                        }
                         wanted =
                             (pace * off.cos().max(0.0)).min((2.0 * ACCELERATION * left).sqrt());
                     }
@@ -2020,11 +2050,10 @@ impl Inhabitants {
             // Far off, posed now and then; near, or fighting, every frame.
             droid.unposed += dt;
             let away = flat(player - droid.feet).norm();
-            let every = match away {
-                _ if target.is_some() || trigger || droid.armed_left > 0.0 => 0.0,
-                away if away < POSE_EVERY.0 => 0.0,
-                away if away < POSE_EVERY.1 => POSE_EVERY.2,
-                _ => POSE_EVERY.3,
+            let armed = target.is_some() || trigger || droid.armed_left > 0.0;
+            let every = match armed {
+                true => 0.0,
+                false => POSE_EVERY.iter().find(|&&(within, _)| away < within).map_or(0.0, |&(_, every)| every),
             };
             if droid.unposed >= every {
                 droid.avatar.animate(graph, going, droid.unposed);
@@ -2621,6 +2650,12 @@ mod tests {
     use super::*;
 
     const AHEAD: Vector3<f32> = Vector3::new(0.0, 0.0, 1.0);
+
+    #[test]
+    fn the_squares_droids_are_found_by_reach_as_far_as_any_makes_way() {
+        use hydroxus_ai::steer::{AVOID_RANGE, YIELD_RANGE};
+        assert!(NEIGHBOURS >= AVOID_RANGE.max(YIELD_RANGE));
+    }
 
     #[test]
     fn its_right_is_to_the_right() {
