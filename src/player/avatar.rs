@@ -2949,6 +2949,17 @@ impl Avatar {
         }
     }
 
+    /// Switches the lamp its eyes cast light with on or off - the eyes glowing all the same. Far
+    /// off, what it lights round the droid cannot be seen, and a crowd's lamps would be a light
+    /// each to draw.
+    pub fn set_eye_lamp(&self, graph: &mut Graph, on: bool) {
+        if let Ok(lamp) = graph.try_get_mut(self.eye_lamp) {
+            if lamp.visibility() != on {
+                lamp.set_visibility(on);
+            }
+        }
+    }
+
     /// Turns the model's root to face the droid's heading.
     fn face(&self, graph: &mut Graph) {
         graph[self.root].local_transform_mut().set_rotation(

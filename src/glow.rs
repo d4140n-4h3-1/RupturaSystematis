@@ -22,6 +22,9 @@ const AROUND_PLAYER: usize = 10;
 const AROUND_DROID: usize = 4;
 /// How far from the player a droid can be for the pieces by it to be lit, in meters.
 const DROIDS_WITHIN: f32 = 70.0;
+/// How many droids, the nearest to the player, have the pieces by them lit: in a crowd, lighting
+/// round every droid in reach would be well over a hundred lights, each drawn by itself.
+const DROIDS_LIT: usize = 8;
 /// How long a piece takes to fade in or out, in seconds.
 const FADE: f32 = 0.3;
 /// How bright a piece's light is, as a share of how brightly it glows.
@@ -108,7 +111,7 @@ impl GlowLights {
             droids.iter().copied().filter(|d| (d - player).norm() < DROIDS_WITHIN).collect();
         droids.sort_by(|a, b| (a - player).norm_squared().total_cmp(&(b - player).norm_squared()));
         let mut wanted: Vec<usize> = Vec::new();
-        let focus = std::iter::once((player, AROUND_PLAYER)).chain(droids.into_iter().map(|d| (d, AROUND_DROID)));
+        let focus = std::iter::once((player, AROUND_PLAYER)).chain(droids.into_iter().take(DROIDS_LIT).map(|d| (d, AROUND_DROID)));
         for (at, how_many) in focus {
             if wanted.len() >= most {
                 break;

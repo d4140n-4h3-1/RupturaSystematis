@@ -136,11 +136,14 @@ const CATCH_UP: f32 = 3.0;
 /// makes for: where it will be by the time it gets there.
 const LEAD: f32 = 1.0;
 const WAIT_FOR: f32 = 6.0;
-/// How often a droid is posed, by how far it is from the player: within each distance in
-/// meters, at most this often in seconds - every frame, near. A city has a hundred droids or
-/// more, nearly all of them a long way off and small, and posing each is most of what moving them
-/// along costs. Its body goes on moving every frame.
+/// How often a droid is moved and posed in the scene, by how far it is from the player: within
+/// each distance in meters, at most this often in seconds - every frame, near. A city has a
+/// hundred droids or more, nearly all of them a long way off and small, and a droid's every bone
+/// and part moving with it each frame is most of what they cost. Where it is goes on all the same.
 const POSE_EVERY: [(f32, f32); 4] = [(35.0, 0.0), (80.0, 0.1), (160.0, 0.25), (f32::INFINITY, 0.5)];
+/// How near the player, in meters, a droid's eyes light what is round them: further off, the
+/// light they cast is too small to see, and a crowd's would be a hundred lights or more.
+const EYE_LAMP_NEAR: f32 = 30.0;
 /// How big the squares of the ground are, in meters, that droids are found near one another by:
 /// no smaller than anyone makes way for another from (see [`hydroxus_ai::steer`]), so that all
 /// of those near enough are in the square one is in or those round it.
@@ -1995,15 +1998,32 @@ impl Inhabitants {
                 droid.speed = 0.0;
             }
 
-            if let Ok(body) = graph.try_get_mut_of_type::<RigidBody>(droid.body) {
-                body.set_next_kinematic_translation(droid.feet + Vector3::new(0.0, MIDDLE, 0.0));
+            // Far off, and going about its business, it is moved and posed in the scene only now
+            // and then (see [`POSE_EVERY`]): every node of a droid that moves has to be worked out
+            // afresh, and in a city of hundreds that costs the engine more than all else. Where it
+            // is goes on all the same. Near, hunting, or fighting, every frame.
+            droid.unposed += dt;
+            let away = flat(player - droid.feet).norm();
+            let busy = target.is_some() || droid.armed_left > 0.0 || droid.alert.is_some() || droid.talking;
+            let every = match busy {
+                true => 0.0,
+                false => POSE_EVERY.iter().find(|&&(within, _)| away < within).map_or(0.0, |&(_, every)| every),
+            };
+            let posing = droid.unposed >= every;
+            droid.avatar.set_eye_lamp(graph, away < EYE_LAMP_NEAR);
+            if posing {
+                if let Ok(body) = graph.try_get_mut_of_type::<RigidBody>(droid.body) {
+                    body.set_next_kinematic_translation(droid.feet + Vector3::new(0.0, MIDDLE, 0.0));
+                }
             }
             // Speaking to the player, its head turned to them.
             droid.speaking = (droid.speaking - dt).max(0.0);
             let to_player = flat(player - droid.feet);
             let head = (droid.speaking > 0.0 && !droid.down && to_player.norm() > 1.0e-3)
                 .then(|| to_player.x.atan2(to_player.z) - droid.heading);
-            droid.avatar.turn_head(head);
+            if posing {
+                droid.avatar.turn_head(head);
+            }
             // Firing when it can, facing them near enough; looking up or down at them.
             let facing_them = target.and_then(|at| {
                 let to = flat(at - droid.feet);
@@ -2047,15 +2067,7 @@ impl Inhabitants {
                 look,
                 way: 0.0,
             };
-            // Far off, posed now and then; near, or fighting, every frame.
-            droid.unposed += dt;
-            let away = flat(player - droid.feet).norm();
-            let armed = target.is_some() || trigger || droid.armed_left > 0.0;
-            let every = match armed {
-                true => 0.0,
-                false => POSE_EVERY.iter().find(|&&(within, _)| away < within).map_or(0.0, |&(_, every)| every),
-            };
-            if droid.unposed >= every {
+            if posing {
                 droid.avatar.animate(graph, going, droid.unposed);
                 droid.unposed = 0.0;
             }

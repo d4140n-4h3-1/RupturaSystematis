@@ -132,6 +132,11 @@ their animations; the crate decides what they make of what is round them.
   only for those in the 3 m squares of ground round it rather than looking through everyone,
   and works out how far it has left to go only as far as it takes to stop. Moving 240 droids
   along costs about 5 ms a frame in a debug build, where at first 48 cost 13.
+- **Far droids cost the engine little.** A droid far off and going about its business is moved
+  and posed in the scene only as often as it is posed - every bone of one that moves has to be
+  worked out afresh, which for 200 droids took the engine 9 ms a step, now under 1. A droid's
+  eyes light what is round them only within 30 m, and the lines of light are lit round the 8
+  droids nearest you rather than all within 70 m: 23 lights to draw rather than 160.
 
 10 October 2026:
 
