@@ -8,6 +8,7 @@
 use crate::{
     culling::Culling,
     ferry::Ferries,
+    roads::{RoadPlan, Roads},
     vault::Vaults,
     fixtures::{self, Glow},
     generate::Maze,
@@ -93,6 +94,8 @@ pub struct Level {
     pub ferries: Ferries,
     /// The banks' vaults' doors, which open: see [`Vaults`].
     pub vaults: Vaults,
+    /// The roads the droids keep off but to cross, on a map with streets: see [`Roads`].
+    pub roads: Option<Roads>,
 }
 
 impl Level {
@@ -229,17 +232,20 @@ impl Level {
             culling: None,
             ferries,
             vaults,
+            roads: None,
         }
     }
 
     /// Finishes readying the level once its colliders exist: surveys it for walkable ground and
-    /// hangs its lamps. `ignore` is a mesh in the scene that is not part of the maze, and
-    /// `open_sky` is for a level with no ceiling over it.
-    pub fn finish(&mut self, graph: &mut Graph, ignore: Handle<Node>, open_sky: bool) {
+    /// hangs its lamps. `ignore` is a mesh in the scene that is not part of the maze,
+    /// `open_sky` is for a level with no ceiling over it, and `roads` are its streets, if it
+    /// has any, for the droids to keep off.
+    pub fn finish(&mut self, graph: &mut Graph, ignore: Handle<Node>, open_sky: bool, roads: Option<&RoadPlan>) {
         self.grid = survey::survey(graph, self.collider, ignore, open_sky);
         if let Some((grid, origin)) = self.grid.as_mut() {
             self.vaults.keep_out(grid, *origin);
         }
+        self.roads = roads.zip(self.grid.as_ref()).map(|(plan, (grid, origin))| plan.on(grid, *origin));
         let fixtures = std::mem::take(&mut self.fixtures);
         let lamps = fixtures::place_lamps(graph, &fixtures, self.lamp_sharing);
         if let Some(culling) = self.culling.as_mut() {

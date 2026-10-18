@@ -106,6 +106,31 @@ their animations; the crate decides what they make of what is round them.
 
 ### The game
 
+17 October 2026:
+
+- **Urbs has its own dialogue**, `data/dialogue/urbs.json`: the same three kinds of droid, in
+  the same voices, talking of the city rather than a maze's exit. Security stops you by night
+  and wants to know who you are - off the train, or a citizen on the way home, a check with a
+  bribe - and is hunting the thief who has been robbing the stores and a bank, whom you can send
+  off to the docks; a scout has mapped every street to Summa but the data is classified; a
+  maintenance unit can't keep the lights on, since all the power goes to Summa, by the
+  administrator's order. Every line is checked by `data/system_latin/sl_parser.py`, and System
+  Latin has the city's words now: urbs, turris, summa, argentaria, taberna, aurum, creditum,
+  civis, fur, furtum, nox and dies.
+- **Urbs is peopled**: 48 droids rather than a maze's 6, and about half its security droids walk
+  about in pairs, one keeping beside the other, waiting for it if it falls behind or is talked
+  to. Turn one hostile and the other comes too.
+- **Droids keep to the pavements** in Urbs, stepping onto the road only at the crossings by the
+  junctions, or over the canal's bridges and quays. `data/story/story_urbs.py` writes where the
+  roads and crossings are to `story_urbs.roads.json` beside the model, and a step onto the
+  road costs a droid's route twenty times a step along the pavement. A droid after you runs
+  wherever it likes.
+- **A crowd that keeps up**: a droid's next walk is found by heading for a spot a walk away,
+  rather than by mapping every way from where it stands over the whole city - 0.1 ms rather
+  than half a second, in a debug build - and droids far from you are posed now and then rather
+  than every frame: ten times a second past 35 m, four past 80. Moving the 48 of them along
+  costs about 3 ms a frame rather than 13.
+
 10 October 2026:
 
 - **Reparators in orange**, no longer near enough red to pass for a hostile droid.

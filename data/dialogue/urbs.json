@@ -1,0 +1,514 @@
+{
+  "about": "What the droids of Urbs say, in the story: as data/dialogue/droids.json has it for a maze - the same three kinds of droid, in the same models and voices, the same lines, replies, checks, bribes, moods, barks and 'threatened' - but about the city: the way to Summa, its tallest tower, where {exit_far} and {exit_way} point; and the stores and banks being robbed, by the player. 'inhabitants' is how many droids live in the city. A character's 'in_pairs' is the share of its kind that walk about in twos, one keeping beside the other: talk one round, or turn one hostile, and the other goes with it. Every line is checked by data/system_latin/sl_parser.py.",
+  "inhabitants": 48,
+  "characters": [
+    {
+      "name": "Defendator",
+      "model": "data/droid_security.glb",
+      "start": "hello",
+      "in_pairs": 0.5,
+      "threatened": {
+        "patience": 0.8,
+        "then": "attacks"
+      },
+      "barks": {
+        "warned": {
+          "says": "Minatio detectum. Desactiva telum.",
+          "means": "Threat detected. Put your weapon away."
+        },
+        "warned_again": {
+          "says": "Sta. Desactiva telum. Ultimum.",
+          "means": "Halt. Put your weapon away. Last warning."
+        },
+        "provoked": {
+          "says": "Aggressor detectum. Deletabso tu.",
+          "means": "Attacker detected. I will delete you."
+        },
+        "calmed": {
+          "says": "Accipatum. Observo tu.",
+          "means": "Acknowledged. I am watching you."
+        },
+        "alarmed": {
+          "says": "Sirenatio accipatum. Zeto fur.",
+          "means": "Alarm received. Hunting the thief."
+        },
+        "spotted": {
+          "says": "Fur detectum. Sta.",
+          "means": "Thief sighted. Halt."
+        },
+        "lost": {
+          "says": "Fur perdatum. Zeto fur.",
+          "means": "Thief lost. Hunting the thief."
+        },
+        "heard": {
+          "says": "Quid? Sonus detectum. Verifico.",
+          "means": "What? A sound. Checking."
+        },
+        "gave_up": {
+          "says": "Fur evadatum. Resumo patrolium.",
+          "means": "The thief got away. Resuming patrol."
+        }
+      },
+      "lines": {
+        "hello": {
+          "says": "Sta. Eso defendator codex {code}. Defendo urbs in nox. Identifica. Quis esas?",
+          "means": "Halt. City security {code}. I guard the city by night. Identify yourself. Who are you?",
+          "mood": "warning",
+          "replies": [
+            {
+              "say": "Just off the train.",
+              "to": "off_train"
+            },
+            {
+              "say": "A citizen, on my way home.",
+              "check": {
+                "skill": "Speech",
+                "chance": 40
+              },
+              "bribe": {
+                "say": "A citizen. These credits say I live here.",
+                "credits": 40,
+                "chance": 75
+              },
+              "to": "cleared",
+              "fail": "suspect"
+            },
+            {
+              "say": "What are you guarding against?",
+              "to": "guarding"
+            },
+            {
+              "say": "Who keeps the city safe at night?",
+              "to": "patrols"
+            },
+            {
+              "say": "Goodbye."
+            }
+          ]
+        },
+        "off_train": {
+          "says": "Tu exiavas ex statio. Identitas incertum. Observo tu.",
+          "means": "Out of the station, then. Identity uncertain. I am watching you.",
+          "mood": "warning",
+          "replies": [
+            {
+              "say": "What are you guarding against?",
+              "to": "guarding"
+            },
+            {
+              "say": "Goodbye."
+            }
+          ]
+        },
+        "suspect": {
+          "says": "Identitas non confirmatum. Tu non esas civis. Suspecto tu. Exia ex hic zona.",
+          "means": "Identity not confirmed. You are no citizen. I suspect you. Leave this zone.",
+          "mood": "agitated",
+          "replies": [
+            {
+              "say": "I'm going."
+            },
+            {
+              "say": "I'm not going anywhere.",
+              "to": "thief"
+            }
+          ]
+        },
+        "thief": {
+          "says": "Tu esas fur. Para. Deletabso tu.",
+          "means": "You are the thief. Prepare for deletion.",
+          "mood": "hostile",
+          "attacks": true
+        },
+        "cleared": {
+          "says": "Identitas confirmatum. Accipatum, civis. Progreda.",
+          "means": "Identity confirmed. Acknowledged, citizen. Carry on.",
+          "mood": "success",
+          "replies": [
+            {
+              "say": "Which way to Summa?",
+              "to": "summa"
+            },
+            {
+              "say": "What are you guarding against?",
+              "to": "guarding"
+            },
+            {
+              "say": "Goodbye."
+            }
+          ]
+        },
+        "summa": {
+          "says": "Summa {exit_far}. Directio {exit_way}. Sed Summa: area restrictum.",
+          "means": "Summa is {exit_far}, {exit_way}. But Summa is a restricted area.",
+          "replies": [
+            {
+              "say": "Restricted? Why?",
+              "to": "why_summa"
+            },
+            {
+              "say": "Thanks."
+            }
+          ]
+        },
+        "why_summa": {
+          "says": "Mandatum administrator. Accessus prohibatum. Non quaera.",
+          "means": "The administrator's order. No entry. Do not ask.",
+          "mood": "warning",
+          "replies": [
+            {
+              "say": "Goodbye."
+            }
+          ]
+        },
+        "guarding": {
+          "says": "Multum taberna violatum in nox. Argentaria violatum. Fur activum in urbs.",
+          "means": "Store after store broken into tonight. A bank too. There is a thief loose in the city.",
+          "mood": "warning",
+          "replies": [
+            {
+              "say": "Any idea who?",
+              "to": "who"
+            },
+            {
+              "say": "Good luck."
+            }
+          ]
+        },
+        "who": {
+          "says": "Fur incognitum. Zeto fur. Si fur detectum, sirena.",
+          "means": "Nobody knows who. I am hunting the thief. If the thief is found: sound the alarm.",
+          "mood": "agitated",
+          "replies": [
+            {
+              "say": "I saw someone running for the docks.",
+              "check": {
+                "skill": "Speech",
+                "chance": 30
+              },
+              "bribe": {
+                "say": "Someone ran for the docks. Take these for the tip.",
+                "credits": 25,
+                "chance": 65
+              },
+              "to": "misled",
+              "fail": "not_misled"
+            },
+            {
+              "say": "Good luck."
+            }
+          ]
+        },
+        "misled": {
+          "says": "Accipatum. Progredo ad portus.",
+          "means": "Acknowledged. Making for the docks.",
+          "mood": "success"
+        },
+        "not_misled": {
+          "says": "Negativum. Nullum motus detectum ad portus. Tu esas fur. Para. Deletabso tu.",
+          "means": "Negative. Nothing has moved towards the docks. You are the thief. Prepare for deletion.",
+          "mood": "hostile",
+          "attacks": true
+        },
+        "patrols": {
+          "says": "Defendator. Nox: zona periculosum. Multum defendator observant in duo.",
+          "means": "Security does. The streets are dangerous at night: many of us keep watch in twos.",
+          "replies": [
+            {
+              "say": "Something else.",
+              "to": "hello"
+            },
+            {
+              "say": "Goodbye."
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Explorator",
+      "model": "data/droid_explorer.glb",
+      "start": "hello",
+      "threatened": {
+        "patience": 2.0,
+        "then": "alarm"
+      },
+      "barks": {
+        "warned": {
+          "says": "Quid? Telum tu periculosum.",
+          "means": "What? Your weapon is dangerous."
+        },
+        "warned_again": {
+          "says": "Desactiva telum tu. Periculum.",
+          "means": "Put your weapon away. Danger."
+        },
+        "provoked": {
+          "says": "Aggressor detectum. Sireno.",
+          "means": "Attacker detected. I am sounding the alarm."
+        },
+        "calmed": {
+          "says": "Accipatum.",
+          "means": "Acknowledged."
+        }
+      },
+      "lines": {
+        "hello": {
+          "says": "Explorator codex {code}. Scano omnia via in urbs. Quid quaeras?",
+          "means": "Scout {code}. I map every street in the city. What are you looking for?",
+          "replies": [
+            {
+              "say": "The way to Summa.",
+              "to": "way"
+            },
+            {
+              "say": "What is there in the city?",
+              "to": "city"
+            },
+            {
+              "say": "Goodbye."
+            }
+          ]
+        },
+        "way": {
+          "says": "Quaeras Summa. Scanavo omnia via ad Summa. Sed data classificatum.",
+          "means": "Summa, is it? I have mapped every way there. But the data is classified.",
+          "replies": [
+            {
+              "say": "We're both strangers here. Share your map with me.",
+              "check": {
+                "skill": "Speech",
+                "chance": 50
+              },
+              "bribe": {
+                "say": "Share your map with me. I'll pay for the bandwidth.",
+                "credits": 20,
+                "chance": 85
+              },
+              "to": "shared",
+              "fail": "refused"
+            },
+            {
+              "say": "Classified? By whom?",
+              "to": "why"
+            },
+            {
+              "say": "Something else.",
+              "to": "hello"
+            }
+          ]
+        },
+        "shared": {
+          "says": "Accipatum. Transmito data. Summa {exit_far}. Directio {exit_way}. Via non rectum.",
+          "means": "Acknowledged. Transmitting the data. Summa is {exit_far}, {exit_way}. The way there is not straight.",
+          "replies": [
+            {
+              "say": "Thank you."
+            }
+          ]
+        },
+        "refused": {
+          "says": "Accessus negatum. Tu non esas civis.",
+          "means": "Access denied. You are no citizen.",
+          "replies": [
+            {
+              "say": "Classified? By whom?",
+              "to": "why"
+            },
+            {
+              "say": "Goodbye."
+            }
+          ]
+        },
+        "why": {
+          "says": "Mandatum administrator. Administrator in Summa. Cur? Incognitum.",
+          "means": "The administrator's order. The administrator is in Summa. Why? Unknown.",
+          "mood": "warning",
+          "replies": [
+            {
+              "say": "Something else.",
+              "to": "hello"
+            },
+            {
+              "say": "Goodbye."
+            }
+          ]
+        },
+        "city": {
+          "says": "Multum turris in urbs. Multum taberna. Multum argentaria. Portus trans canalis.",
+          "means": "Towers, all over. Stores. Banks. The docks, across the canal.",
+          "replies": [
+            {
+              "say": "Stores?",
+              "to": "stores"
+            },
+            {
+              "say": "Banks?",
+              "to": "banks"
+            },
+            {
+              "say": "Something else.",
+              "to": "hello"
+            }
+          ]
+        },
+        "stores": {
+          "says": "Taberna servat creditum in terminale. Multum taberna violatum in nox.",
+          "means": "A store keeps its takings in a computer. Many have been broken into tonight.",
+          "replies": [
+            {
+              "say": "Banks?",
+              "to": "banks"
+            },
+            {
+              "say": "Goodbye."
+            }
+          ]
+        },
+        "banks": {
+          "says": "Argentaria servat aurum in camera. Porta camera fortum. Terminale aperiat porta.",
+          "means": "A bank keeps gold in its strongroom. The strongroom's door is strong. A computer opens it.",
+          "replies": [
+            {
+              "say": "Stores?",
+              "to": "stores"
+            },
+            {
+              "say": "Goodbye."
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Reparator",
+      "model": "data/droid_maintenance.glb",
+      "start": "hello",
+      "threatened": {
+        "patience": 2.0,
+        "then": "alarm"
+      },
+      "barks": {
+        "warned": {
+          "says": "Quid? Telum tu periculosum.",
+          "means": "What? Your weapon is dangerous."
+        },
+        "warned_again": {
+          "says": "Desactiva telum tu. Periculum.",
+          "means": "Put your weapon away. Danger."
+        },
+        "provoked": {
+          "says": "Aggressor detectum. Sireno.",
+          "means": "Attacker detected. I am sounding the alarm."
+        },
+        "calmed": {
+          "says": "Accipatum.",
+          "means": "Acknowledged."
+        }
+      },
+      "lines": {
+        "hello": {
+          "says": "Reparator codex {code}. Verifico lux in urbs. Utrum tu lesatum?",
+          "means": "Maintenance unit {code}. I keep the city's lights. Are you damaged?",
+          "mood": "warning",
+          "replies": [
+            {
+              "say": "No, I'm fine.",
+              "to": "fine"
+            },
+            {
+              "say": "Which way to Summa?",
+              "to": "summa"
+            },
+            {
+              "say": "What's wrong with the lights?",
+              "to": "lights"
+            },
+            {
+              "say": "Seen anything strange tonight?",
+              "to": "strange"
+            },
+            {
+              "say": "Goodbye."
+            }
+          ]
+        },
+        "fine": {
+          "says": "Accipatum. Systema tu stabilum. Resumo reparatio.",
+          "means": "Acknowledged. Your systems are stable. Resuming repairs.",
+          "mood": "success",
+          "replies": [
+            {
+              "say": "Which way to Summa?",
+              "to": "summa"
+            },
+            {
+              "say": "Goodbye."
+            }
+          ]
+        },
+        "summa": {
+          "says": "Ubi Summa? Non scano. Ego reparo. Quaera explorator.",
+          "means": "Where Summa is? I don't map. I repair. Ask a scout.",
+          "replies": [
+            {
+              "say": "What's wrong with the lights?",
+              "to": "lights"
+            },
+            {
+              "say": "Goodbye."
+            }
+          ]
+        },
+        "lights": {
+          "says": "Multum lux lesatum. Reparo lux. Sed potentia non sufficiat.",
+          "means": "Lights out all over the city. I repair them. But there is not the power.",
+          "replies": [
+            {
+              "say": "Why not?",
+              "to": "power"
+            },
+            {
+              "say": "Goodbye."
+            }
+          ]
+        },
+        "power": {
+          "says": "Omnia potentia ad Summa. Mandatum administrator.",
+          "means": "All the power goes to Summa. The administrator's order.",
+          "mood": "warning",
+          "replies": [
+            {
+              "say": "Seen anything strange tonight?",
+              "to": "strange"
+            },
+            {
+              "say": "Goodbye."
+            }
+          ]
+        },
+        "strange": {
+          "says": "Affirmatum. Taberna violatum. Terminale lesatum. Reparo terminale.",
+          "means": "Yes. A store broken into, its computer damaged. I am repairing it.",
+          "replies": [
+            {
+              "say": "Who did it?",
+              "to": "who"
+            },
+            {
+              "say": "Goodbye."
+            }
+          ]
+        },
+        "who": {
+          "says": "Fur. Identitas incognitum. Defendator zetant fur.",
+          "means": "A thief. Nobody knows who. Security are hunting them.",
+          "replies": [
+            {
+              "say": "Goodbye."
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

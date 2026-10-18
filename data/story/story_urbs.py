@@ -32,7 +32,8 @@ a stream of chance of their own.
 Windows are lit or dark at random, warm in homes and cool in offices. Streets have dashed lines,
 crossings at every junction, lamps, trees and parked light cycles. Every coloured line of light
 near the ground glows and is written to story_urbs.glow.json for the game to light with; those
-higher up only glow.
+higher up only glow. Where the roads and their crossings are is written to story_urbs.roads.json,
+for the game to keep its droids on the pavements but to cross.
 
 Builds data/story/story_urbs.glb (and a .blend to look it over, wherever --out puts it):
 
@@ -1203,6 +1204,41 @@ def streets(m, rng):
                         m.line(p, p + Vector((0, 2.0, 0)), m.marking, width=0.9, height=0.008, light=False)
 
 
+def road_plan():
+    """Where the roads are, for the game to keep its droids off them but to cross: every street,
+    kerb to kerb, but the canal's - its quays and bridges are walked along - and the crossings at
+    the junctions, where droids may step onto the road. Each a rectangle, [x0, z0, x1, z1] in the
+    game's terms (Blender's x, and -y); roads only where the floor is lower than `level`, under
+    the kerb, so nothing built over a street counts."""
+    cy, _, _ = CANAL
+    game = lambda x0, x1, y0, y1: [round(x0, 3), round(-y1, 3), round(x1, 3), round(-y0, 3)]
+    lines_at = [k * PITCH for k in range(-BLOCKS // 2 + 1, BLOCKS // 2)]
+    ring = HALF - STREET / 2
+    every = lines_at + [-ring, ring]
+    roads, crossings = [], []
+    for c in every:
+        roads.append(game(c - STREET / 2, c + STREET / 2, -HALF, HALF))
+        if abs(c - cy) >= 9:
+            roads.append(game(-HALF, HALF, c - STREET / 2, c + STREET / 2))
+    # The canal's bridges, where its street crosses the others.
+    for c in every:
+        crossings.append(game(c - STREET / 2, c + STREET / 2, cy - STREET / 2, cy + STREET / 2))
+    # As streets() stripes them: across each street, either side of each junction.
+    for jx in every:
+        for jy in every:
+            if abs(jy - cy) < 9:
+                continue
+            for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                ox, oy = jx + dx * (STREET / 2 + 1.5), jy + dy * (STREET / 2 + 1.5)
+                if abs(ox) > HALF - 1 or abs(oy) > HALF - 1:
+                    continue
+                if dx:
+                    crossings.append(game(ox - 1.0, ox + 1.0, jy - STREET / 2, jy + STREET / 2))
+                else:
+                    crossings.append(game(jx - STREET / 2, jx + STREET / 2, oy - 1.0, oy + 1.0))
+    return {"level": KERB / 2, "roads": roads, "crossings": crossings}
+
+
 def block(m, rng, i, j):
     """A block: its pavement, its lamps and trees, and what stands on it."""
     cx, cy = block_middle(i, j)
@@ -1633,6 +1669,10 @@ def main():
         with open(glow_path, "w") as f:
             json.dump({"intensity": 3.0, "pieces": m.pieces}, f, separators=(",", ":"))
         print(f"[map] {len(m.pieces)} pieces of light -> {glow_path}")
+        roads_path = os.path.splitext(os.path.abspath(glb))[0] + ".roads.json"
+        with open(roads_path, "w") as f:
+            json.dump(road_plan(), f, separators=(",", ":"))
+        print(f"[map] roads and crossings -> {roads_path}")
         bpy.ops.export_scene.gltf(filepath=os.path.abspath(glb), export_format="GLB", export_extras=True,
                                   export_cameras=False, export_lights=False)
         print(f"[map] exported -> {glb}")

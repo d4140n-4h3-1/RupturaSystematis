@@ -53,6 +53,9 @@ pub const CTF_SCRIPT: &str = "data/dialogue/ctf.json";
 pub const ROYALE_SCRIPT: &str = "data/dialogue/royale.json";
 /// What the guards say in a heist, as they hunt whoever breaks in: they are not talked to.
 pub const HEIST_SCRIPT: &str = "data/dialogue/heist.json";
+/// What the droids of a city say, in the story: about the city, its robberies, and the way to
+/// Summa. There are many more of them, and some of its security droids walk about in pairs.
+pub const URBS_SCRIPT: &str = "data/dialogue/urbs.json";
 
 /// A skill check on a reply: which skill, and the chance it succeeds, in percent.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -184,12 +187,19 @@ pub struct Character {
     /// keep their own; the colours are for another kind of droid.
     #[serde(default)]
     pub hostile_colours: bool,
+    /// What share of droids of its kind walk about in twos, one keeping beside the other, from 0
+    /// to 1: none, without.
+    #[serde(default)]
+    pub in_pairs: f32,
 }
 
 /// Everyone's conversations, as the file has them.
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 pub struct Script {
     pub characters: Vec<Character>,
+    /// How many droids live in a level they are in; the game's own number, without.
+    #[serde(default)]
+    pub inhabitants: Option<usize>,
 }
 
 impl Script {
@@ -630,6 +640,21 @@ mod tests {
     fn the_droids_conversations_load() {
         let script = Script::load(SCRIPT).unwrap();
         assert!(!script.characters.is_empty());
+    }
+
+    #[test]
+    fn urbs_is_peopled_some_of_its_security_in_pairs_and_each_kind_talks_of_summa() {
+        let script = Script::load(URBS_SCRIPT).unwrap();
+        let voices = crate::formants::speech::Voices::load(crate::formants::speech::VOICES).unwrap();
+        assert!(script.inhabitants.is_some_and(|n| n > 6), "more than a maze has");
+        let sentries = script.characters.iter().filter(|c| c.threatened.is_some_and(|t| t.then == Provoked::Attacks));
+        assert!(sentries.clone().count() > 0 && sentries.clone().all(|c| (0.0..1.0).contains(&c.in_pairs) && c.in_pairs > 0.0), "some of security in pairs, not all");
+        assert!(script.characters.iter().filter(|c| c.threatened.is_some_and(|t| t.then != Provoked::Attacks)).all(|c| c.in_pairs == 0.0));
+        for character in &script.characters {
+            assert!(voices.voices.contains_key(&character.name), "{} has a voice", character.name);
+            let summa = character.lines.values().any(|line| line.says.contains("Summa"));
+            assert!(summa, "{} talks of Summa", character.name);
+        }
     }
 
     /// What a competitor in battle royale says by itself: hunting the player, going after anyone,

@@ -745,6 +745,12 @@
    ],
    "gloss": "area"
   },
+  "argentaria": {
+   "pos": [
+    "noun"
+   ],
+   "gloss": "bank"
+  },
   "auctoritas": {
    "pos": [
     "noun"
@@ -756,6 +762,12 @@
     "noun"
    ],
    "gloss": "hearing"
+  },
+  "aurum": {
+   "pos": [
+    "noun"
+   ],
+   "gloss": "gold"
   },
   "aut": {
    "pos": [
@@ -907,6 +919,12 @@
    ],
    "gloss": "loop / cycle"
   },
+  "civis": {
+   "pos": [
+    "noun"
+   ],
+   "gloss": "citizen (one who lives in a city: droid or program)"
+  },
   "clades": {
    "pos": [
     "noun"
@@ -1033,6 +1051,12 @@
    ],
    "gloss": "corridor / passage"
   },
+  "creditum": {
+   "pos": [
+    "noun"
+   ],
+   "gloss": "credit (money; what a terminal keeps a store's takings in)"
+  },
   "crisis": {
    "pos": [
     "noun"
@@ -1110,6 +1134,12 @@
     "noun"
    ],
    "gloss": "diagnostics"
+  },
+  "dies": {
+   "pos": [
+    "noun"
+   ],
+   "gloss": "day"
   },
   "differentia": {
    "pos": [
@@ -1326,6 +1356,18 @@
     "noun"
    ],
    "gloss": "function"
+  },
+  "fur": {
+   "pos": [
+    "noun"
+   ],
+   "gloss": "thief"
+  },
+  "furtum": {
+   "pos": [
+    "noun"
+   ],
+   "gloss": "theft"
   },
   "generator": {
    "pos": [
@@ -1863,6 +1905,12 @@
     "adj"
    ],
    "gloss": "new"
+  },
+  "nox": {
+   "pos": [
+    "noun"
+   ],
+   "gloss": "night"
   },
   "nullum": {
    "pos": [
@@ -2540,6 +2588,12 @@
    ],
    "gloss": "submission"
   },
+  "summa": {
+   "pos": [
+    "noun"
+   ],
+   "gloss": "summit / the top. in urbs, the name of its tallest tower"
+  },
   "super": {
    "pos": [
     "prep"
@@ -2570,6 +2624,12 @@
     "art"
    ],
    "gloss": "the (plural)"
+  },
+  "taberna": {
+   "pos": [
+    "noun"
+   ],
+   "gloss": "shop / store"
   },
   "tabula": {
    "pos": [
@@ -2685,6 +2745,12 @@
    ],
    "gloss": "then"
   },
+  "turris": {
+   "pos": [
+    "noun"
+   ],
+   "gloss": "tower"
+  },
   "tutum": {
    "pos": [
     "adj"
@@ -2720,6 +2786,12 @@
     "digit"
    ],
    "gloss": "1"
+  },
+  "urbs": {
+   "pos": [
+    "noun"
+   ],
+   "gloss": "city"
   },
   "usor": {
    "pos": [

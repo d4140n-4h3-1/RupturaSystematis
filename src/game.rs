@@ -27,7 +27,7 @@ use crate::{
     diagnostics::{self, FrameStats},
     dialogue::{
         screen::{self, DialogueScreen, Pointer, Subtitles},
-        Bark, Conversation, Facts, Mood, Provoked, Script, CTF_SCRIPT, HEIST_SCRIPT, ROYALE_SCRIPT, SCRIPT,
+        Bark, Conversation, Facts, Mood, Provoked, Script, CTF_SCRIPT, HEIST_SCRIPT, ROYALE_SCRIPT, SCRIPT, URBS_SCRIPT,
     },
     formants::{
         self,
@@ -37,6 +37,7 @@ use crate::{
     },
     generate::Maze,
     glow::GlowLights,
+    roads::RoadPlan,
     hud::{self, Hud, Status},
     inhabitants::{Alert, Inhabitants, Livery, News, Rival, Threat, HOSTILE_MODEL},
     layout::{self, Rng},
@@ -281,6 +282,10 @@ pub struct MazeGame {
     #[visit(skip)]
     #[reflect(hidden)]
     glow: Option<GlowLights>,
+    /// The level's roads, for its droids to keep off but to cross, if it has any (see [`roads`]).
+    #[visit(skip)]
+    #[reflect(hidden)]
+    road_plan: Option<RoadPlan>,
     /// The droid the player is seen as, until it has loaded and joined the player.
     #[visit(skip)]
     #[reflect(hidden)]
@@ -718,9 +723,13 @@ impl MazeGame {
                 self.doors = Doors::request(resources);
                 // Not on the web, which has never had them.
                 self.glow = if cfg!(target_arch = "wasm32") { None } else { GlowLights::load(&path) };
+                self.road_plan = RoadPlan::load(&path);
                 self.model_path = path;
             }
-            None => self.prefabs = Some(Prefabs::request(resources)),
+            None => {
+                self.prefabs = Some(Prefabs::request(resources));
+                self.road_plan = None;
+            }
         }
         Log::info(format!("Playing {game:?}"));
         self.main_menu.set_open(ctx.user_interfaces.first(), false);
@@ -910,11 +919,16 @@ impl MazeGame {
         // A map marking a way in, loot and a way out is played as a heist.
         let plan = if self.ctf.is_none() { Plan::from_markers(&self.level.markers) } else { None };
         self.heist = plan.map(Heist::new);
-        let script = match (self.ctf.is_some(), royale, self.heist.is_some()) {
-            (true, _, _) => CTF_SCRIPT,
-            (false, true, _) => ROYALE_SCRIPT,
-            (false, false, true) => HEIST_SCRIPT,
-            (false, false, false) => SCRIPT,
+        // A place for a story is crossed from its station to its tallest tower, and its droids
+        // talk of it.
+        let place = |name: &str| self.level.markers.iter().find(|m| m.name == name).map(|m| m.position);
+        let story = place(STORY_START).zip(place(STORY_END));
+        let script = match (self.ctf.is_some(), royale, self.heist.is_some(), story.is_some()) {
+            (true, _, _, _) => CTF_SCRIPT,
+            (false, true, _, _) => ROYALE_SCRIPT,
+            (false, false, true, _) => HEIST_SCRIPT,
+            (false, false, false, true) => URBS_SCRIPT,
+            (false, false, false, false) => SCRIPT,
         };
         if script != self.script_path {
             self.use_script(&ctx.resource_manager, script);
@@ -930,9 +944,6 @@ impl MazeGame {
         let Some(rng) = self.rng.as_mut() else {
             return;
         };
-        // A place for a story is crossed from its station to its tallest tower.
-        let place = |name: &str| self.level.markers.iter().find(|m| m.name == name).map(|m| m.position);
-        let story = place(STORY_START).zip(place(STORY_END));
         let round = match (story, self.level.goal) {
             (Some((from, to)), _) => {
                 survey::nearest_walkable(grid, *origin, from).zip(survey::nearest_walkable(grid, *origin, to))
@@ -1512,9 +1523,22 @@ impl MazeGame {
                 None => match &self.royale {
                     // In battle royale, a droid on a side of its own at each of the others' starts.
                     Some(royale) => self.inhabitants.populate_lone(scene, liveries, (grid, *origin), &royale.first_starts, rng),
-                    None => self
-                        .inhabitants
-                        .populate(scene, liveries, (grid, *origin), player, self.player.yaw(), rng),
+                    None => {
+                        let script = self.script.as_ref();
+                        let people = script.and_then(|script| script.inhabitants);
+                        let in_pairs = |character: usize| {
+                            script.and_then(|script| script.characters.get(character)).map_or(0.0, |c| c.in_pairs)
+                        };
+                        self.inhabitants.populate(
+                            scene,
+                            liveries,
+                            (grid, *origin),
+                            (player, self.player.yaw()),
+                            (people, in_pairs),
+                            self.level.roads.as_ref(),
+                            rng,
+                        )
+                    }
                 },
             }
         }
@@ -1548,6 +1572,7 @@ impl MazeGame {
             &mut scene.graph,
             (grid, *origin),
             &crossings,
+            self.level.roads.as_ref(),
             player,
             &rivals,
             rng,
@@ -3590,7 +3615,7 @@ impl Plugin for MazeGame {
                 } else {
                     let graph = &mut ctx.scenes[self.scene].graph;
                     let exit_mesh = self.exit_mesh(graph);
-                    self.level.finish(graph, exit_mesh, self.open_sky());
+                    self.level.finish(graph, exit_mesh, self.open_sky(), self.road_plan.as_ref());
                     // A new level's lamps start out on; they follow the player's choice.
                     self.apply_lights(ctx);
                     self.start_round(ctx);

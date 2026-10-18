@@ -259,6 +259,9 @@ System Latin is a machine-oriented constructed language based primarily on Latin
 |---|---|
 | **Hostis** | Enemy / Adversary. |
 | **Intrusor** | Intruder. |
+| **Civis** | Citizen (one who lives in a city: droid or program). |
+| **Fur** | Thief. |
+| **Furtum** | Theft. |
 | **Adversarius** | Adversary. |
 | **Hostis detectum.** | Enemy detected. |
 | **Hostis deletatum.** | Enemy destroyed. |
@@ -652,6 +655,8 @@ System Latin is a machine-oriented constructed language based primarily on Latin
 | System Latin | English |
 |---|---|
 | **Tempus** | Time. |
+| **Nox** | Night. |
+| **Dies** | Day. |
 | **Nunc** | Now. |
 | **Statim** | Immediately / At once. |
 | **Semper** | Always. |
@@ -801,6 +806,12 @@ System Latin is a machine-oriented constructed language based primarily on Latin
 | **Ingressus** | Entrance. |
 | **Obstaculum** | Obstacle. |
 | **Obstruatio** | Obstruction. |
+| **Urbs** | City. |
+| **Turris** | Tower. |
+| **Summa** | Summit / the top. In Urbs, the name of its tallest tower. |
+| **Statio** | Station. |
+| **Argentaria** | Bank. |
+| **Taberna** | Shop / store. |
 | **Zona tutum.** | Safe zone. |
 | **Zona periculosum.** | Dangerous zone. |
 | **Area restrictum.** | Restricted area. |
@@ -839,6 +850,8 @@ System Latin is a machine-oriented constructed language based primarily on Latin
 | **Circuitus** | Circuit. |
 | **Cablum** | Cable. |
 | **Fons** | Source. |
+| **Aurum** | Gold. |
+| **Creditum** | Credit (money; what a terminal keeps a store's takings in). |
 | **Recipator** | Receiver. |
 | **Emitter** | Emitter. |
 
@@ -2676,6 +2689,7 @@ Changes from the original file.
 - Section XL (origin labels), the design principles, and the locked-vocabulary note were updated to match.
 
 **Earlier revisions (still in effect)**
+- Added city vocabulary, for Urbs: **Urbs** (city), **Turris** (tower), **Summa** (summit; Urbs's tallest tower), **Argentaria** (bank), **Taberna** (store), **Aurum** (gold), **Creditum** (credit), **Civis** (citizen), **Fur** (thief), **Furtum** (theft), **Nox** (night) and **Dies** (day), all Latin. **Statio** (station) was already in the lexicon and now has its own row.
 - Status-line modifiers regularized to neuter **-um** (about fifty phrases).
 - **Hostis multiplicatum** → **Multum hostis detectum**; reserves are **Reserva normale / criticum**.
 - **Systema online / offline** → **Systema connectum / deconnectum**; **Optional** → **Optionale**; **Maintentio** → **Manutentio**.

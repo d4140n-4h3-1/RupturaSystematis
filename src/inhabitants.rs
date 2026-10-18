@@ -72,8 +72,10 @@
 
 pub use hydroxus_ai::alert::{Alert, CAUTION, EVASION};
 pub(crate) use hydroxus_ai::route::{between, plan, route_to};
+use hydroxus_ai::route::along;
 use crate::{
     ferry::Crossing,
+    roads::Roads,
     trip::{self, Doing, Trip},
 };
 use hydroxus_ai::{
@@ -122,8 +124,25 @@ use fyrox::{
 
 /// The droid in the colours any kind of droid takes on while it is after the player.
 pub const HOSTILE_MODEL: &str = "data/droid_hostile.glb";
-/// How many droids live in a maze, unless MAZE_INHABITANTS says otherwise.
+/// How many droids live in a maze, unless the conversations or MAZE_INHABITANTS say otherwise.
 const COUNT: usize = 6;
+/// A pair walking about together: how far to its partner's right the one keeping beside it walks,
+/// and how far behind, in meters; how far off that it hurries to catch up; and how far behind
+/// the one leading lets it get before waiting for it.
+const BESIDE: (f32, f32) = (1.1, 0.3);
+const CATCH_UP: f32 = 3.0;
+/// How far ahead of where its partner is, in seconds of its walking, the one keeping beside it
+/// makes for: where it will be by the time it gets there.
+const LEAD: f32 = 1.0;
+const WAIT_FOR: f32 = 6.0;
+/// How often a droid is posed, by how far it is from the player: every frame as near as the
+/// first, in meters; at most this often in seconds out to the second; and beyond, at most the
+/// last as often. A city has dozens of droids, nearly all of them a long way off, small, and
+/// posing each is most of what moving them along costs. Its body goes on moving every frame.
+const POSE_EVERY: (f32, f32, f32, f32) = (35.0, 80.0, 0.1, 0.25);
+/// How much further than as the crow flies a droid going about its business will walk to get
+/// somewhere, before giving it up for somewhere else.
+const DETOUR: f32 = 2.5;
 /// Their bodies: a capsule this far out from its middle line, with its middle this far above the
 /// feet - 1.7 m tall, like the player's.
 const RADIUS: f32 = 0.3;
@@ -391,6 +410,12 @@ struct Inhabitant {
     reload: f32,
     armed_left: f32,
     aimed_at: Option<Vector3<f32>>,
+    /// The droid it walks about with, if it is one of a pair, as an index; and whether it leads
+    /// the way, or keeps beside the other.
+    partner: Option<usize>,
+    leads: bool,
+    /// How long since it was last posed, in seconds (see [`POSE_EVERY`]).
+    unposed: f32,
 }
 
 impl Inhabitant {
@@ -523,6 +548,18 @@ fn recolour(graph: &mut Graph, root: Handle<Node>, livery: &Livery, hostile: boo
     }
 }
 
+/// What a droid walking about with a partner goes by, of the other.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Partner {
+    feet: Vector3<f32>,
+    heading: f32,
+    speed: f32,
+    /// Whether it is going about its business - calm, or wary - rather than down or hunting.
+    about: bool,
+    /// Whether it is kept where it is by the player: talking to them, or warning them off.
+    held: bool,
+}
+
 /// Everyone who lives in the maze.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct Inhabitants {
@@ -562,6 +599,48 @@ const SEARCH_APART: f32 = 4.0;
 /// cut them off, in meters; and how near it has to be to go straight at them instead.
 const CUT_OFF: f32 = 10.0;
 const CLOSE_IN: f32 = 4.0;
+
+/// Which way is to the right of one facing `heading`: facing +z, -x.
+fn right_of(heading: f32) -> Vector3<f32> {
+    Vector3::new(-heading.cos(), 0.0, heading.sin())
+}
+
+/// As [`plan`], a trip for a droid going about its business from `feet` - but keeping off the
+/// `roads`, if there are any: to somewhere off them a `trip` away as the crow flies, the way that
+/// crosses them least (see [`Roads::extra`]). One that finds itself on a road, as it might after
+/// a chase, gets off it the shortest way. The way there is found by heading for it, so it costs
+/// about as much as the route is long, however big the city; a spot it cannot get to within
+/// [`DETOUR`] times as far, it tries no further for. Empty, with nowhere found to go.
+fn wander(
+    (grid, origin): (&WalkGrid, Vector3<f32>),
+    feet: Vector3<f32>,
+    trip: (f32, f32),
+    roads: Option<&Roads>,
+    rng: &mut Rng,
+) -> Vec<Vector3<f32>> {
+    let Some(roads) = roads else {
+        return plan((grid, origin), feet, trip, rng);
+    };
+    let Some(from) = survey::cell_at(grid, origin, feet).filter(|&(x, z)| grid.is_walkable(x, z)) else {
+        return Vec::new();
+    };
+    let on_road = roads.is_road(from.0, from.1);
+    // Somewhere off the road, on any floor there, a trip's steps away across the grid.
+    let goal = (0..24).find_map(|_| {
+        let angle = between(rng, (-std::f32::consts::PI, std::f32::consts::PI));
+        let away = between(rng, trip) * grid.cell_size;
+        let spot = feet + Vector3::new(angle.sin(), 0.0, angle.cos()) * away;
+        let plan = grid.plan(survey::cell_at(grid, origin, spot)?);
+        let floors: Vec<(usize, usize)> = grid.cells_over(plan).filter(|&(x, z)| !roads.is_road(x, z)).collect();
+        (!floors.is_empty()).then(|| (floors[rng.below(floors.len())], away / grid.cell_size))
+    });
+    let Some((goal, steps)) = goal else {
+        return Vec::new();
+    };
+    let extra = |x: usize, z: usize| if on_road { 0.0 } else { roads.extra(x, z) };
+    grid.route_between_weighted(from, goal, steps * DETOUR + 20.0, extra)
+        .map_or_else(Vec::new, |path| along(grid, origin, path))
+}
 
 /// Whether a droid at `feet`, facing `heading`, in `alert` - or calm, with none - could see
 /// another droid at `other`, if nothing were in the way: as it would see the player standing
@@ -827,15 +906,19 @@ impl Inhabitants {
 
     /// Puts the maze's inhabitants into `scene` on the floor of `grid` whose corner is at
     /// `origin`, well away from the `player`'s feet - all but one, a little way in front of them
-    /// as they face `facing`. They take turns being each of the kinds of droid there are to talk
-    /// to, each looking as its one of `liveries` has it.
+    /// as they face `facing` - and off the `roads`, if it has any. They take turns being each of
+    /// the kinds of droid there are to talk to, each looking as its one of `liveries` has it:
+    /// `people` of them, or [`COUNT`] without - or as MAZE_INHABITANTS says. Of each kind, the
+    /// share `in_pairs` says walk about in twos, one keeping beside the other.
+    #[allow(clippy::too_many_arguments)]
     pub fn populate(
         &mut self,
         scene: &mut Scene,
         liveries: Vec<Livery>,
         (grid, origin): (&WalkGrid, Vector3<f32>),
-        player: Vector3<f32>,
-        facing: f32,
+        (player, facing): (Vector3<f32>, f32),
+        (people, in_pairs): (Option<usize>, impl Fn(usize) -> f32),
+        roads: Option<&Roads>,
         rng: &mut Rng,
     ) {
         self.clear(&mut scene.graph);
@@ -848,7 +931,9 @@ impl Inhabitants {
         ragdoll::prepare(&mut scene.graph);
         let count = crate::platform::var("MAZE_INHABITANTS")
             .and_then(|n| n.trim().parse().ok())
+            .or(people)
             .unwrap_or(COUNT);
+        let on_road = |i: usize| roads.is_some_and(|roads| roads.is_road(i % grid.width, i / grid.width));
         let Some(start) = survey::cell_at(grid, origin, player)
             .filter(|&(x, z)| grid.is_walkable(x, z))
             .or_else(|| survey::nearest_walkable(grid, origin, player))
@@ -860,14 +945,14 @@ impl Inhabitants {
             .costs
             .iter()
             .enumerate()
-            .filter(|(_, cost)| cost.is_some_and(|c| c >= AWAY_FROM_PLAYER))
+            .filter(|&(i, cost)| cost.is_some_and(|c| c >= AWAY_FROM_PLAYER) && !on_road(i))
             .map(|(i, _)| (i % grid.width, i / grid.width))
             .collect();
         let near: Vec<(usize, usize)> = routes
             .costs
             .iter()
             .enumerate()
-            .filter(|(_, cost)| cost.is_some_and(|c| (NEAR_PLAYER.0..=NEAR_PLAYER.1).contains(&c)))
+            .filter(|&(i, cost)| cost.is_some_and(|c| (NEAR_PLAYER.0..=NEAR_PLAYER.1).contains(&c)) && !on_road(i))
             .map(|(i, _)| (i % grid.width, i / grid.width))
             .collect();
         // In front of them if there is room, where they will see it.
@@ -881,7 +966,10 @@ impl Inhabitants {
             .collect();
         let near = if ahead.is_empty() { near } else { ahead };
         let first = rng.below(characters);
-        for n in 0..count {
+        for n in 0.. {
+            if self.droids.len() >= count {
+                break;
+            }
             // The first near the player, if there is room; the rest away.
             let close = n == 0 && !near.is_empty();
             let place = match close {
@@ -906,8 +994,24 @@ impl Inhabitants {
             if !self.spawn_one(scene, feet, heading, resting, character, rng) {
                 break;
             }
+            // Its partner beside it, if it is one of a pair.
+            let paired = self.droids.len() < count && (rng.below(1000) as f32) < in_pairs(character) * 1000.0;
+            let beside = feet + right_of(heading) * BESIDE.0;
+            let floor = survey::cell_at(grid, origin, beside)
+                .filter(|&(x, z)| grid.is_walkable(x, z) && !roads.is_some_and(|roads| roads.is_road(x, z)))
+                .map(|cell| grid.on_floor(origin, cell));
+            if let Some(beside) = floor.filter(|_| paired) {
+                if !self.spawn_one(scene, beside, heading, resting, character, rng) {
+                    break;
+                }
+                let (leader, other) = (self.droids.len() - 2, self.droids.len() - 1);
+                self.droids[leader].partner = Some(other);
+                self.droids[leader].leads = true;
+                self.droids[other].partner = Some(leader);
+            }
         }
-        Log::info(format!("Maze: {} inhabitants", self.droids.len()));
+        let pairs = self.droids.iter().filter(|droid| droid.leads).count();
+        Log::info(format!("Maze: {} inhabitants, {pairs} pairs of them", self.droids.len()));
     }
 
     /// Puts one droid, of kind `character`, into `scene` with its feet at `feet`, facing
@@ -991,6 +1095,10 @@ impl Inhabitants {
             reload: 0.0,
             armed_left: 0.0,
             aimed_at: None,
+            partner: None,
+            leads: false,
+            // Not all posed on the same frame, far off.
+            unposed: between(rng, (0.0, POSE_EVERY.3)),
         });
         true
     }
@@ -1245,6 +1353,7 @@ impl Inhabitants {
         graph: &mut Graph,
         (grid, origin): (&WalkGrid, Vector3<f32>),
         crossings: &[Crossing],
+        roads: Option<&Roads>,
         player: Vector3<f32>,
         rivals: &[Rival],
         rng: &mut Rng,
@@ -1275,6 +1384,21 @@ impl Inhabitants {
         let the_player = everyone.len() - 1;
         // Those lying where they went down are in no one's way.
         let down: Vec<bool> = self.droids.iter().map(|droid| droid.down).collect();
+        // Each one's partner, if it walks about with one, as of the start of this frame.
+        let partners: Vec<Option<Partner>> = self
+            .droids
+            .iter()
+            .map(|droid| {
+                let other = &self.droids[droid.partner?];
+                Some(Partner {
+                    feet: other.feet,
+                    heading: other.heading,
+                    speed: other.speed,
+                    about: !other.down && matches!(other.alert, None | Some(Alert::Caution)),
+                    held: other.talking || other.warned > 0,
+                })
+            })
+            .collect();
         // In capture the flag, whom of the other side each is after, and whether it sees them:
         // the nearest it sees - or, near enough, hears - or else the one it was after, for a while
         // after losing sight of them. The other side's droids and drones alike.
@@ -1492,6 +1616,8 @@ impl Inhabitants {
             // Taking a ferry, it does as the trip says until it is across, whatever else it is
             // about: on its way to the ferry, it still works out its way again as it goes.
             let mut on_trip = false;
+            // Keeping beside its partner, whether it has fallen behind.
+            let mut catching_up = false;
             if let Some(trip) = droid.trip.as_mut().filter(|_| !droid.down) {
                 match trip.step(droid.feet, &droid.route, crossings) {
                     Doing::Go(route) => {
@@ -1625,6 +1751,33 @@ impl Inhabitants {
                         }
                     }
                 }
+            } else if let Some(leader) = partners[me].filter(|leader| leader.about && !droid.leads) {
+                // Keeping beside its partner, on its right and a step behind - where it is going
+                // to be in a moment, as it walks - or else behind it, with no floor off the road
+                // there.
+                let ahead = forward(leader.heading) * leader.speed * LEAD;
+                let keeps_off = |at: Vector3<f32>| {
+                    floor_at(at)
+                        && !survey::cell_at(grid, origin, at).is_some_and(|(x, z)| roads.is_some_and(|r| r.is_road(x, z)))
+                };
+                let slot = [
+                    leader.feet + ahead + right_of(leader.heading) * BESIDE.0 - forward(leader.heading) * BESIDE.1,
+                    leader.feet + ahead - forward(leader.heading) * BESIDE.0,
+                ]
+                .into_iter()
+                .find(|&slot| keeps_off(slot))
+                .unwrap_or(leader.feet + ahead - forward(leader.heading) * BESIDE.0);
+                droid.replan -= dt;
+                let off = flat(slot - droid.feet).norm();
+                if off < REACHED && leader.speed < 0.1 {
+                    // There, and the other standing: it stands too, facing the same way.
+                    droid.route.clear();
+                    droid.heading = leader.heading;
+                } else if droid.replan <= 0.0 || droid.route.is_empty() {
+                    droid.replan = REPLAN;
+                    droid.route = route_to((grid, origin), droid.feet, slot, CHASE_REACH);
+                }
+                catching_up = off > CATCH_UP;
             } else if droid.route.is_empty() {
                 if let Some(aside) = step_aside(droid.feet, others.clone(), floor_at) {
                     droid.route = vec![aside];
@@ -1652,7 +1805,7 @@ impl Inhabitants {
                                     .map(|to| go_to(droid.feet, to))
                                     .unwrap_or_default()
                             }
-                            None => (plan((grid, origin), droid.feet, TRIP, rng), None),
+                            None => (wander((grid, origin), droid.feet, TRIP, roads, rng), None),
                         },
                     };
                     if droid.route.is_empty() {
@@ -1670,6 +1823,7 @@ impl Inhabitants {
             // Running after the player, and jogging to where it lost them.
             let after = droid.alert == Some(Alert::Alert) || fighting.is_some();
             let hurrying = after
+                || catching_up
                 || (droid.alert == Some(Alert::Evasion) && droid.searched <= 1)
                 || droid.trip.is_some_and(|trip| trip.hurrying());
             // After the player, it sprints now and then, when it is not to be told.
@@ -1710,8 +1864,14 @@ impl Inhabitants {
                 }
             }
 
+            // Leading the way, it waits for its partner, kept talking or fallen behind.
+            let waiting_for_partner = droid.leads
+                && matches!(droid.alert, None | Some(Alert::Caution))
+                && partners[me].is_some_and(|other| {
+                    other.about && (other.held || flat(other.feet - droid.feet).norm() > WAIT_FOR)
+                });
             let mut wanted = 0.0;
-            if let Some(&next) = droid.route.last() {
+            if let Some(&next) = droid.route.last().filter(|_| !waiting_for_partner) {
                 let to = flat(next - droid.feet);
                 if droid.route.len() == 1 && to.norm() < ARRIVED {
                     droid.route.clear();
@@ -1857,7 +2017,19 @@ impl Inhabitants {
                 look,
                 way: 0.0,
             };
-            droid.avatar.animate(graph, going, dt);
+            // Far off, posed now and then; near, or fighting, every frame.
+            droid.unposed += dt;
+            let away = flat(player - droid.feet).norm();
+            let every = match away {
+                _ if target.is_some() || trigger || droid.armed_left > 0.0 => 0.0,
+                away if away < POSE_EVERY.0 => 0.0,
+                away if away < POSE_EVERY.1 => POSE_EVERY.2,
+                _ => POSE_EVERY.3,
+            };
+            if droid.unposed >= every {
+                droid.avatar.animate(graph, going, droid.unposed);
+                droid.unposed = 0.0;
+            }
             // A shot leaves the muzzle as the pistol fires, at what it aimed at, give or take.
             if let (Some((from, _)), Some(at), Some(side)) = (droid.avatar.shot(), droid.aimed_at, droid.side) {
                 let wide = SPREAD * (at - from).norm() / 10.0;
@@ -2187,13 +2359,16 @@ impl Inhabitants {
             .collect()
     }
 
-    /// Turns the `n`th droid on the player: after a moment it hunts them, and it cannot be
-    /// talked to any more.
+    /// Turns the `n`th droid on the player - and its partner with it, if it walks about with one:
+    /// after a moment they hunt them, and cannot be talked to any more.
     pub fn set_hostile(&mut self, n: usize) {
-        if let Some(droid) = self.droids.get_mut(n).filter(|droid| !droid.down && droid.hunts_player()) {
-            droid.alert = Some(Alert::Alert);
-            droid.windup = WINDUP;
-            droid.replan = 0.0;
+        let partner = self.droids.get(n).and_then(|droid| droid.partner);
+        for m in std::iter::once(n).chain(partner) {
+            if let Some(droid) = self.droids.get_mut(m).filter(|droid| !droid.down && droid.hunts_player()) {
+                droid.alert = Some(Alert::Alert);
+                droid.windup = WINDUP;
+                droid.replan = 0.0;
+            }
         }
     }
 
@@ -2446,6 +2621,49 @@ mod tests {
     use super::*;
 
     const AHEAD: Vector3<f32> = Vector3::new(0.0, 0.0, 1.0);
+
+    #[test]
+    fn its_right_is_to_the_right() {
+        // Facing +z, the right is -x; facing +x, it is +z.
+        assert!((right_of(0.0) - Vector3::new(-1.0, 0.0, 0.0)).norm() < 1.0e-6);
+        assert!((right_of(std::f32::consts::FRAC_PI_2) - Vector3::new(0.0, 0.0, 1.0)).norm() < 1.0e-6);
+        assert!(right_of(0.7).dot(&forward(0.7)).abs() < 1.0e-6);
+    }
+
+    #[test]
+    fn going_about_its_business_it_keeps_off_the_road_but_to_cross() {
+        // A street 4 m wide down the middle of ground 20 m square, a crossing over it at z 10.
+        let mut grid = WalkGrid::new(40, 40, 0.5);
+        for x in 0..40 {
+            for z in 0..40 {
+                grid.set(x, z, true);
+                grid.set_floor(x, z, if (16..24).contains(&x) { 0.0 } else { 0.12 });
+            }
+        }
+        let plan: crate::roads::RoadPlan = serde_json::from_str(
+            r#"{ "level": 0.06, "roads": [[8, 0, 12, 20]], "crossings": [[8, 9, 12, 11]] }"#,
+        )
+        .unwrap();
+        let roads = plan.on(&grid, Vector3::zeros());
+        let mut rng = Rng::new(11);
+        let mut crossed = 0;
+        for _ in 0..40 {
+            let route = wander((&grid, Vector3::zeros()), Vector3::new(2.0, 0.12, 2.0), (10.0, 30.0), Some(&roads), &mut rng);
+            assert!(!route.is_empty());
+            for at in &route {
+                let (x, z) = survey::cell_at(&grid, Vector3::zeros(), *at).unwrap();
+                assert!(!roads.is_road(x, z), "on the road at {at:?}");
+            }
+            crossed += route.iter().any(|at| at.x > 12.0) as u32;
+        }
+        assert!(crossed > 0, "it does cross, at the crossing");
+        // On the road, it gets off it.
+        let route = wander((&grid, Vector3::zeros()), Vector3::new(10.0, 0.0, 2.0), (10.0, 30.0), Some(&roads), &mut rng);
+        let end = route.first().unwrap();
+        let (x, z) = survey::cell_at(&grid, Vector3::zeros(), *end).unwrap();
+        assert!(!roads.is_road(x, z));
+    }
+
     #[test]
     fn only_those_close_by_and_in_front_can_be_talked_to_nearest_first() {
         let droids = [
