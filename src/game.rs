@@ -39,7 +39,7 @@ use crate::{
     glow::GlowLights,
     roads::RoadPlan,
     hud::{self, Hud, Status},
-    inhabitants::{Alert, Inhabitants, Livery, News, Rival, Threat, HOSTILE_MODEL},
+    inhabitants::{Alert, Grouping, Inhabitants, Livery, News, Rival, Threat, HOSTILE_MODEL},
     layout::{self, Rng},
     level::Level,
     menu::{Choice, Game, MainMenu, PauseMenu, Start},
@@ -233,6 +233,7 @@ fn is_sentry(script: &Script, character: usize) -> bool {
     script
         .characters
         .get(character)
+        .filter(|character| !character.gang)
         .and_then(|character| character.threatened)
         .is_some_and(|threatened| threatened.then == Provoked::Attacks)
 }
@@ -1434,12 +1435,12 @@ impl MazeGame {
                         ));
                     }
                     let model = own.filter(|model| model.is_ok()).unwrap_or(droid);
-                    let recoloured = self
-                        .script
-                        .as_ref()
-                        .and_then(|script| script.characters.get(n))
-                        .is_some_and(|c| c.hostile_colours);
-                    Livery::new(model.clone(), hostile.filter(|_| recoloured))
+                    let character = self.script.as_ref().and_then(|script| script.characters.get(n));
+                    let recoloured = character.is_some_and(|c| c.hostile_colours);
+                    let hostile_eyes = character
+                        .and_then(|c| c.hostile_eyes)
+                        .map(|[r, g, b]| Color::opaque(r, g, b));
+                    Livery::new(model.clone(), hostile.filter(|_| recoloured)).with_hostile_eyes(hostile_eyes)
                 })
                 .collect(),
         )
@@ -1526,15 +1527,21 @@ impl MazeGame {
                     None => {
                         let script = self.script.as_ref();
                         let people = script.and_then(|script| script.inhabitants);
-                        let in_pairs = |character: usize| {
-                            script.and_then(|script| script.characters.get(character)).map_or(0.0, |c| c.in_pairs)
+                        let grouping = |character: usize| {
+                            script
+                                .and_then(|script| script.characters.get(character))
+                                .map_or_else(Grouping::default, |c| Grouping {
+                                    in_pairs: c.in_pairs,
+                                    groups_of: c.in_groups_of,
+                                    share: c.share,
+                                })
                         };
                         self.inhabitants.populate(
                             scene,
                             liveries,
                             (grid, *origin),
                             (player, self.player.yaw()),
-                            (people, in_pairs),
+                            (people, grouping),
                             script.is_some_and(|script| script.crowd),
                             self.level.roads.as_ref(),
                             rng,
@@ -1967,6 +1974,7 @@ impl MazeGame {
             let threatened = script.characters.get(character)?.threatened?;
             Some(threatened.patience)
         };
+        let crowded = |character: usize| script.characters.get(character)?.crowded;
         let player = &self.player;
         // It has to see it to mind it: as it would see the player at all.
         let watched = (player.feet(graph), player.posture(), self.lights_off && !player.flashlight_on());
@@ -1975,6 +1983,7 @@ impl MazeGame {
             watched,
             |there| player.can_see(graph, there),
             patience,
+            crowded,
             ctx.dt,
         );
         for (n, threat) in stages {

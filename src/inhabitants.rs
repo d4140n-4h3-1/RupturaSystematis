@@ -422,6 +422,8 @@ struct Inhabitant {
     /// the way, or keeps beside the other.
     partner: Option<usize>,
     leads: bool,
+    /// Keeping about the one leading its group, where (see [`ABOUT_LEADER`]).
+    slot: usize,
     /// How long since it was last posed, in seconds (see [`POSE_EVERY`]).
     unposed: f32,
 }
@@ -517,6 +519,8 @@ impl Inhabitant {
 pub struct Livery {
     model: ModelResource,
     hostile: Vec<(MaterialResource, MaterialResource)>,
+    /// The colour its eyes are while it is hostile, in place of the usual red.
+    hostile_eyes: Option<Color>,
 }
 
 impl Livery {
@@ -524,8 +528,48 @@ impl Livery {
     /// while it is after the player - the same droid in other colours - or, without, like itself.
     pub fn new(model: ModelResource, hostile: Option<&ModelResource>) -> Self {
         let hostile = hostile.map_or_else(Vec::new, |hostile| changed_materials(&model, hostile));
-        Self { model, hostile }
+        Self { model, hostile, hostile_eyes: None }
     }
+
+    /// The same kind of droid, its eyes `colour` while it is hostile rather than the usual red:
+    /// a droid already red all over shows up better with eyes of another colour.
+    pub fn with_hostile_eyes(mut self, colour: Option<Color>) -> Self {
+        self.hostile_eyes = colour;
+        self
+    }
+}
+
+/// How the droids of a kind walk about: in twos, as often as `in_pairs` says, from 0 to 1; or in
+/// groups of two up to `groups_of`; and how often one of the kind is put down against the others,
+/// its `share`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Grouping {
+    pub in_pairs: f32,
+    pub groups_of: usize,
+    pub share: f32,
+}
+
+impl Default for Grouping {
+    fn default() -> Self {
+        Self { in_pairs: 0.0, groups_of: 0, share: 1.0 }
+    }
+}
+
+/// Where each of a group keeps about the one leading it, after the first: how far to its right,
+/// in meters (to its left, less than none), and how far behind. The first of them is a pair's.
+const ABOUT_LEADER: [(f32, f32); 5] = [
+    (BESIDE.0, BESIDE.1),
+    (-BESIDE.0, BESIDE.1),
+    (0.0, 1.5),
+    (BESIDE.0, 1.9),
+    (-BESIDE.0, 1.9),
+];
+
+/// Where the one keeping to `slot` of [`ABOUT_LEADER`] stands, about a leader at `feet` facing
+/// `heading`.
+fn about_leader(feet: Vector3<f32>, heading: f32, slot: usize) -> Vector3<f32> {
+    let (right, behind) = ABOUT_LEADER[slot.min(ABOUT_LEADER.len() - 1)];
+    feet + right_of(heading) * right - forward(heading) * behind
 }
 
 /// Each of `from`'s materials that `to` has a different one in place of, mesh by mesh by name and
@@ -996,7 +1040,7 @@ impl Inhabitants {
         liveries: Vec<Livery>,
         (grid, origin): (&WalkGrid, Vector3<f32>),
         (player, facing): (Vector3<f32>, f32),
-        (people, in_pairs): (Option<usize>, impl Fn(usize) -> f32),
+        (people, grouping): (Option<usize>, impl Fn(usize) -> Grouping),
         crowd: bool,
         roads: Option<&Roads>,
         rng: &mut Rng,
@@ -1055,6 +1099,10 @@ impl Inhabitants {
             .collect();
         let near = if ahead.is_empty() { near } else { ahead };
         let first = rng.below(characters);
+        // Each kind in turn - or, with some more common than others, each picked by its share.
+        let shares: Vec<f32> = (0..characters).map(|c| grouping(c).share.max(0.0)).collect();
+        let even = shares.iter().all(|&share| share == shares[0]);
+        let total: f32 = shares.iter().sum();
         for n in 0.. {
             if self.droids.len() >= count {
                 break;
@@ -1079,28 +1127,76 @@ impl Inhabitants {
                 true => NEAR_REST,
                 false => between(rng, REST),
             };
-            let character = (first + n) % characters;
+            let character = match even || total <= 0.0 {
+                true => (first + n) % characters,
+                false => {
+                    let mut pick = between(rng, (0.0, total));
+                    shares.iter().position(|&share| {
+                        pick -= share;
+                        pick < 0.0
+                    })
+                    .unwrap_or(characters - 1)
+                }
+            };
             if !self.spawn_one(scene, feet, heading, resting, character, rng) {
                 break;
             }
-            // Its partner beside it, if it is one of a pair.
-            let paired = self.droids.len() < count && (rng.below(1000) as f32) < in_pairs(character) * 1000.0;
-            let beside = feet + right_of(heading) * BESIDE.0;
-            let floor = survey::cell_at(grid, origin, beside)
-                .filter(|&(x, z)| grid.is_walkable(x, z) && !roads.is_some_and(|roads| roads.is_road(x, z)))
-                .map(|cell| grid.on_floor(origin, cell));
-            if let Some(beside) = floor.filter(|_| paired) {
-                if !self.spawn_one(scene, beside, heading, resting, character, rng) {
+            // Those walking about with it, about it, if it is one of a pair or a group.
+            let Grouping { in_pairs, groups_of, .. } = grouping(character);
+            let size = if groups_of >= 2 {
+                2 + rng.below(groups_of - 1)
+            } else if (rng.below(1000) as f32) < in_pairs * 1000.0 {
+                2
+            } else {
+                1
+            };
+            let leader = self.droids.len() - 1;
+            let mut slot = 0;
+            for _ in 1..size {
+                if self.droids.len() >= count {
                     break;
                 }
-                let (leader, other) = (self.droids.len() - 2, self.droids.len() - 1);
-                self.droids[leader].partner = Some(other);
+                let floor = (slot..ABOUT_LEADER.len()).find_map(|s| {
+                    let at = about_leader(feet, heading, s);
+                    survey::cell_at(grid, origin, at)
+                        .filter(|&(x, z)| grid.is_walkable(x, z) && !roads.is_some_and(|roads| roads.is_road(x, z)))
+                        .map(|cell| (s, grid.on_floor(origin, cell)))
+                });
+                let Some((s, at)) = floor else {
+                    break;
+                };
+                if !self.spawn_one(scene, at, heading, resting, character, rng) {
+                    break;
+                }
+                let other = self.droids.len() - 1;
+                if self.droids[leader].partner.is_none() {
+                    self.droids[leader].partner = Some(other);
+                }
                 self.droids[leader].leads = true;
                 self.droids[other].partner = Some(leader);
+                self.droids[other].slot = s;
+                slot = s + 1;
             }
         }
-        let pairs = self.droids.iter().filter(|droid| droid.leads).count();
-        Log::info(format!("Maze: {} inhabitants, {pairs} pairs of them", self.droids.len()));
+        let groups = self.droids.iter().filter(|droid| droid.leads).count();
+        Log::info(format!("Maze: {} inhabitants, {groups} pairs or groups of them", self.droids.len()));
+    }
+
+    /// The `n`th droid's group: the one leading it first, then those keeping about it - or the
+    /// droid alone, walking about by itself.
+    fn group_of(&self, n: usize) -> Vec<usize> {
+        let Some(droid) = self.droids.get(n) else {
+            return Vec::new();
+        };
+        let leader = match droid.leads {
+            true => n,
+            false => droid.partner.unwrap_or(n),
+        };
+        std::iter::once(leader)
+            .chain((0..self.droids.len()).filter(|&m| {
+                m != leader && !self.droids[m].leads && self.droids[m].partner == Some(leader)
+            }))
+            .collect()
     }
 
     /// In a city, has those of its crowd that have got far from the `player`'s feet, going about
@@ -1155,23 +1251,27 @@ impl Inhabitants {
                 break;
             }
             let droid = &self.droids[n];
-            // A pair goes together, the one leading taking the other along; one whose partner is
-            // down goes on its own from now.
-            let partner = droid.partner.filter(|&p| !self.droids[p].down);
-            if partner.is_some() && !droid.leads {
+            // A pair or a group goes together, the one leading taking the rest along; one whose
+            // leader is down goes on its own from now.
+            if !droid.leads && droid.partner.is_some_and(|p| !self.droids[p].down) {
                 continue;
             }
+            let members: Vec<usize> = match droid.leads {
+                true => self.group_of(n).into_iter().filter(|&m| !self.droids[m].down).collect(),
+                false => vec![n],
+            };
             let gone = |droid: &Inhabitant| {
                 idle(droid) && flat(droid.feet - player).norm() > CROWD_GONE && hidden(graph, droid.feet)
             };
-            if !gone(droid) || partner.is_some_and(|p| !gone(&self.droids[p])) {
+            if !members.iter().all(|&m| gone(&self.droids[m])) {
                 continue;
             }
             let Some(crowd) = self.crowd.as_ref() else {
                 return;
             };
+            let slots: Vec<usize> = members.iter().skip(1).map(|&m| self.droids[m].slot).collect();
             // Somewhere it could have walked to, a little way off, where the player cannot see it
-            // turn up; and for a pair, room for the other beside it.
+            // turn up; and for a group, room for the rest about it.
             let spot = (0..CROWD_TRIES).find_map(|_| {
                 let angle = between(rng, (-std::f32::consts::PI, std::f32::consts::PI));
                 let away = between(rng, CROWD_BACK);
@@ -1186,24 +1286,24 @@ impl Inhabitants {
                     return None;
                 }
                 let heading = between(rng, (-std::f32::consts::PI, std::f32::consts::PI));
-                let beside = match partner {
-                    Some(_) => {
-                        let beside = survey::cell_at(grid, origin, feet + right_of(heading) * BESIDE.0).filter(|&cell| pavement(cell))?;
-                        Some(grid.on_floor(origin, beside))
-                    }
-                    None => None,
-                };
-                Some((feet, heading, beside))
+                let about: Option<Vec<Vector3<f32>>> = slots
+                    .iter()
+                    .map(|&slot| {
+                        let cell = survey::cell_at(grid, origin, about_leader(feet, heading, slot)).filter(|&cell| pavement(cell))?;
+                        Some(grid.on_floor(origin, cell))
+                    })
+                    .collect();
+                Some((feet, heading, about?))
             });
-            let Some((feet, heading, beside)) = spot else {
+            let Some((feet, heading, about)) = spot else {
                 continue;
             };
             let resting = between(rng, CROWD_REST);
             self.droids[n].put_down(graph, feet, heading, resting, rng);
-            if let (Some(p), Some(beside)) = (partner, beside) {
-                self.droids[p].put_down(graph, beside, heading, resting, rng);
+            for (&m, at) in members.iter().skip(1).zip(about) {
+                self.droids[m].put_down(graph, at, heading, resting, rng);
             }
-            if partner.is_none() && self.droids[n].partner.is_some() {
+            if members.len() == 1 && self.droids[n].partner.is_some() {
                 self.droids[n].partner = None;
                 self.droids[n].leads = false;
             }
@@ -1297,6 +1397,7 @@ impl Inhabitants {
             aimed_at: None,
             partner: None,
             leads: false,
+            slot: 0,
             // Not all posed on the same frame, far off.
             unposed: between(rng, (0.0, POSE_EVERY[POSE_EVERY.len() - 1].1)),
         });
@@ -1711,6 +1812,19 @@ impl Inhabitants {
             .min_by(|(_, a), (_, b)| flat(a.feet - player).norm().total_cmp(&flat(b.feet - player).norm()))
             .map(|(n, _)| n);
         let player_going = seeing.map(|d| d.lost_going);
+        // Which of those leading have one of their pair or group to wait for: kept talking, or
+        // fallen behind.
+        let mut waits = vec![false; self.droids.len()];
+        for droid in &self.droids {
+            let Some(leader) = droid.partner.filter(|_| !droid.leads) else {
+                continue;
+            };
+            let about = !droid.down && matches!(droid.alert, None | Some(Alert::Caution));
+            let held = droid.talking || droid.warned > 0;
+            if about && (held || flat(droid.feet - self.droids[leader].feet).norm() > WAIT_FOR) {
+                waits[leader] = true;
+            }
+        }
         // A crowd is busier: it stands about less between trips.
         let rest = match self.crowd {
             Some(_) => CROWD_REST,
@@ -1971,21 +2085,20 @@ impl Inhabitants {
                     }
                 }
             } else if let Some(leader) = partners[me].filter(|leader| leader.about && !droid.leads) {
-                // Keeping beside its partner, on its right and a step behind - where it is going
-                // to be in a moment, as it walks - or else behind it, with no floor off the road
-                // there.
+                // Keeping beside its partner, on its right and a step behind - or, one of a
+                // group, wherever about the one leading it it keeps (see [`ABOUT_LEADER`]) - where
+                // that is going to be in a moment, as it walks; or else behind it, with no floor
+                // off the road there.
                 let ahead = forward(leader.heading) * leader.speed * LEAD;
                 let keeps_off = |at: Vector3<f32>| {
                     floor_at(at)
                         && !survey::cell_at(grid, origin, at).is_some_and(|(x, z)| roads.is_some_and(|r| r.is_road(x, z)))
                 };
-                let slot = [
-                    leader.feet + ahead + right_of(leader.heading) * BESIDE.0 - forward(leader.heading) * BESIDE.1,
-                    leader.feet + ahead - forward(leader.heading) * BESIDE.0,
-                ]
-                .into_iter()
-                .find(|&slot| keeps_off(slot))
-                .unwrap_or(leader.feet + ahead - forward(leader.heading) * BESIDE.0);
+                let behind = leader.feet + ahead - forward(leader.heading) * (BESIDE.0 + 0.8 * droid.slot as f32);
+                let slot = [about_leader(leader.feet + ahead, leader.heading, droid.slot), behind]
+                    .into_iter()
+                    .find(|&slot| keeps_off(slot))
+                    .unwrap_or(behind);
                 droid.replan -= dt;
                 let off = flat(slot - droid.feet).norm();
                 if off < REACHED && leader.speed < 0.1 {
@@ -2083,12 +2196,8 @@ impl Inhabitants {
                 }
             }
 
-            // Leading the way, it waits for its partner, kept talking or fallen behind.
-            let waiting_for_partner = droid.leads
-                && matches!(droid.alert, None | Some(Alert::Caution))
-                && partners[me].is_some_and(|other| {
-                    other.about && (other.held || flat(other.feet - droid.feet).norm() > WAIT_FOR)
-                });
+            // Leading the way, it waits for its partner or group, kept talking or fallen behind.
+            let waiting_for_partner = droid.leads && matches!(droid.alert, None | Some(Alert::Caution)) && waits[me];
             let mut wanted = 0.0;
             if let Some(&next) = droid.route.last().filter(|_| !waiting_for_partner) {
                 let to = flat(next - droid.feet);
@@ -2360,13 +2469,16 @@ impl Inhabitants {
     /// [`Sight`]), facing them, as long as `in_sight` says nothing is in the way from the player
     /// to the droid. Its back to them, it never knows. `patience` says how
     /// long each kind of droid - as an index into the conversations' characters - stands for
-    /// it; none, it pays it no heed. Which droids went on to another stage.
+    /// it; none, it pays it no heed. Some kinds take the player standing over them the same way:
+    /// within as many meters as `crowded` says, as long as nothing is in the way. Which droids
+    /// went on to another stage.
     pub fn feel_aimed_at(
         &mut self,
         aim: Option<(Vector3<f32>, Vector3<f32>)>,
         watched: (Vector3<f32>, Posture, bool),
         in_sight: impl Fn(Vector3<f32>) -> bool,
         patience: impl Fn(usize) -> Option<f32>,
+        crowded: impl Fn(usize) -> Option<f32>,
         dt: f32,
     ) -> Vec<(usize, Threat)> {
         let mut stages = Vec::new();
@@ -2381,6 +2493,11 @@ impl Inhabitants {
                 && aim.is_some_and(|(eye, ahead)| pointed_at(eye, ahead, chest))
                 && Sight::default().could_see(None, droid.feet, droid.heading, player, posture.into(), in_the_dark)
                 && in_sight(droid.feet);
+            let near = minding
+                && crowded(droid.character).is_some_and(|reach| flat(player - droid.feet).norm() < reach)
+                && (player.y - droid.feet.y).abs() < CATCH_HEIGHT
+                && in_sight(droid.feet);
+            let aimed = aimed || near;
             if !minding {
                 droid.threat = 0.0;
                 droid.warned = 0;
@@ -2590,11 +2707,10 @@ impl Inhabitants {
             .collect()
     }
 
-    /// Turns the `n`th droid on the player - and its partner with it, if it walks about with one:
+    /// Turns the `n`th droid on the player - and the rest of its pair or group with it:
     /// after a moment they hunt them, and cannot be talked to any more.
     pub fn set_hostile(&mut self, n: usize) {
-        let partner = self.droids.get(n).and_then(|droid| droid.partner);
-        for m in std::iter::once(n).chain(partner) {
+        for m in self.group_of(n) {
             if let Some(droid) = self.droids.get_mut(m).filter(|droid| !droid.down && droid.hunts_player()) {
                 droid.alert = Some(Alert::Alert);
                 droid.windup = WINDUP;
@@ -2789,9 +2905,16 @@ impl Inhabitants {
         }
     }
 
-    /// Has the `n`th droid's eyes glow `colour`, or their own colour with none.
+    /// Has the `n`th droid's eyes glow `colour`, or their own colour with none. Hostile red is its
+    /// kind's own hostile colour, if it has one (see [`Livery::with_hostile_eyes`]).
     pub fn set_eyes(&self, n: usize, colour: Option<Color>) {
         if let Some(droid) = self.droids.get(n) {
+            // Hostile, in its kind's own colour if it has one.
+            let own = self.liveries.get(droid.character).and_then(|livery| livery.hostile_eyes);
+            let colour = match (colour, own) {
+                (Some(colour), Some(own)) if Some(colour) == crate::dialogue::screen::eyes(crate::dialogue::Mood::Hostile) => Some(own),
+                _ => colour,
+            };
             droid.avatar.set_eyes(colour);
         }
     }

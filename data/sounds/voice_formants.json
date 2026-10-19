@@ -78,6 +78,10 @@
     "Excubitor": {
       "pitch": 112.0, "speed": 1.12, "size": 0.98, "lilt": 0.06, "fall": 0.2, "rise": 0.36,
       "breath": 0.06, "volume": 0.82, "reach": 4.0
+    },
+    "Praedator": {
+      "pitch": 72.0, "speed": 1.08, "size": 0.88, "lilt": 0.12, "fall": 0.3, "rise": 0.22,
+      "breath": 0.16, "volume": 0.85, "reach": 4.0
     }
   }
 }

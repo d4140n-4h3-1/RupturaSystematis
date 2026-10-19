@@ -1,5 +1,5 @@
 {
-  "about": "What the droids of Urbs say, in the story: as data/dialogue/droids.json has it for a maze - the same three kinds of droid, in the same models and voices, the same lines, replies, checks, bribes, moods, barks and 'threatened' - but about the city: the way to Summa, its tallest tower, where {exit_far} and {exit_way} point; and the stores and banks being robbed, by the player. 'inhabitants' is how many droids are about the player at once, and 'crowd' has them be a crowd: one left far behind, out of sight, turns up again nearer by as another, wherever the player cannot see, so the streets are as busy wherever they go. A character's 'in_pairs' is the share of its kind that walk about in twos, one keeping beside the other: talk one round, or turn one hostile, and the other goes with it. Every line is checked by data/system_latin/sl_parser.py.",
+  "about": "What the droids of Urbs say, in the story: as data/dialogue/droids.json has it for a maze - the same three kinds of droid, in the same models and voices, the same lines, replies, checks, bribes, moods, barks and 'threatened' - but about the city: the way to Summa, its tallest tower, where {exit_far} and {exit_way} point; and the stores and banks being robbed, by the player. 'inhabitants' is how many droids are about the player at once, and 'crowd' has them be a crowd: one left far behind, out of sight, turns up again nearer by as another, wherever the player cannot see, so the streets are as busy wherever they go. A character's 'in_pairs' is the share of its kind that walk about in twos, one keeping beside the other: talk one round, or turn one hostile, and the other goes with it. A fourth kind, the Praedatores, are gangs in the hostile droid's red, walking about in groups of up to 'in_groups_of', put down 'share' as often as each of the others: they have nothing to say to the player but their 'chatter', and keep to themselves - until the player stands within 'crowded' meters of one, which it takes as it would the pistol pointed at it, warning them and then going for them, its whole group with it, eyes in 'hostile_eyes' rather than red. Every line is checked by data/system_latin/sl_parser.py.",
   "inhabitants": 80,
   "crowd": true,
   "characters": [
@@ -508,6 +508,75 @@
               "say": "Goodbye."
             }
           ]
+        }
+      }
+    },
+    {
+      "name": "Praedator",
+      "model": "data/droid_hostile.glb",
+      "in_groups_of": 6,
+      "share": 0.35,
+      "gang": true,
+      "crowded": 4.0,
+      "hostile_eyes": [
+        255,
+        0,
+        255
+      ],
+      "threatened": {
+        "patience": 2.5,
+        "then": "attacks"
+      },
+      "chatter": [
+        {
+          "says": "Receda.",
+          "means": "Back off."
+        },
+        {
+          "says": "Negativum. Receda.",
+          "means": "No. Back off."
+        },
+        {
+          "says": "Ignora nos.",
+          "means": "Ignore us."
+        },
+        {
+          "says": "Receda. Zona privatum.",
+          "means": "Back off. Private zone."
+        }
+      ],
+      "barks": {
+        "warned": {
+          "says": "Receda. Zona privatum.",
+          "means": "Back off. Private zone."
+        },
+        "warned_again": {
+          "says": "Receda statim. Ultimum.",
+          "means": "Back off now. Last warning."
+        },
+        "provoked": {
+          "says": "Intrusor detectum. Deletabso tu.",
+          "means": "Intruder detected. I will delete you."
+        },
+        "calmed": {
+          "says": "Affirmatum. Observo tu.",
+          "means": "Good. I am watching you."
+        },
+        "spotted": {
+          "says": "Intrusor detectum. Zeto.",
+          "means": "Intruder sighted. Hunting."
+        },
+        "lost": {
+          "says": "Intrusor perdatum. Zeto intrusor.",
+          "means": "Intruder lost. Hunting the intruder."
+        },
+        "heard": {
+          "says": "Quid? Sonus detectum. Verifico.",
+          "means": "What? A sound. Checking."
+        },
+        "gave_up": {
+          "says": "Intrusor evadatum. Redio.",
+          "means": "The intruder got away. Going back."
         }
       }
     }

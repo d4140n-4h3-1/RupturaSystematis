@@ -191,6 +191,31 @@ pub struct Character {
     /// to 1: none, without.
     #[serde(default)]
     pub in_pairs: f32,
+    /// The most of its kind that walk about together, one leading and the rest about it: each
+    /// group is from two to this many. Without, as `in_pairs` says.
+    #[serde(default)]
+    pub in_groups_of: usize,
+    /// How often one of its kind - or a group of them - is put down, against the others' shares:
+    /// as often as any other, without.
+    #[serde(default = "one")]
+    pub share: f32,
+    /// How near the player, in meters, has to be for it to take it as the pistol pointed at it
+    /// (see `threatened`): standing over it, it warns them, and if they stay, it does something
+    /// about it. Nearness is nothing to it, without.
+    #[serde(default)]
+    pub crowded: Option<f32>,
+    /// Whether its kind is a gang: it answers no alarm, and none of the others join its chases -
+    /// its own group goes after the player with it.
+    #[serde(default)]
+    pub gang: bool,
+    /// The colour of its eyes while it is hostile, red to blue from 0 to 255 each: the usual red,
+    /// without.
+    #[serde(default)]
+    pub hostile_eyes: Option<[u8; 3]>,
+}
+
+fn one() -> f32 {
+    1.0
 }
 
 /// Everyone's conversations, as the file has them.
@@ -651,13 +676,33 @@ mod tests {
         let script = Script::load(URBS_SCRIPT).unwrap();
         let voices = crate::formants::speech::Voices::load(crate::formants::speech::VOICES).unwrap();
         assert!(script.inhabitants.is_some_and(|n| n > 6), "more than a maze has");
-        let sentries = script.characters.iter().filter(|c| c.threatened.is_some_and(|t| t.then == Provoked::Attacks));
+        let sentries = script.characters.iter().filter(|c| !c.gang && c.threatened.is_some_and(|t| t.then == Provoked::Attacks));
         assert!(sentries.clone().count() > 0 && sentries.clone().all(|c| (0.0..1.0).contains(&c.in_pairs) && c.in_pairs > 0.0), "some of security in pairs, not all");
         assert!(script.characters.iter().filter(|c| c.threatened.is_some_and(|t| t.then != Provoked::Attacks)).all(|c| c.in_pairs == 0.0));
-        for character in &script.characters {
+        for character in script.characters.iter().filter(|c| !c.gang) {
             assert!(voices.voices.contains_key(&character.name), "{} has a voice", character.name);
             let summa = character.lines.values().any(|line| line.says.contains("Summa"));
             assert!(summa, "{} talks of Summa", character.name);
+        }
+    }
+
+    #[test]
+    fn urbs_has_gangs_in_groups_of_up_to_six_that_mind_the_player_standing_over_them() {
+        let script = Script::load(URBS_SCRIPT).unwrap();
+        let voices = crate::formants::speech::Voices::load(crate::formants::speech::VOICES).unwrap();
+        let gangs: Vec<&Character> = script.characters.iter().filter(|c| c.gang).collect();
+        assert!(!gangs.is_empty(), "a gang");
+        for gang in gangs {
+            assert_eq!(gang.in_groups_of, 6, "{} in groups of up to six", gang.name);
+            assert!(gang.share > 0.0 && gang.share < 1.0, "{} rarer than the others", gang.name);
+            assert!(gang.crowded.is_some_and(|reach| reach > 0.0), "{} minds the player near", gang.name);
+            assert!(gang.threatened.is_some_and(|t| t.then == Provoked::Attacks), "{} goes for them", gang.name);
+            assert!(gang.hostile_eyes.is_some_and(|eyes| eyes != [255, 0, 0]), "{} hostile in its own colour", gang.name);
+            assert!(gang.lines.is_empty() && gang.chatter.len() >= 2, "{} only chatters", gang.name);
+            for bark in ["warned", "warned_again", "provoked", "calmed", "spotted", "lost", "heard", "gave_up"] {
+                assert!(gang.barks.contains_key(bark), "{} says {bark}", gang.name);
+            }
+            assert!(voices.voices.contains_key(&gang.name), "{} has a voice", gang.name);
         }
     }
 
