@@ -40,7 +40,7 @@ browser with WebGL 2 is all it needs.
   effects by itself, straight from GitHub, so all there is to get is this project:
 
   ```sh
-  git clone https://github.com/d4140n-4h3-1/MazeGame.git
+  git clone https://github.com/d4140n-4h3-1/RupturaSystematis.git
   cd MazeGame
   cargo run
   ```
