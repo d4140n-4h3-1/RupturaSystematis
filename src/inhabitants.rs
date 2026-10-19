@@ -424,6 +424,8 @@ struct Inhabitant {
     leads: bool,
     /// Keeping about the one leading its group, where (see [`ABOUT_LEADER`]).
     slot: usize,
+    /// Its part in a foot chase, if it is in one (see [`Chase`]).
+    pursuit: Option<Pursuit>,
     /// How long since it was last posed, in seconds (see [`POSE_EVERY`]).
     unposed: f32,
 }
@@ -671,7 +673,75 @@ pub struct Inhabitants {
     look_in: f32,
     /// In a city, where its droids can turn up again (see [`Inhabitants::recycle`]).
     crowd: Option<Crowd>,
+    /// The foot chase going on, if there is one, and how long until the next is looked for, in
+    /// seconds (see [`Inhabitants::foot_chases`]).
+    chase: Option<Chase>,
+    chase_in: f32,
 }
+
+/// A foot chase in a city: one of its security after one of a gang, which runs for it - and if
+/// it is caught, stands for being held at pistol point a while.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Chase {
+    guard: usize,
+    thief: usize,
+    /// How long it has gone on, or how long the thief has been held, in seconds.
+    time: f32,
+    /// What the thief says back to the guard, and in how long, in seconds: one after the other,
+    /// never both at once.
+    reply: Option<(f32, &'static str)>,
+}
+
+/// What came of seeing to the foot chases for a frame (see [`Inhabitants::foot_chases`]).
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct ChaseNews {
+    /// What those in a chase called out, by who, as the name of the bark - if the player is near
+    /// enough to hear it: `chase` as it starts, and the one running `flee` back; `caught` when
+    /// the one running is caught, and `caught` back; and `escaped` when it gets away.
+    pub said: Vec<(usize, &'static str)>,
+    /// A chase begun, and one over, however it ended: the one after the other, and the one
+    /// running.
+    pub started: Option<(usize, usize)>,
+    pub ended: Option<(usize, usize)>,
+}
+
+/// A droid's part in a [`Chase`], with the other's index.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Pursuit {
+    /// After the other, which runs from it.
+    Chasing(usize),
+    /// Running from the other, which is after it.
+    Fleeing(usize),
+    /// Holding the other, caught, at pistol point.
+    Holding(usize),
+    /// Caught by the other, standing for it.
+    Held(usize),
+}
+
+/// How long between one foot chase and the next, in seconds, from least to most; and how soon
+/// another is looked for when there was no one about for one.
+const CHASE_EVERY: (f32, f32) = (40.0, 100.0);
+const CHASE_RETRY: f32 = 5.0;
+/// How long into a round the first foot chase is looked for, in seconds.
+const CHASE_FIRST: f32 = 20.0;
+/// How near the player both of a chase are when it starts, in meters along the ground, for it to
+/// be seen; and how far apart they are, from least to most.
+const CHASE_SEEN: f32 = 60.0;
+const CHASE_APART: (f32, f32) = (8.0, 30.0);
+/// How near the one after the other has to get, in meters, to catch it; how far off it has to
+/// get to be away; and how long the chase goes on at most, in seconds, before it is given up.
+const CHASE_CAUGHT: f32 = 1.5;
+const CHASE_ESCAPED: f32 = 40.0;
+const CHASE_FOR: f32 = 45.0;
+/// How far ahead the one running makes for, in meters, each time it looks again where to go:
+/// away from the one after it.
+const FLEE_AHEAD: f32 = 25.0;
+/// How long one caught is held at pistol point, in seconds.
+const HELD_FOR: f32 = 6.0;
+/// How long after the guard the thief says what it has to say back, in seconds.
+const REPLY_AFTER: f32 = 1.8;
+/// How near the player, in meters, what those in a chase call out is heard.
+const CHASE_HEARD: f32 = 40.0;
 
 /// A city's crowd: only so many droids, all of them about the player. One that has gone far off,
 /// out of sight, turns up again as another nearer by, somewhere the player cannot see, so that
@@ -1022,6 +1092,8 @@ impl Inhabitants {
             }
         }
         self.populated = false;
+        self.chase = None;
+        self.chase_in = 0.0;
         self.search = None;
         self.last_sight = None;
         self.search_from = None;
@@ -1067,6 +1139,7 @@ impl Inhabitants {
         let routes = grid.routes_from(start, f32::INFINITY);
         // A crowd turns up again anywhere it could have walked to, off the roads; and is about
         // the player from the start.
+        self.chase_in = CHASE_FIRST;
         self.crowd = crowd.then(|| Crowd {
             pavement: routes.costs.iter().enumerate().map(|(i, cost)| cost.is_some() && !on_road(i)).collect(),
             next: CROWD_EVERY,
@@ -1182,6 +1255,150 @@ impl Inhabitants {
         Log::info(format!("Maze: {} inhabitants, {groups} pairs or groups of them", self.droids.len()));
     }
 
+    /// In a city, now and then, has one of its security - a kind `guards` says is one - go after
+    /// one of a gang - a kind `thieves` says is one - near it, which runs for it, both near
+    /// enough the `player`'s feet to be seen (see [`Chase`]); and sees each chase through, `dt`
+    /// seconds on from the last time: caught, the one running stands to be held at pistol point a
+    /// while; well ahead, or after long enough, it has got away. What came of it (see
+    /// [`ChaseNews`]).
+    pub fn foot_chases(
+        &mut self,
+        player: Vector3<f32>,
+        rng: &mut Rng,
+        dt: f32,
+        guards: impl Fn(usize) -> bool,
+        thieves: impl Fn(usize) -> bool,
+    ) -> ChaseNews {
+        let mut news = ChaseNews::default();
+        let mut said = Vec::new();
+        if self.crowd.is_none() {
+            return news;
+        }
+        let Some(mut chase) = self.chase else {
+            self.chase_in -= dt;
+            if self.chase_in > 0.0 {
+                return news;
+            }
+            let calm = |droid: &Inhabitant| {
+                !droid.down
+                    && droid.ragdoll.is_none()
+                    && droid.alert.is_none()
+                    && !droid.talking
+                    && droid.warned == 0
+                    && droid.trip.is_none()
+                    && droid.pursuit.is_none()
+                    && droid.speaking == 0.0
+                    && flat(droid.feet - player).norm() < CHASE_SEEN
+            };
+            // One of a gang - not one leading the rest of it - and one of security near enough.
+            let droids = &self.droids;
+            let mut pairs: Vec<(usize, usize)> = Vec::new();
+            for (t, thief) in droids.iter().enumerate() {
+                if !thieves(thief.character) || thief.leads || !calm(thief) {
+                    continue;
+                }
+                for (g, guard) in droids.iter().enumerate() {
+                    let apart = flat(guard.feet - thief.feet).norm();
+                    if guards(guard.character) && calm(guard) && (CHASE_APART.0..=CHASE_APART.1).contains(&apart) {
+                        pairs.push((g, t));
+                    }
+                }
+            }
+            if pairs.is_empty() {
+                self.chase_in = CHASE_RETRY;
+                return news;
+            }
+            self.chase_in = between(rng, CHASE_EVERY);
+            let (guard, thief) = pairs[rng.below(pairs.len())];
+            // The one running leaves its group behind, for good.
+            if let Some(leader) = self.droids[thief].partner.take() {
+                self.droids[thief].slot = 0;
+                if self.droids[leader].partner == Some(thief) {
+                    let next = (0..self.droids.len())
+                        .find(|&m| m != leader && !self.droids[m].leads && self.droids[m].partner == Some(leader));
+                    self.droids[leader].partner = next;
+                    self.droids[leader].leads = next.is_some();
+                }
+            }
+            for (n, pursuit) in [(guard, Pursuit::Chasing(thief)), (thief, Pursuit::Fleeing(guard))] {
+                let droid = &mut self.droids[n];
+                droid.pursuit = Some(pursuit);
+                droid.route.clear();
+                droid.replan = 0.0;
+                droid.resting = 0.0;
+            }
+            self.chase = Some(Chase { guard, thief, time: 0.0, reply: Some((REPLY_AFTER, "flee")) });
+            Log::info(format!("Foot chase: droid {guard} after droid {thief}"));
+            said.push((guard, "chase"));
+            news.started = Some((guard, thief));
+            news.said = self.heard_near(said, player);
+            return news;
+        };
+        chase.time += dt;
+        if let Some((left, name)) = chase.reply {
+            chase.reply = match left - dt {
+                left if left > 0.0 => Some((left, name)),
+                _ => {
+                    said.push((chase.thief, name));
+                    None
+                }
+            };
+        }
+        let (guard, thief) = (&self.droids[chase.guard], &self.droids[chase.thief]);
+        let apart = flat(guard.feet - thief.feet).norm();
+        // Anything else coming up - the player, say - and it is over, with nothing more said.
+        let interrupted = [guard, thief]
+            .iter()
+            .any(|droid| droid.down || droid.ragdoll.is_some() || droid.alert.is_some() || droid.talking);
+        let holding = matches!(guard.pursuit, Some(Pursuit::Holding(_)));
+        let over = if interrupted {
+            true
+        } else if holding {
+            chase.time > HELD_FOR
+        } else if apart < CHASE_CAUGHT && (guard.feet.y - thief.feet.y).abs() < CATCH_HEIGHT {
+            // Caught: it stops where it is, and is held there a while.
+            self.droids[chase.guard].pursuit = Some(Pursuit::Holding(chase.thief));
+            self.droids[chase.thief].pursuit = Some(Pursuit::Held(chase.guard));
+            for n in [chase.guard, chase.thief] {
+                self.droids[n].speed = 0.0;
+                self.droids[n].route.clear();
+            }
+            chase.time = 0.0;
+            said.push((chase.guard, "caught"));
+            chase.reply = Some((REPLY_AFTER, "caught"));
+            Log::info(format!("Foot chase: droid {} caught droid {}", chase.guard, chase.thief));
+            false
+        } else if apart > CHASE_ESCAPED || chase.time > CHASE_FOR {
+            said.push((chase.guard, "escaped"));
+            Log::info(format!("Foot chase: droid {} got away from droid {}", chase.thief, chase.guard));
+            true
+        } else {
+            false
+        };
+        if over {
+            for n in [chase.guard, chase.thief] {
+                let droid = &mut self.droids[n];
+                droid.pursuit = None;
+                droid.route.clear();
+                droid.armed_left = 0.0;
+                droid.resting = between(rng, REST);
+            }
+            self.chase = None;
+            news.ended = Some((chase.guard, chase.thief));
+        } else {
+            self.chase = Some(chase);
+        }
+        news.said = self.heard_near(said, player);
+        news
+    }
+
+    /// Those of `said` near enough the `player`'s feet to be heard (see [`CHASE_HEARD`]).
+    fn heard_near(&self, said: Vec<(usize, &'static str)>, player: Vector3<f32>) -> Vec<(usize, &'static str)> {
+        said.into_iter()
+            .filter(|&(n, _)| flat(self.droids[n].feet - player).norm() < CHASE_HEARD)
+            .collect()
+    }
+
     /// Whether the `n`th droid speaks for its pair or group: the first of them still standing -
     /// the one leading it, unless that is down - or one walking about by itself.
     pub fn speaks_for_group(&self, n: usize) -> bool {
@@ -1250,6 +1467,7 @@ impl Inhabitants {
                 && droid.foe.is_none()
                 && droid.armed_left == 0.0
                 && droid.speaking == 0.0
+                && droid.pursuit.is_none()
         };
         let mut moved = 0;
         for n in 0..self.droids.len() {
@@ -1404,6 +1622,7 @@ impl Inhabitants {
             partner: None,
             leads: false,
             slot: 0,
+            pursuit: None,
             // Not all posed on the same frame, far off.
             unposed: between(rng, (0.0, POSE_EVERY[POSE_EVERY.len() - 1].1)),
         });
@@ -1886,6 +2105,11 @@ impl Inhabitants {
             // the other side, straight for it - the player coming first.
             let hunting = droid.alert == Some(Alert::Alert);
             let fighting = droid.foe.filter(|_| !hunting);
+            // After one running from it, it goes straight for it, to catch it.
+            let chased = match droid.pursuit {
+                Some(Pursuit::Chasing(other)) => Some(other),
+                _ => None,
+            };
             let (x, z) = square_of(droid.feet);
             let near: Vec<usize> = (-1..=1)
                 .flat_map(|dx| (-1..=1).map(move |dz| (x + dx, z + dz)))
@@ -1901,6 +2125,7 @@ impl Inhabitants {
                         && !down.get(other).copied().unwrap_or(false)
                         && !(hunting && other == the_player)
                         && Some(Foe::Droid(other)) != fighting
+                        && Some(other) != chased
                 })
                 .map(|other| everyone[other]);
             // In capture the flag, whoever of the other side it sees to shoot at: the player
@@ -1991,6 +2216,46 @@ impl Inhabitants {
                 }
             // Talking, or warning them off, it stands and faces the player, and rests a moment
             // once they are done.
+            } else if let Some(pursuit) = droid.pursuit {
+                droid.replan -= dt;
+                match pursuit {
+                    // After the other, the way to it worked out again every so often.
+                    Pursuit::Chasing(other) => {
+                        if let Some((feet, _)) = placed.get(other).copied().flatten() {
+                            if droid.replan <= 0.0 || droid.route.is_empty() {
+                                droid.replan = REPLAN;
+                                droid.route = route_to((grid, origin), droid.feet, feet, CHASE_REACH);
+                            }
+                        }
+                    }
+                    // Running from the other: somewhere well ahead, away from it.
+                    Pursuit::Fleeing(other) => {
+                        let away = placed
+                            .get(other)
+                            .copied()
+                            .flatten()
+                            .and_then(|(feet, _)| flat(droid.feet - feet).try_normalize(1.0e-3));
+                        if let Some(away) = away.filter(|_| droid.replan <= 0.0 || droid.route.is_empty()) {
+                            droid.replan = REPLAN * 4.0;
+                            let ahead = droid.feet + away * FLEE_AHEAD;
+                            let to = spot_near((grid, origin), ahead, FLEE_AHEAD * 0.4, rng).unwrap_or(ahead);
+                            droid.route = route_to((grid, origin), droid.feet, to, CHASE_REACH);
+                        }
+                    }
+                    // Caught, or holding the one caught: standing, facing the other.
+                    Pursuit::Holding(other) | Pursuit::Held(other) => {
+                        droid.route.clear();
+                        if let Some(to) = placed
+                            .get(other)
+                            .copied()
+                            .flatten()
+                            .map(|(feet, _)| flat(feet - droid.feet))
+                            .filter(|to| to.norm() > 1.0e-3)
+                        {
+                            droid.heading = to.x.atan2(to.z);
+                        }
+                    }
+                }
             } else if droid.talking || droid.warned > 0 {
                 droid.route.clear();
                 droid.waiting = 0.0;
@@ -2159,15 +2424,20 @@ impl Inhabitants {
                 }
             }
             // Running after the player, and jogging to where it lost them.
-            let after = droid.alert == Some(Alert::Alert) || fighting.is_some();
+            let running = matches!(droid.pursuit, Some(Pursuit::Chasing(_) | Pursuit::Fleeing(_)));
+            let after = droid.alert == Some(Alert::Alert) || fighting.is_some() || running;
             let hurrying = after
                 || catching_up
                 || (droid.alert == Some(Alert::Evasion) && droid.searched <= 1)
                 || droid.trip.is_some_and(|trip| trip.hurrying());
             // After the player, it sprints now and then, when it is not to be told.
-            let chasing = droid.alert == Some(Alert::Alert) && droid.windup == 0.0 && !droid.down;
+            let chasing = (droid.alert == Some(Alert::Alert) && droid.windup == 0.0 || running) && !droid.down;
             (droid.sprint_in, droid.sprinting) =
                 sprints(droid.sprint_in, droid.sprinting, chasing, rng, dt);
+            // In a foot chase, both flat out for as long as they have the breath.
+            if running && !droid.winded {
+                droid.sprinting = droid.sprinting.max(dt * 2.0);
+            }
             // Out of breath, it walks until enough is back, and a sprint it was due waits.
             let gait = match (hurrying, droid.sprinting > 0.0) {
                 _ if droid.winded => Gait::Walking,
@@ -2309,7 +2579,11 @@ impl Inhabitants {
             // is goes on all the same. Near, hunting, or fighting, every frame.
             droid.unposed += dt;
             let away = flat(player - droid.feet).norm();
-            let busy = target.is_some() || droid.armed_left > 0.0 || droid.alert.is_some() || droid.talking;
+            let busy = target.is_some()
+                || droid.armed_left > 0.0
+                || droid.alert.is_some()
+                || droid.talking
+                || droid.pursuit.is_some();
             let every = match busy {
                 true => 0.0,
                 false => POSE_EVERY.iter().find(|&&(within, _)| away < within).map_or(0.0, |&(_, every)| every),
@@ -2343,7 +2617,15 @@ impl Inhabitants {
             }
             // Its body is never turned - only the model's root is, by the heading - so the way to
             // them is in the world's terms, as the heading is, not ahead of where it faces.
-            let look = target.map_or((0.0, droid.heading), |at| {
+            // Holding one caught, its pistol on it.
+            let held = match droid.pursuit {
+                Some(Pursuit::Holding(other)) => placed.get(other).copied().flatten().map(|(_, chest)| chest),
+                _ => None,
+            };
+            if held.is_some() {
+                droid.armed_left = droid.armed_left.max(dt * 2.0);
+            }
+            let look = target.or(held).map_or((0.0, droid.heading), |at| {
                 let from = droid.feet + Vector3::new(0.0, FACE_HEIGHT, 0.0);
                 let to = at - from;
                 (to.y.atan2(flat(to).norm()), to.x.atan2(to.z))
@@ -2368,7 +2650,7 @@ impl Inhabitants {
                 strafing: false,
                 armed: droid.armed_left > 0.0 && !droid.down,
                 trigger,
-                raised: target.is_some(),
+                raised: target.is_some() || held.is_some(),
                 look,
                 way: 0.0,
             };

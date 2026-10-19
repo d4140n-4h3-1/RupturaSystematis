@@ -245,6 +245,10 @@ pub struct MazeGame {
     #[visit(skip)]
     #[reflect(hidden)]
     model: Option<ModelResource>,
+    /// What those in a foot chase have called out since the droids were last moved, to be said.
+    #[visit(skip)]
+    #[reflect(hidden)]
+    chase_barks: Vec<(usize, &'static str, Mood)>,
     #[visit(skip)]
     #[reflect(hidden)]
     prefabs: Option<Prefabs>,
@@ -1579,6 +1583,30 @@ impl MazeGame {
         self.inhabitants.recycle(&mut scene.graph, (grid, *origin), player, ahead, rng, ctx.dt, |graph, feet| {
             self.player.can_see(graph, feet)
         });
+        // And now and then one of its security goes after one of a gang, which runs.
+        let chases = self.inhabitants.foot_chases(
+            player,
+            rng,
+            ctx.dt,
+            |character| script.is_some_and(|script| is_sentry(script, character)),
+            |character| script.is_some_and(|script| script.characters.get(character).is_some_and(|c| c.gang)),
+        );
+        if let Some((guard, thief)) = chases.started {
+            self.inhabitants.set_eyes(guard, screen::eyes(Mood::Warning));
+            self.inhabitants.set_eyes(thief, screen::eyes(Mood::Agitated));
+        }
+        if let Some((guard, thief)) = chases.ended {
+            self.inhabitants.set_eyes(guard, None);
+            self.inhabitants.set_eyes(thief, None);
+        }
+        for (n, name) in chases.said {
+            let mood = match name {
+                "chase" | "caught" => Mood::Warning,
+                "flee" => Mood::Agitated,
+                _ => Mood::Normal,
+            };
+            self.chase_barks.push((n, name, mood));
+        }
         // The ferries, for the droids to cross on.
         let crossings = self.level.ferries.crossings(&scene.graph);
         self.inhabitants.update(
@@ -2052,6 +2080,10 @@ impl MazeGame {
             engaged,
             shots,
         } = self.update_inhabitants(ctx);
+        // A foot chase is called out by whichever of a pair is in it.
+        for (n, name, mood) in std::mem::take(&mut self.chase_barks) {
+            self.bark_anyway(n, name, mood);
+        }
         // In capture the flag, a droid going after one of the other side says so, and the
         // droids' shots leave their pistols.
         for n in engaged {

@@ -1,5 +1,5 @@
 {
-  "about": "What the droids of Urbs say, in the story: as data/dialogue/droids.json has it for a maze - the same three kinds of droid, in the same models and voices, the same lines, replies, checks, bribes, moods, barks and 'threatened' - but about the city: the way to Summa, its tallest tower, where {exit_far} and {exit_way} point; and the stores and banks being robbed, by the player. 'inhabitants' is how many droids are about the player at once, and 'crowd' has them be a crowd: one left far behind, out of sight, turns up again nearer by as another, wherever the player cannot see, so the streets are as busy wherever they go. A character's 'in_pairs' is the share of its kind that walk about in twos, one keeping beside the other: talk one round, or turn one hostile, and the other goes with it. A fourth kind, the Praedatores, are gangs in the hostile droid's red, walking about in groups of up to 'in_groups_of', put down 'share' as often as each of the others: they have nothing to say to the player but their 'chatter', and keep to themselves - until the player stands within 'crowded' meters of one, which it takes as it would the pistol pointed at it, warning them and then going for them, its whole group with it, eyes in 'hostile_eyes' rather than red. Every line is checked by data/system_latin/sl_parser.py.",
+  "about": "What the droids of Urbs say, in the story: as data/dialogue/droids.json has it for a maze - the same three kinds of droid, in the same models and voices, the same lines, replies, checks, bribes, moods, barks and 'threatened' - but about the city: the way to Summa, its tallest tower, where {exit_far} and {exit_way} point; and the stores and banks being robbed, by the player. 'inhabitants' is how many droids are about the player at once, and 'crowd' has them be a crowd: one left far behind, out of sight, turns up again nearer by as another, wherever the player cannot see, so the streets are as busy wherever they go. A character's 'in_pairs' is the share of its kind that walk about in twos, one keeping beside the other: talk one round, or turn one hostile, and the other goes with it. A fourth kind, the Praedatores, are gangs in the hostile droid's red, walking about in groups of up to 'in_groups_of', put down 'share' as often as each of the others: they have nothing to say to the player but their 'chatter', and keep to themselves - until the player stands within 'crowded' meters of one, which it takes as it would the pistol pointed at it, warning them and then going for them, its whole group with it, eyes in 'hostile_eyes' rather than red. Now and then one of security goes after one of a gang near the player, which runs: security calls out 'chase', and the gang's answers 'flee'; caught, security says 'caught' and the gang's answers with its own; and if it gets away, security says 'escaped'. Every line is checked by data/system_latin/sl_parser.py.",
   "inhabitants": 80,
   "crowd": true,
   "characters": [
@@ -46,6 +46,18 @@
           "means": "What? A sound. Checking."
         },
         "gave_up": {
+          "says": "Fur evadatum. Resumo patrolium.",
+          "means": "The thief got away. Resuming patrol."
+        },
+        "chase": {
+          "says": "Fur detectum. Sta statim.",
+          "means": "Thief spotted. Stop right there."
+        },
+        "caught": {
+          "says": "Fur neutralizatum. Sta.",
+          "means": "Thief stopped. Stay where you are."
+        },
+        "escaped": {
           "says": "Fur evadatum. Resumo patrolium.",
           "means": "The thief got away. Resuming patrol."
         }
@@ -577,6 +589,14 @@
         "gave_up": {
           "says": "Intrusor evadatum. Redio.",
           "means": "The intruder got away. Going back."
+        },
+        "flee": {
+          "says": "Securitas detectum. Evado.",
+          "means": "Security. I'm out of here."
+        },
+        "caught": {
+          "says": "Accipatum. Ego paro.",
+          "means": "All right. I'll do as you say."
         }
       }
     }
