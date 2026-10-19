@@ -432,6 +432,38 @@ impl Inhabitant {
     fn hunts_player(&self) -> bool {
         self.side.is_none_or(|side| !side.is_players())
     }
+
+    /// Puts it down afresh as another droid of its kind, as a crowd's droids turn up again (see
+    /// [`Crowd`]): with its feet at `feet`, facing `heading`, to stand `resting` seconds before
+    /// it sets off, under a code of its own, and with nothing of where it was or of the player.
+    fn put_down(&mut self, graph: &mut Graph, feet: Vector3<f32>, heading: f32, resting: f32, rng: &mut Rng) {
+        self.feet = feet;
+        self.heading = heading;
+        self.speed = 0.0;
+        self.route.clear();
+        self.resting = resting;
+        self.waiting = 0.0;
+        // Not taken by the effects for having moved all that way in a frame.
+        self.last_seen = None;
+        self.code = 10 + rng.below(90) as u32;
+        self.lost_at = feet;
+        self.lost_going = Vector3::zeros();
+        self.searched = 0;
+        self.looking = None;
+        self.deaf = 0.0;
+        self.threat = 0.0;
+        self.unaimed = 0.0;
+        self.no_way = false;
+        self.shot_from = None;
+        // Posed where it is now on the next update, however far off: it is as long since it was
+        // as the longest wait there is between.
+        self.unposed = self.unposed.max(POSE_EVERY[POSE_EVERY.len() - 1].1);
+        if let Ok(body) = graph.try_get_mut_of_type::<RigidBody>(self.body) {
+            let middle = feet + Vector3::new(0.0, MIDDLE, 0.0);
+            body.local_transform_mut().set_position(middle);
+            body.set_next_kinematic_translation(middle);
+        }
+    }
 }
 
 impl Inhabitant {
@@ -593,7 +625,41 @@ pub struct Inhabitants {
     search_from: Option<Vector3<f32>>,
     /// How long till the searchers next look over the map, in seconds.
     look_in: f32,
+    /// In a city, where its droids can turn up again (see [`Inhabitants::recycle`]).
+    crowd: Option<Crowd>,
 }
+
+/// A city's crowd: only so many droids, all of them about the player. One that has gone far off,
+/// out of sight, turns up again as another nearer by, somewhere the player cannot see, so that
+/// wherever they go the streets are as busy - busier than the whole city's hundreds spread over
+/// it would make them - and only the droids near enough to matter cost anything.
+#[derive(Debug, Default, Clone, PartialEq)]
+struct Crowd {
+    /// Whether each cell of the walk grid, row by row, is somewhere a droid can turn up: off the
+    /// roads, and where the player started from could be walked to.
+    pavement: Vec<bool>,
+    /// How long till the crowd is next looked over, in seconds.
+    next: f32,
+}
+
+/// How far from the player, in meters along the ground, a droid of a crowd that is going about
+/// its business and cannot be seen is taken out of the way (see [`Crowd`]).
+const CROWD_GONE: f32 = 110.0;
+/// How far from the player, in meters along the ground, it turns up again, from least to most -
+/// and how far the crowd is put down to begin with, at most.
+const CROWD_BACK: (f32, f32) = (45.0, 85.0);
+/// How often the crowd is looked over, in seconds, and how many of them turn up again each time
+/// at most, so that a crowd left behind all at once comes back over a few looks.
+const CROWD_EVERY: f32 = 0.5;
+const CROWD_AT_ONCE: usize = 6;
+/// How long one of a crowd stands still between trips, in seconds, from least to most: not as
+/// long as others (see [`REST`]), so that more of them are on the move.
+const CROWD_REST: (f32, f32) = (1.0, 4.0);
+/// How many spots it tries for each droid turning up again before leaving it for the next look.
+const CROWD_TRIES: usize = 16;
+/// How far off where the player looks, in radians, is out of view whatever is in the way: a
+/// little wider than half of the widest view.
+const OUT_OF_VIEW: f32 = 75.0 * std::f32::consts::PI / 180.0;
 
 /// How fast the player is taken to get away, in meters per second, for where they could be.
 const PLAYER_SPEED: f32 = 4.0;
@@ -931,6 +997,7 @@ impl Inhabitants {
         (grid, origin): (&WalkGrid, Vector3<f32>),
         (player, facing): (Vector3<f32>, f32),
         (people, in_pairs): (Option<usize>, impl Fn(usize) -> f32),
+        crowd: bool,
         roads: Option<&Roads>,
         rng: &mut Rng,
     ) {
@@ -954,6 +1021,13 @@ impl Inhabitants {
             return;
         };
         let routes = grid.routes_from(start, f32::INFINITY);
+        // A crowd turns up again anywhere it could have walked to, off the roads; and is about
+        // the player from the start.
+        self.crowd = crowd.then(|| Crowd {
+            pavement: routes.costs.iter().enumerate().map(|(i, cost)| cost.is_some() && !on_road(i)).collect(),
+            next: CROWD_EVERY,
+        });
+        let about = |cell: (usize, usize)| !crowd || flat(grid.on_floor(origin, cell) - player).norm() <= CROWD_BACK.1;
         // Where they can be put down, away from the player and near them, in one look over a
         // grid that can be a whole city's.
         let (mut places, mut near) = (Vec::new(), Vec::new());
@@ -962,8 +1036,8 @@ impl Inhabitants {
                 continue;
             };
             let far = cost >= AWAY_FROM_PLAYER;
-            if (far || (NEAR_PLAYER.0..=NEAR_PLAYER.1).contains(&cost)) && !on_road(i) {
-                let cell = (i % grid.width, i / grid.width);
+            let cell = (i % grid.width, i / grid.width);
+            if (far || (NEAR_PLAYER.0..=NEAR_PLAYER.1).contains(&cost)) && !on_road(i) && about(cell) {
                 match far {
                     true => places.push(cell),
                     false => near.push(cell),
@@ -1027,6 +1101,117 @@ impl Inhabitants {
         }
         let pairs = self.droids.iter().filter(|droid| droid.leads).count();
         Log::info(format!("Maze: {} inhabitants, {pairs} pairs of them", self.droids.len()));
+    }
+
+    /// In a city, has those of its crowd that have got far from the `player`'s feet, going about
+    /// their business, turn up again as others nearer by, on the floor of `grid` whose corner is
+    /// at `origin` (see [`Crowd`]): wherever `seen` says the player cannot see from where they
+    /// are, or off to the side of the way they look, `ahead`. `dt` seconds on from the last time.
+    #[allow(clippy::too_many_arguments)]
+    pub fn recycle(
+        &mut self,
+        graph: &mut Graph,
+        (grid, origin): (&WalkGrid, Vector3<f32>),
+        player: Vector3<f32>,
+        ahead: Vector3<f32>,
+        rng: &mut Rng,
+        dt: f32,
+        seen: impl Fn(&Graph, Vector3<f32>) -> bool,
+    ) {
+        let Some(crowd) = self.crowd.as_mut() else {
+            return;
+        };
+        crowd.next -= dt;
+        if crowd.next > 0.0 {
+            return;
+        }
+        crowd.next = CROWD_EVERY;
+        let ahead = flat(ahead).try_normalize(1.0e-3);
+        // Out of the player's sight: behind something, or off to the side of the view.
+        let hidden = |graph: &Graph, at: Vector3<f32>| {
+            let off_view = match (ahead, flat(at - player).try_normalize(1.0e-3)) {
+                (Some(ahead), Some(to)) => to.dot(&ahead) < OUT_OF_VIEW.cos(),
+                _ => false,
+            };
+            off_view || !seen(graph, at)
+        };
+        // Going about its business, with nothing to do with the player or anyone else.
+        let idle = |droid: &Inhabitant| {
+            !droid.down
+                && droid.ragdoll.is_none()
+                && droid.alert.is_none()
+                && !droid.talking
+                && droid.warned == 0
+                && droid.side.is_none()
+                && droid.post.is_none()
+                && droid.trip.is_none()
+                && droid.foe.is_none()
+                && droid.armed_left == 0.0
+                && droid.speaking == 0.0
+        };
+        let mut moved = 0;
+        for n in 0..self.droids.len() {
+            if moved >= CROWD_AT_ONCE {
+                break;
+            }
+            let droid = &self.droids[n];
+            // A pair goes together, the one leading taking the other along; one whose partner is
+            // down goes on its own from now.
+            let partner = droid.partner.filter(|&p| !self.droids[p].down);
+            if partner.is_some() && !droid.leads {
+                continue;
+            }
+            let gone = |droid: &Inhabitant| {
+                idle(droid) && flat(droid.feet - player).norm() > CROWD_GONE && hidden(graph, droid.feet)
+            };
+            if !gone(droid) || partner.is_some_and(|p| !gone(&self.droids[p])) {
+                continue;
+            }
+            let Some(crowd) = self.crowd.as_ref() else {
+                return;
+            };
+            // Somewhere it could have walked to, a little way off, where the player cannot see it
+            // turn up; and for a pair, room for the other beside it.
+            let spot = (0..CROWD_TRIES).find_map(|_| {
+                let angle = between(rng, (-std::f32::consts::PI, std::f32::consts::PI));
+                let away = between(rng, CROWD_BACK);
+                let at = player + forward(angle) * away;
+                let cell = survey::cell_at(grid, origin, at)?;
+                let pavement = |(x, z): (usize, usize)| crowd.pavement.get(z * grid.width + x).copied().unwrap_or(false);
+                if !pavement(cell) {
+                    return None;
+                }
+                let feet = grid.on_floor(origin, cell);
+                if !hidden(graph, feet) {
+                    return None;
+                }
+                let heading = between(rng, (-std::f32::consts::PI, std::f32::consts::PI));
+                let beside = match partner {
+                    Some(_) => {
+                        let beside = survey::cell_at(grid, origin, feet + right_of(heading) * BESIDE.0).filter(|&cell| pavement(cell))?;
+                        Some(grid.on_floor(origin, beside))
+                    }
+                    None => None,
+                };
+                Some((feet, heading, beside))
+            });
+            let Some((feet, heading, beside)) = spot else {
+                continue;
+            };
+            let resting = between(rng, CROWD_REST);
+            self.droids[n].put_down(graph, feet, heading, resting, rng);
+            if let (Some(p), Some(beside)) = (partner, beside) {
+                self.droids[p].put_down(graph, beside, heading, resting, rng);
+            }
+            if partner.is_none() && self.droids[n].partner.is_some() {
+                self.droids[n].partner = None;
+                self.droids[n].leads = false;
+            }
+            moved += 1;
+        }
+        if moved > 0 && crate::platform::var("MAZE_DEBUG").is_some() {
+            Log::info(format!("Crowd: {moved} turned up again nearer by"));
+        }
     }
 
     /// Puts one droid, of kind `character`, into `scene` with its feet at `feet`, facing
@@ -1526,6 +1711,11 @@ impl Inhabitants {
             .min_by(|(_, a), (_, b)| flat(a.feet - player).norm().total_cmp(&flat(b.feet - player).norm()))
             .map(|(n, _)| n);
         let player_going = seeing.map(|d| d.lost_going);
+        // A crowd is busier: it stands about less between trips.
+        let rest = match self.crowd {
+            Some(_) => CROWD_REST,
+            None => REST,
+        };
         for (me, droid) in self.droids.iter_mut().enumerate() {
             droid.avatar.fly_voxels(graph, dt);
             // In the hostile droid's colours while it is after the player; it goes down in
@@ -1904,7 +2094,7 @@ impl Inhabitants {
                 let to = flat(next - droid.feet);
                 if droid.route.len() == 1 && to.norm() < ARRIVED {
                     droid.route.clear();
-                    droid.resting = between(rng, REST);
+                    droid.resting = between(rng, rest);
                 } else {
                     let (way, blocked) = make_way(droid.feet, to.normalize(), others, floor_at);
                     droid.heading = way.x.atan2(way.z);

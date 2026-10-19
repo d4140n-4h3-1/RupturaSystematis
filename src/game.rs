@@ -1535,6 +1535,7 @@ impl MazeGame {
                             (grid, *origin),
                             (player, self.player.yaw()),
                             (people, in_pairs),
+                            script.is_some_and(|script| script.crowd),
                             self.level.roads.as_ref(),
                             rng,
                         )
@@ -1566,6 +1567,11 @@ impl MazeGame {
                 Some(Rival { side: drone.side()?, feet: body.feet, middle: body.middle, collider: body.collider })
             })
             .collect();
+        // In a city, those far off out of sight turn up again nearer by.
+        let ahead = self.player.ahead();
+        self.inhabitants.recycle(&mut scene.graph, (grid, *origin), player, ahead, rng, ctx.dt, |graph, feet| {
+            self.player.can_see(graph, feet)
+        });
         // The ferries, for the droids to cross on.
         let crossings = self.level.ferries.crossings(&scene.graph);
         self.inhabitants.update(

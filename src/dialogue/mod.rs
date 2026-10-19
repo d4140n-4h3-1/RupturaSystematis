@@ -200,6 +200,10 @@ pub struct Script {
     /// How many droids live in a level they are in; the game's own number, without.
     #[serde(default)]
     pub inhabitants: Option<usize>,
+    /// Whether they are a city's crowd: all about the player, those left far behind out of sight
+    /// turning up again nearer by, as others (see [`crate::inhabitants::Inhabitants::recycle`]).
+    #[serde(default)]
+    pub crowd: bool,
 }
 
 impl Script {
