@@ -41,7 +41,7 @@ browser with WebGL 2 is all it needs.
 
   ```sh
   git clone https://github.com/d4140n-4h3-1/RupturaSystematis.git
-  cd MazeGame
+  cd RupturaSystematis
   cargo run
   ```
 
