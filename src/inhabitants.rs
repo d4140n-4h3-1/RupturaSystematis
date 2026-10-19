@@ -1182,6 +1182,12 @@ impl Inhabitants {
         Log::info(format!("Maze: {} inhabitants, {groups} pairs or groups of them", self.droids.len()));
     }
 
+    /// Whether the `n`th droid speaks for its pair or group: the first of them still standing -
+    /// the one leading it, unless that is down - or one walking about by itself.
+    pub fn speaks_for_group(&self, n: usize) -> bool {
+        self.group_of(n).into_iter().find(|&m| !self.droids[m].down) == Some(n)
+    }
+
     /// The `n`th droid's group: the one leading it first, then those keeping about it - or the
     /// droid alone, walking about by itself.
     fn group_of(&self, n: usize) -> Vec<usize> {
@@ -2481,6 +2487,19 @@ impl Inhabitants {
         crowded: impl Fn(usize) -> Option<f32>,
         dt: f32,
     ) -> Vec<(usize, Threat)> {
+        let (player, posture, in_the_dark) = watched;
+        // A pair or group takes the player standing over any of it as one, through the one that
+        // speaks for it: none of the rest warn them as well.
+        let mut crowding = vec![false; self.droids.len()];
+        for (m, droid) in self.droids.iter().enumerate() {
+            let near = !droid.down
+                && crowded(droid.character).is_some_and(|reach| flat(player - droid.feet).norm() < reach)
+                && (player.y - droid.feet.y).abs() < CATCH_HEIGHT
+                && in_sight(droid.feet);
+            if let Some(voice) = near.then(|| self.group_of(m).into_iter().find(|&v| !self.droids[v].down)).flatten() {
+                crowding[voice] = true;
+            }
+        }
         let mut stages = Vec::new();
         for (n, droid) in self.droids.iter_mut().enumerate() {
             let Some(patience) = patience(droid.character).filter(|_| droid.hunts_player()) else {
@@ -2488,16 +2507,11 @@ impl Inhabitants {
             };
             let minding = droid.alert.is_none() && !droid.down && !droid.talking;
             let chest = droid.feet + Vector3::new(0.0, CHEST, 0.0);
-            let (player, posture, in_the_dark) = watched;
             let aimed = minding
                 && aim.is_some_and(|(eye, ahead)| pointed_at(eye, ahead, chest))
                 && Sight::default().could_see(None, droid.feet, droid.heading, player, posture.into(), in_the_dark)
                 && in_sight(droid.feet);
-            let near = minding
-                && crowded(droid.character).is_some_and(|reach| flat(player - droid.feet).norm() < reach)
-                && (player.y - droid.feet.y).abs() < CATCH_HEIGHT
-                && in_sight(droid.feet);
-            let aimed = aimed || near;
+            let aimed = aimed || (minding && crowding[n]);
             if !minding {
                 droid.threat = 0.0;
                 droid.warned = 0;

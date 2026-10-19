@@ -2116,6 +2116,10 @@ impl MazeGame {
     /// Has the `n`th droid say its bark called `name`, if its kind has one, feeling `mood`: out
     /// loud once the voice is made, and on screen straight away, as the player has subtitles.
     fn bark(&mut self, n: usize, name: &str, mood: Mood) {
+        // Of a pair or a group, only one speaks for it, so that they never say the same at once.
+        if !self.inhabitants.speaks_for_group(n) {
+            return;
+        }
         // In battle royale everyone fights everyone all over the map: only those near enough to
         // hear are heard, or the screen would be all their calls.
         if self.royale.is_some() {
