@@ -1800,6 +1800,39 @@ impl Inhabitants {
             .collect()
     }
 
+    /// The nearest pair or group to the `player`'s feet, within `reach` meters, of a kind
+    /// `talks` says has things to say among itself, that is going about its business - all of
+    /// it calm, and minding nothing - to talk among itself: up to three of it, the one leading
+    /// it first.
+    pub fn talkers(&self, player: Vector3<f32>, reach: f32, talks: impl Fn(usize) -> bool) -> Option<Vec<usize>> {
+        (0..self.droids.len())
+            .filter(|&n| self.droids[n].leads && talks(self.droids[n].character))
+            .map(|n| self.group_of(n).into_iter().filter(|&m| !self.droids[m].down).take(3).collect::<Vec<_>>())
+            .filter(|members| members.len() >= 2 && self.at_ease(members, player, reach))
+            .min_by(|a, b| {
+                let away = |members: &Vec<usize>| flat(self.droids[members[0]].feet - player).norm();
+                away(a).total_cmp(&away(b))
+            })
+    }
+
+    /// Whether all of `members` are going about their business within `reach` meters of the
+    /// `player`'s feet - standing, calm, and minding nothing - to talk among themselves.
+    pub fn at_ease(&self, members: &[usize], player: Vector3<f32>, reach: f32) -> bool {
+        members.iter().all(|&n| {
+            self.droids.get(n).is_some_and(|droid| {
+                !droid.down
+                    && droid.alert.is_none()
+                    && !droid.talking
+                    && droid.warned == 0
+                    && droid.side.is_none()
+                    && droid.pursuit.is_none()
+                    && droid.cover.is_none()
+                    && droid.trip.is_none()
+                    && flat(droid.feet - player).norm() < reach
+            })
+        })
+    }
+
     /// Whether the `n`th droid speaks for its pair or group: the first of them still standing -
     /// the one leading it, unless that is down - or one walking about by itself.
     pub fn speaks_for_group(&self, n: usize) -> bool {

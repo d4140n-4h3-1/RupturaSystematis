@@ -112,6 +112,27 @@ fn echoed(samples: Vec<f32>, rate: u32, echo: Option<synth::Echo>) -> Vec<f32> {
     }
 }
 
+/// How near the player, in meters, a group talks among itself, and keeps on; how long between one
+/// talk and the next, in seconds, from least to most, and how soon another is looked for with no
+/// group about to have one; and how long each line takes to say, in seconds, before the next: a
+/// pause, and so long for each letter of it.
+const TALK_HEARD: f32 = 25.0;
+const TALK_EVERY: (f32, f32) = (20.0, 45.0);
+const TALK_RETRY: f32 = 5.0;
+const TALK_PAUSE: f32 = 0.8;
+const TALK_PER_LETTER: f32 = 0.075;
+
+/// A group talking among itself (see [`MazeGame::talk_among`]): who, the one to say the first
+/// line first and the rest in turn; which of its kind's talks; the line next to be said; and in
+/// how long, in seconds.
+#[derive(Debug, Clone, PartialEq)]
+struct Talk {
+    members: Vec<usize>,
+    talk: usize,
+    line: usize,
+    next_in: f32,
+}
+
 /// In battle royale, how far from the player a droid can be and still be heard calling out, in
 /// meters.
 const ROYALE_HEARD_WITHIN: f32 = 30.0;
@@ -450,6 +471,17 @@ pub struct MazeGame {
     #[visit(skip)]
     #[reflect(hidden)]
     last_chat: Option<usize>,
+    /// A group talking among itself near the player, if one is; how long till another is looked
+    /// for, in seconds; and which of its kind's talks was had last (see [`MazeGame::talk_among`]).
+    #[visit(skip)]
+    #[reflect(hidden)]
+    talk: Option<Talk>,
+    #[visit(skip)]
+    #[reflect(hidden)]
+    talk_in: f32,
+    #[visit(skip)]
+    #[reflect(hidden)]
+    last_talk: Option<usize>,
     /// In capture the flag, whether the player has the enemy's flag, to bring home.
     #[visit(skip)]
     #[reflect(hidden)]
@@ -793,6 +825,7 @@ impl MazeGame {
         self.barks.clear();
         let scene = &mut ctx.scenes[self.scene];
         self.inhabitants.clear(&mut scene.graph);
+        self.talk = None;
         self.firewalls.clear(&mut scene.graph);
         for computer in &mut self.computers {
             computer.hide(&mut scene.graph);
@@ -1004,6 +1037,7 @@ impl MazeGame {
         let into_maze = survey::open_direction(grid, *origin, start);
         // Everyone is put down afresh for the new round, away from where the player starts.
         self.inhabitants.clear(&mut scene.graph);
+        self.talk = None;
         if let Some(shots) = self.shots.as_mut() {
             shots.clear(&mut scene.graph);
         }
@@ -1379,6 +1413,7 @@ impl MazeGame {
         if self.prefabs.is_some() {
             // Out of the way first: the new maze's survey would take them for walls.
             self.inhabitants.clear(&mut ctx.scenes[self.scene].graph);
+            self.talk = None;
             self.level.clear(&mut ctx.scenes[self.scene]);
             self.set_banner(ctx, "");
             self.phase = Phase::Loading;
@@ -2114,6 +2149,7 @@ impl MazeGame {
         for (n, name, mood) in std::mem::take(&mut self.chase_barks) {
             self.bark_anyway(n, name, mood);
         }
+        self.talk_among(ctx);
         // In capture the flag, a droid going after one of the other side says so, and the
         // droids' shots leave their pistols.
         for n in engaged {
@@ -2175,6 +2211,60 @@ impl MazeGame {
             }
             _ => false,
         }
+    }
+
+    /// Now and then has a group near the player that has things to say among itself talk: the
+    /// lines of one of its kind's talks - never the one had last - one after the other, each by
+    /// the next of them in turn, each in the time it takes to say. Any of it with something else
+    /// to do, or the player gone off, and it breaks off.
+    fn talk_among(&mut self, ctx: &mut PluginContext) {
+        let player = self.player.feet(&ctx.scenes[self.scene].graph);
+        let Some(mut talk) = self.talk.take() else {
+            self.talk_in -= ctx.dt;
+            if self.talk_in > 0.0 {
+                return;
+            }
+            self.talk_in = TALK_RETRY;
+            let Some(script) = self.script.as_ref() else {
+                return;
+            };
+            let talks_of = |character: usize| script.characters.get(character).map_or(0, |c| c.talks.len());
+            let Some(members) = self.inhabitants.talkers(player, TALK_HEARD, |character| talks_of(character) > 0) else {
+                return;
+            };
+            let count = self.inhabitants.who(members[0]).map_or(0, |(character, _)| talks_of(character));
+            let mut pick = self.rng().below(count.max(1));
+            if count > 1 && Some(pick) == self.last_talk {
+                pick = (pick + 1) % count;
+            }
+            self.last_talk = Some(pick);
+            Log::info(format!("Droids {members:?} talk among themselves"));
+            self.talk = Some(Talk { members, talk: pick, line: 0, next_in: 0.0 });
+            return;
+        };
+        let line = self
+            .script
+            .as_ref()
+            .zip(self.inhabitants.who(talk.members[0]))
+            .and_then(|(script, (character, _))| script.characters[character].talks.get(talk.talk)?.get(talk.line).cloned())
+            .filter(|_| self.inhabitants.at_ease(&talk.members, player, TALK_HEARD * 1.5));
+        talk.next_in -= ctx.dt;
+        if talk.next_in > 0.0 && line.is_some() {
+            self.talk = Some(talk);
+            return;
+        }
+        let Some(line) = line else {
+            self.talk_in = crate::inhabitants::between(self.rng(), TALK_EVERY);
+            return;
+        };
+        let n = talk.members[talk.line % talk.members.len()];
+        if platform::var("MAZE_DEBUG").is_some() {
+            Log::info(format!("Droid {n}: {}", line.says));
+        }
+        self.say_bark(n, &line, Mood::Normal);
+        talk.next_in = TALK_PAUSE + line.says.len() as f32 * TALK_PER_LETTER;
+        talk.line += 1;
+        self.talk = Some(talk);
     }
 
     /// Has the `n`th droid say its bark called `name`, if its kind has one, feeling `mood`: out

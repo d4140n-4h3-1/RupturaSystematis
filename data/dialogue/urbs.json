@@ -1,5 +1,5 @@
 {
-  "about": "What the droids of Urbs say, in the story: as data/dialogue/droids.json has it for a maze - the same three kinds of droid, in the same models and voices, the same lines, replies, checks, bribes, moods, barks and 'threatened' - but about the city: the way to Summa, its tallest tower, where {exit_far} and {exit_way} point; and the stores and banks being robbed, by the player. 'inhabitants' is how many droids are about the player at once, and 'crowd' has them be a crowd: one left far behind, out of sight, turns up again nearer by as another, wherever the player cannot see, so the streets are as busy wherever they go. A character's 'in_pairs' is the share of its kind that walk about in twos, one keeping beside the other: talk one round, or turn one hostile, and the other goes with it. A fourth kind, the Praedatores, are gangs in the hostile droid's red, walking about in groups of up to 'in_groups_of', put down 'share' as often as each of the others: they have nothing to say to the player but their 'chatter', and keep to themselves - until the player stands within 'crowded' meters of one, which it takes as it would the pistol pointed at it, warning them and then going for them, its whole group with it, eyes in 'hostile_eyes' rather than red. Its 'turf' has the share of its groups it says keep to a spot of their own, standing about there, and take the ground within 'reach' meters of it as theirs: the player on it is warned off it as if standing over them, and the other droids keep off it. Now and then one of security goes after one of a gang near the player, which runs: security calls out 'chase', and the gang's answers 'flee'; caught, security says 'caught' and the gang's answers with its own; and if it gets away, security says 'escaped'. And now and then six of security shoot it out with a gang of six near the player: security calls the rest of it in with 'shootout'; the first of each side to go after the other says 'engaged'; and one of the side left standing says 'won'. Every line is checked by data/system_latin/sl_parser.py.",
+  "about": "What the droids of Urbs say, in the story: as data/dialogue/droids.json has it for a maze - the same three kinds of droid, in the same models and voices, the same lines, replies, checks, bribes, moods, barks and 'threatened' - but about the city: the way to Summa, its tallest tower, where {exit_far} and {exit_way} point; and the stores and banks being robbed, by the player. 'inhabitants' is how many droids are about the player at once, and 'crowd' has them be a crowd: one left far behind, out of sight, turns up again nearer by as another, wherever the player cannot see, so the streets are as busy wherever they go. A character's 'in_pairs' is the share of its kind that walk about in twos, one keeping beside the other: talk one round, or turn one hostile, and the other goes with it. A fourth kind, the Praedatores, are gangs in the hostile droid's red, walking about in groups of up to 'in_groups_of', put down 'share' as often as each of the others: they have nothing to say to the player but their 'chatter', and keep to themselves - though near the player, a group of them now and then has one of its 'talks' among itself, each line by the next of them in turn - - until the player stands within 'crowded' meters of one, which it takes as it would the pistol pointed at it, warning them and then going for them, its whole group with it, eyes in 'hostile_eyes' rather than red. Its 'turf' has the share of its groups it says keep to a spot of their own, standing about there, and take the ground within 'reach' meters of it as theirs: the player on it is warned off it as if standing over them, and the other droids keep off it. Now and then one of security goes after one of a gang near the player, which runs: security calls out 'chase', and the gang's answers 'flee'; caught, security says 'caught' and the gang's answers with its own; and if it gets away, security says 'escaped'. And now and then six of security shoot it out with a gang of six near the player: security calls the rest of it in with 'shootout'; the first of each side to go after the other says 'engaged'; and one of the side left standing says 'won'. Every line is checked by data/system_latin/sl_parser.py.",
   "inhabitants": 80,
   "crowd": true,
   "characters": [
@@ -572,6 +572,106 @@
           "says": "Receda. Zona privatum.",
           "means": "Back off. Private zone."
         }
+      ],
+      "talks": [
+        [
+          {
+            "says": "Argentaria proximum. Aurum intus.",
+            "means": "The next bank. There's gold inside."
+          },
+          {
+            "says": "Securitas observat argentaria.",
+            "means": "Security's watching the bank."
+          },
+          {
+            "says": "Nox proximum. Nos intramus.",
+            "means": "Next night, then. We go in."
+          }
+        ],
+        [
+          {
+            "says": "Duo defendator appropinquant ad zona nos.",
+            "means": "Two Defendatores, coming our way."
+          },
+          {
+            "says": "Ignora ea. Ea non appropinquant.",
+            "means": "Ignore them. They won't come near."
+          },
+          {
+            "says": "Affirmatum. Observo ea.",
+            "means": "Fine. I'm watching them."
+          }
+        ],
+        [
+          {
+            "says": "Ubi praeda?",
+            "means": "Where's the loot?"
+          },
+          {
+            "says": "Praeda in taberna vetusum. Tutum.",
+            "means": "In the old shop. It's safe."
+          },
+          {
+            "says": "Quantum pars ego?",
+            "means": "How big is my share?"
+          },
+          {
+            "says": "Pars minimum. Tu novum.",
+            "means": "The smallest. You're new."
+          }
+        ],
+        [
+          {
+            "says": "Ubi socius codex tria?",
+            "means": "Where's number three?"
+          },
+          {
+            "says": "Defendator neutralizavat socius.",
+            "means": "A Defendator took it down."
+          },
+          {
+            "says": "Ille defendator, ego deletabso.",
+            "means": "That Defendator - I'll delete it."
+          }
+        ],
+        [
+          {
+            "says": "Nox tardum.",
+            "means": "Slow night."
+          },
+          {
+            "says": "Affirmatum. Nullum targetum.",
+            "means": "Yeah. No marks."
+          },
+          {
+            "says": "Exspecta. Targetum appropinquabsat.",
+            "means": "Wait. One will come along."
+          }
+        ],
+        [
+          {
+            "says": "Ille persona incognitum. Observa.",
+            "means": "Don't know that one. Watch it."
+          },
+          {
+            "says": "Utrum ille securitas?",
+            "means": "Is it security?"
+          },
+          {
+            "says": "Negativum. Incertum. Observo.",
+            "means": "No. Not sure. I'm watching."
+          }
+        ],
+        [
+          {
+            "says": "Hic zona nos. Semper.",
+            "means": "This is our ground. Always."
+          },
+          {
+            "says": "Affirmatum. Nullum intrat.",
+            "means": "Right. Nobody comes in."
+          }
+        ]
       ],
       "barks": {
         "warned": {

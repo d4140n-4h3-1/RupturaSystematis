@@ -177,6 +177,11 @@ pub struct Character {
     /// has no conversation to have.
     #[serde(default)]
     pub chatter: Vec<Bark>,
+    /// What those of a pair or group of its kind say among themselves, going about their
+    /// business near the player: each a few lines, said one after the other by one of them and
+    /// then the next, round them in turn.
+    #[serde(default)]
+    pub talks: Vec<Vec<Bark>>,
     /// How it takes having the pistol pointed at it; not at all, without.
     #[serde(default)]
     pub threatened: Option<Threatened>,
@@ -714,6 +719,10 @@ mod tests {
             assert!(gang.threatened.is_some_and(|t| t.then == Provoked::Attacks), "{} goes for them", gang.name);
             assert!(gang.hostile_eyes.is_some_and(|eyes| eyes != [255, 0, 0]), "{} hostile in its own colour", gang.name);
             assert!(gang.lines.is_empty() && gang.chatter.len() >= 2, "{} only chatters", gang.name);
+            assert!(gang.talks.len() >= 4, "{} talks among itself", gang.name);
+            for talk in &gang.talks {
+                assert!(talk.len() >= 2 && talk.iter().all(|line| !line.means.is_empty()), "{} answers itself", gang.name);
+            }
             assert!(
                 gang.turf.is_some_and(|turf| (0.0..=1.0).contains(&turf.share) && turf.reach > gang.crowded.unwrap_or(0.0)),
                 "{} keeps to turf of its own, wider than it minds the player standing over it",
