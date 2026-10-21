@@ -57,7 +57,8 @@
 //! sees the other as it would see the player standing, and a sentry that sees one that has joined
 //! in joins in as well, so a chase draws in every sentry that catches sight of it.
 //!
-//! Hostile, it cannot be talked to any more, but after [`HITS`] bolts it goes down, its eyes
+//! Hostile, it cannot be talked to any more, but after [`HITS`] bolts - a sentry, tougher,
+//! [`SENTRY_HITS`] - it goes down, its eyes
 //! dark: it goes limp and falls, knocked back by the last bolt, and lies where it falls (see
 //! [`crate::ragdoll`]) - or, without a ragdoll, crouches. Lying there, a bolt still shoves it.
 //! It stays there, for the rest of the round; the others step over it rather than round it.
@@ -252,6 +253,10 @@ const ARMED_FOR: f32 = 5.0;
 const FIRE_RANGE: f32 = 24.0;
 const ENGAGE: f32 = 11.0;
 const FIRE_EVERY: (f32, f32) = (0.7, 1.3);
+/// A gang in a shootout is wilder: it comes on to [`GANG_ENGAGE`] meters before it stands to
+/// shoot, and fires as often as [`GANG_FIRE_EVERY`] says.
+const GANG_ENGAGE: f32 = 6.0;
+const GANG_FIRE_EVERY: (f32, f32) = (0.45, 0.9);
 const SPREAD: f32 = 0.55;
 const FIRE_CONE: f32 = 0.3;
 /// How high over the player's feet a droid aims.
@@ -274,8 +279,17 @@ const SPRINT_FOR: (f32, f32) = (1.5, 3.0);
 /// to the player's 1: it is heavier.
 const SENTRY_STAMINA: f32 = 1.5;
 const SENTRY_RECOVERY: f32 = 2.0 / 3.0;
-/// How many of the pistol's bolts it takes to stop a hostile droid.
+/// How a sentry paces itself after someone, by the share of its breath it has left: under
+/// [`SPRINT_RESERVE`] it sprints no more, and under [`EASE_OFF`] it eases off to a jog until it is
+/// back over [`EASED`] - so that it is never left winded, walking - unless whoever it is after is
+/// within [`BURST`] meters, near enough for all it has left to catch them.
+const SPRINT_RESERVE: f32 = 0.5;
+const EASE_OFF: f32 = 0.2;
+const EASED: f32 = 0.6;
+const BURST: f32 = 6.0;
+/// How many of the pistol's bolts it takes to stop a hostile droid, and a sentry, armoured.
 pub const HITS: u32 = 3;
+const SENTRY_HITS: u32 = 5;
 /// The ragdoll body a good headshot has to go through, and how near the middle of it, as a share
 /// of how far round it is: through the middle of the skull, not just clipping it.
 const HEAD: &str = "head";
@@ -394,6 +408,9 @@ struct Inhabitant {
     winded: bool,
     /// How much breath it has at most: 1, or a sentry's more.
     most: f32,
+    /// Whether, a sentry low on breath, it has eased off to a jog to get it back (see
+    /// [`EASE_OFF`]).
+    easing: bool,
     /// Whether it is a sentry.
     sentry: bool,
     /// How many of the pistol's bolts have hit it while hostile.
@@ -431,6 +448,14 @@ struct Inhabitant {
 }
 
 impl Inhabitant {
+    /// How many bolts it takes to stop it (see [`HITS`]).
+    fn stopped_by(&self) -> u32 {
+        match self.sentry {
+            true => SENTRY_HITS,
+            false => HITS,
+        }
+    }
+
     /// Whether it has anything to do with the player's being found: not one of the player's
     /// own side in capture the flag.
     fn hunts_player(&self) -> bool {
@@ -677,6 +702,10 @@ pub struct Inhabitants {
     /// seconds (see [`Inhabitants::foot_chases`]).
     chase: Option<Chase>,
     chase_in: f32,
+    /// The shootout going on, if there is one, and how long until the next is looked for, in
+    /// seconds (see [`Inhabitants::shootouts`]).
+    shootout: Option<Shootout>,
+    shootout_in: f32,
 }
 
 /// A foot chase in a city: one of its security after one of a gang, which runs for it - and if
@@ -743,6 +772,57 @@ const REPLY_AFTER: f32 = 1.8;
 /// How near the player, in meters, what those in a chase call out is heard.
 const CHASE_HEARD: f32 = 40.0;
 
+/// A shootout in a city: six of its security against a gang of six, where the gang keeps to.
+#[derive(Debug, Clone, PartialEq)]
+struct Shootout {
+    /// Where the gang keeps to, and the security called in comes to - once it has met up where
+    /// the nearest of it is, out of the gang's sight, if it has not gone in yet.
+    site: Vector3<f32>,
+    rally: Option<Vector3<f32>>,
+    guards: Vec<usize>,
+    gang: Vec<usize>,
+    /// How long it has gone on, in seconds.
+    time: f32,
+    /// Whether each side, security's and then the gang's, has called out going after the other.
+    engaged: [bool; 2],
+}
+
+/// What came of seeing to the shootouts for a frame (see [`Inhabitants::shootouts`]).
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct ShootoutNews {
+    /// What those in it called out, by who, as the name of the bark - if the player is near
+    /// enough to hear it: `shootout` as security calls the rest of it in; `engaged` as the first
+    /// of each side goes after the other; and `won` by one of the side left standing.
+    pub said: Vec<(usize, &'static str)>,
+    /// Everyone in a shootout begun, and those left standing of one over.
+    pub started: Vec<usize>,
+    pub ended: Vec<usize>,
+}
+
+/// How many of each side are in a shootout.
+const SHOOTOUT_SIDE: usize = 6;
+/// How long between one shootout and the next, in seconds, from least to most; how soon another
+/// is looked for when there was no one about for one; and how long into a round the first is.
+const SHOOTOUT_EVERY: (f32, f32) = (150.0, 300.0);
+const SHOOTOUT_RETRY: f32 = 10.0;
+const SHOOTOUT_FIRST: f32 = 60.0;
+/// How far from the player, in meters along the ground, the gang keeps to: near enough to be
+/// heard, not so near the player is in the middle of it.
+const SHOOTOUT_SEEN: (f32, f32) = (25.0, 70.0);
+/// How far from there, in meters, those in it are called from at most; and how near any of
+/// security can already be, so that they come to it rather than start in the middle of it.
+const SHOOTOUT_CALLED: f32 = 90.0;
+const SHOOTOUT_APART: f32 = 35.0;
+/// How near where security meets up all of it has to be, in meters, for it to go in together,
+/// rather than one at a time to be picked off; and how long it waits for the rest at most, in
+/// seconds.
+const RALLY_NEAR: f32 = 6.0;
+const RALLY_FOR: f32 = 30.0;
+/// How long it goes on at most, in seconds, and how far off the player can go, in meters, before
+/// it is over all the same.
+const SHOOTOUT_FOR: f32 = 120.0;
+const SHOOTOUT_GONE: f32 = 130.0;
+
 /// A city's crowd: only so many droids, all of them about the player. One that has gone far off,
 /// out of sight, turns up again as another nearer by, somewhere the player cannot see, so that
 /// wherever they go the streets are as busy - busier than the whole city's hundreds spread over
@@ -754,6 +834,46 @@ struct Crowd {
     pavement: Vec<bool>,
     /// How long till the crowd is next looked over, in seconds.
     next: f32,
+}
+
+impl Crowd {
+    /// Somewhere on the floor of `grid` whose corner is at `origin` that one of the crowd could
+    /// have walked to, a little way off the `player`'s feet, where `hidden` says the player cannot
+    /// see it turn up; and for a group, room for the rest about it, keeping to `slots` of
+    /// [`ABOUT_LEADER`]: where, which way it faces, and where the rest are.
+    #[allow(clippy::type_complexity)]
+    fn spot(
+        &self,
+        (grid, origin): (&WalkGrid, Vector3<f32>),
+        player: Vector3<f32>,
+        slots: &[usize],
+        rng: &mut Rng,
+        hidden: impl Fn(Vector3<f32>) -> bool,
+    ) -> Option<(Vector3<f32>, f32, Vec<Vector3<f32>>)> {
+        (0..CROWD_TRIES).find_map(|_| {
+            let angle = between(rng, (-std::f32::consts::PI, std::f32::consts::PI));
+            let away = between(rng, CROWD_BACK);
+            let at = player + forward(angle) * away;
+            let cell = survey::cell_at(grid, origin, at)?;
+            let pavement = |(x, z): (usize, usize)| self.pavement.get(z * grid.width + x).copied().unwrap_or(false);
+            if !pavement(cell) {
+                return None;
+            }
+            let feet = grid.on_floor(origin, cell);
+            if !hidden(feet) {
+                return None;
+            }
+            let heading = between(rng, (-std::f32::consts::PI, std::f32::consts::PI));
+            let about: Option<Vec<Vector3<f32>>> = slots
+                .iter()
+                .map(|&slot| {
+                    let cell = survey::cell_at(grid, origin, about_leader(feet, heading, slot)).filter(|&cell| pavement(cell))?;
+                    Some(grid.on_floor(origin, cell))
+                })
+                .collect();
+            Some((feet, heading, about?))
+        })
+    }
 }
 
 /// How far from the player, in meters along the ground, a droid of a crowd that is going about
@@ -1044,6 +1164,14 @@ fn sprints(sprint_in: f32, sprinting: f32, chasing: bool, rng: &mut Rng, dt: f32
     }
 }
 
+/// Whether one pacing itself - a sentry, with no one near enough for a last burst - eases off to
+/// a jog, having been `easing` or not, with `left` of its breath, as a share of its most; and
+/// whether it keeps from sprinting (see [`SPRINT_RESERVE`]).
+fn pace(pacing: bool, easing: bool, left: f32) -> (bool, bool) {
+    let ease_under = if easing { EASED } else { EASE_OFF };
+    (pacing && left < ease_under, pacing && left < SPRINT_RESERVE)
+}
+
 impl Inhabitant {
     /// Puts it into `alert`, or with none calms it down, and gets it ready to go about it; and
     /// tells of it in `news`, as the `n`th droid.
@@ -1094,6 +1222,8 @@ impl Inhabitants {
         self.populated = false;
         self.chase = None;
         self.chase_in = 0.0;
+        self.shootout = None;
+        self.shootout_in = 0.0;
         self.search = None;
         self.last_sight = None;
         self.search_from = None;
@@ -1140,6 +1270,7 @@ impl Inhabitants {
         // A crowd turns up again anywhere it could have walked to, off the roads; and is about
         // the player from the start.
         self.chase_in = CHASE_FIRST;
+        self.shootout_in = SHOOTOUT_FIRST;
         self.crowd = crowd.then(|| Crowd {
             pavement: routes.costs.iter().enumerate().map(|(i, cost)| cost.is_some() && !on_road(i)).collect(),
             next: CROWD_EVERY,
@@ -1287,6 +1418,7 @@ impl Inhabitants {
                     && droid.warned == 0
                     && droid.trip.is_none()
                     && droid.pursuit.is_none()
+                    && droid.side.is_none()
                     && droid.speaking == 0.0
                     && flat(droid.feet - player).norm() < CHASE_SEEN
             };
@@ -1311,15 +1443,7 @@ impl Inhabitants {
             self.chase_in = between(rng, CHASE_EVERY);
             let (guard, thief) = pairs[rng.below(pairs.len())];
             // The one running leaves its group behind, for good.
-            if let Some(leader) = self.droids[thief].partner.take() {
-                self.droids[thief].slot = 0;
-                if self.droids[leader].partner == Some(thief) {
-                    let next = (0..self.droids.len())
-                        .find(|&m| m != leader && !self.droids[m].leads && self.droids[m].partner == Some(leader));
-                    self.droids[leader].partner = next;
-                    self.droids[leader].leads = next.is_some();
-                }
-            }
+            self.leave_group(thief);
             for (n, pursuit) in [(guard, Pursuit::Chasing(thief)), (thief, Pursuit::Fleeing(guard))] {
                 let droid = &mut self.droids[n];
                 droid.pursuit = Some(pursuit);
@@ -1392,6 +1516,185 @@ impl Inhabitants {
         news
     }
 
+    /// In a city, now and then, has six of its security - kinds `guards` says are - fight it out
+    /// with a gang of six - kinds `thieves` says are - near enough the `player`'s feet to be
+    /// heard: the gang gathers where one of it is, and security is called in to it - meeting up out
+/// of its sight first, to go in together - each side
+    /// shooting at the other as capture the flag's do (see [`Side::Security`]); and sees it
+    /// through, `dt` seconds on from the last time, until one side is all down, it has gone on
+    /// long enough, or the player has gone far off. Those left standing go about their business
+    /// again, each by itself. What came of it (see [`ShootoutNews`]).
+    pub fn shootouts(
+        &mut self,
+        player: Vector3<f32>,
+        rng: &mut Rng,
+        dt: f32,
+        guards: impl Fn(usize) -> bool,
+        thieves: impl Fn(usize) -> bool,
+    ) -> ShootoutNews {
+        let mut news = ShootoutNews::default();
+        let mut said = Vec::new();
+        if self.crowd.is_none() {
+            return news;
+        }
+        let Some(mut shootout) = self.shootout.take() else {
+            self.shootout_in -= dt;
+            if self.shootout_in > 0.0 {
+                return news;
+            }
+            let calm = |droid: &Inhabitant| {
+                !droid.down
+                    && droid.ragdoll.is_none()
+                    && droid.alert.is_none()
+                    && !droid.talking
+                    && droid.warned == 0
+                    && droid.trip.is_none()
+                    && droid.pursuit.is_none()
+                    && droid.side.is_none()
+                    && droid.speaking == 0.0
+            };
+            let droids = &self.droids;
+            // The nearest of those `of` kind, calm, to `site` - and far enough off - as many as
+            // there are to be, if there are as many.
+            let nearest = |site: Vector3<f32>, of: &dyn Fn(usize) -> bool, apart: f32| {
+                let mut near: Vec<(usize, f32)> = droids
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, droid)| of(droid.character) && calm(droid))
+                    .map(|(n, droid)| (n, flat(droid.feet - site).norm()))
+                    .filter(|&(_, away)| (apart..SHOOTOUT_CALLED).contains(&away))
+                    .collect();
+                near.sort_by(|a, b| a.1.total_cmp(&b.1));
+                (near.len() >= SHOOTOUT_SIDE).then(|| near.into_iter().take(SHOOTOUT_SIDE).map(|(n, _)| n).collect::<Vec<_>>())
+            };
+            // Where one of a gang is, near enough to be heard, and enough of both about it.
+            let mut sites: Vec<usize> = (0..droids.len())
+                .filter(|&n| thieves(droids[n].character) && calm(&droids[n]))
+                .filter(|&n| (SHOOTOUT_SEEN.0..SHOOTOUT_SEEN.1).contains(&flat(droids[n].feet - player).norm()))
+                .collect();
+            let first = rng.below(sites.len().max(1));
+            sites.rotate_left(first);
+            let found = sites.into_iter().find_map(|n| {
+                let site = droids[n].feet;
+                Some((site, nearest(site, &guards, SHOOTOUT_APART)?, nearest(site, &thieves, 0.0)?))
+            });
+            let Some((site, guards, gang)) = found else {
+                self.shootout_in = SHOOTOUT_RETRY;
+                return news;
+            };
+            self.shootout_in = between(rng, SHOOTOUT_EVERY);
+            let rally = self.droids[guards[0]].feet;
+            for (side, members, post) in [(Side::Security, &guards, rally), (Side::Gang, &gang, site)] {
+                for &n in members {
+                    self.leave_group(n);
+                    let droid = &mut self.droids[n];
+                    droid.side = Some(side);
+                    droid.post = Some(post);
+                    droid.foe = None;
+                    droid.foe_unseen = 0.0;
+                    droid.hits = 0;
+                    droid.route.clear();
+                    droid.replan = 0.0;
+                    droid.resting = 0.0;
+                }
+            }
+            Log::info(format!("Shootout: security {guards:?} against gang {gang:?}"));
+            // Security's nearest calls the rest of it in.
+            said.push((guards[0], "shootout"));
+            news.started = guards.iter().chain(&gang).copied().collect();
+            news.said = self.heard_near(said, player);
+            self.shootout = Some(Shootout { site, rally: Some(rally), guards, gang, time: 0.0, engaged: [false; 2] });
+            return news;
+        };
+        shootout.time += dt;
+        // Met up, or done waiting, security goes in together.
+        if let Some(rally) = shootout.rally {
+            let met = shootout
+                .guards
+                .iter()
+                .all(|&n| self.droids[n].down || flat(self.droids[n].feet - rally).norm() < RALLY_NEAR);
+            if met || shootout.time > RALLY_FOR {
+                shootout.rally = None;
+                for &n in &shootout.guards {
+                    let droid = &mut self.droids[n];
+                    droid.post = Some(shootout.site);
+                    droid.route.clear();
+                    droid.replan = 0.0;
+                    droid.resting = 0.0;
+                }
+                Log::info(format!("Shootout: security goes in, {:.0} seconds after it was called", shootout.time));
+            }
+        }
+        // The first of each side to go after the other calls it out.
+        for (side, members) in [&shootout.guards, &shootout.gang].into_iter().enumerate() {
+            if shootout.engaged[side] {
+                continue;
+            }
+            if let Some(&n) = members.iter().find(|&&n| self.droids[n].foe.is_some() && !self.droids[n].down) {
+                shootout.engaged[side] = true;
+                said.push((n, "engaged"));
+            }
+        }
+        let standing = |members: &[usize]| members.iter().copied().filter(|&n| !self.droids[n].down).collect::<Vec<_>>();
+        let (guards, gang) = (standing(&shootout.guards), standing(&shootout.gang));
+        let over = guards.is_empty()
+            || gang.is_empty()
+            || shootout.time > SHOOTOUT_FOR
+            || flat(shootout.site - player).norm() > SHOOTOUT_GONE;
+        if !over {
+            self.shootout = Some(shootout);
+            news.said = self.heard_near(said, player);
+            return news;
+        }
+        // One side left standing says so.
+        match (guards.first(), gang.first()) {
+            (Some(&n), None) | (None, Some(&n)) => said.push((n, "won")),
+            _ => (),
+        }
+        Log::info(format!("Shootout over: {} of security and {} of the gang standing", guards.len(), gang.len()));
+        for &n in shootout.guards.iter().chain(&shootout.gang) {
+            let droid = &mut self.droids[n];
+            droid.side = None;
+            droid.post = None;
+            droid.foe = None;
+            droid.shot_from = None;
+            if !droid.down && droid.alert.is_none() {
+                droid.route.clear();
+                droid.trip = None;
+                droid.resting = between(rng, REST);
+            }
+        }
+        news.ended = guards.into_iter().chain(gang).collect();
+        news.said = self.heard_near(said, player);
+        news
+    }
+
+    /// Has the `n`th droid leave its pair or group, for good: another of those keeping about it
+    /// leads the rest, if it led them.
+    fn leave_group(&mut self, n: usize) {
+        let Some(partner) = self.droids[n].partner.take() else {
+            return;
+        };
+        let kept = |m: usize, leader: usize| m != leader && !self.droids[m].leads && self.droids[m].partner == Some(leader);
+        if self.droids[n].leads {
+            let rest: Vec<usize> = (0..self.droids.len()).filter(|&m| kept(m, n)).collect();
+            if let Some((&leader, others)) = rest.split_first() {
+                self.droids[leader].partner = others.first().copied();
+                self.droids[leader].leads = !others.is_empty();
+                self.droids[leader].slot = 0;
+                for &m in others {
+                    self.droids[m].partner = Some(leader);
+                }
+            }
+        } else if self.droids[partner].partner == Some(n) {
+            let next = (0..self.droids.len()).find(|&m| kept(m, partner));
+            self.droids[partner].partner = next;
+            self.droids[partner].leads = next.is_some();
+        }
+        self.droids[n].leads = false;
+        self.droids[n].slot = 0;
+    }
+
     /// Those of `said` near enough the `player`'s feet to be heard (see [`CHASE_HEARD`]).
     fn heard_near(&self, said: Vec<(usize, &'static str)>, player: Vector3<f32>) -> Vec<(usize, &'static str)> {
         said.into_iter()
@@ -1425,11 +1728,13 @@ impl Inhabitants {
     /// In a city, has those of its crowd that have got far from the `player`'s feet, going about
     /// their business, turn up again as others nearer by, on the floor of `grid` whose corner is
     /// at `origin` (see [`Crowd`]): wherever `seen` says the player cannot see from where they
-    /// are, or off to the side of the way they look, `ahead`. `dt` seconds on from the last time.
+    /// are, or off to the side of the way they look, `ahead`. One lying where it went down, as
+    /// far off and out of sight, is taken away, and another of its kind turns up in its place, in
+    /// `scene`: or a city would empty, a shootout at a time. `dt` seconds on from the last time.
     #[allow(clippy::too_many_arguments)]
     pub fn recycle(
         &mut self,
-        graph: &mut Graph,
+        scene: &mut Scene,
         (grid, origin): (&WalkGrid, Vector3<f32>),
         player: Vector3<f32>,
         ahead: Vector3<f32>,
@@ -1445,6 +1750,7 @@ impl Inhabitants {
             return;
         }
         crowd.next = CROWD_EVERY;
+        let graph = &mut scene.graph;
         let ahead = flat(ahead).try_normalize(1.0e-3);
         // Out of the player's sight: behind something, or off to the side of the view.
         let hidden = |graph: &Graph, at: Vector3<f32>| {
@@ -1494,31 +1800,7 @@ impl Inhabitants {
                 return;
             };
             let slots: Vec<usize> = members.iter().skip(1).map(|&m| self.droids[m].slot).collect();
-            // Somewhere it could have walked to, a little way off, where the player cannot see it
-            // turn up; and for a group, room for the rest about it.
-            let spot = (0..CROWD_TRIES).find_map(|_| {
-                let angle = between(rng, (-std::f32::consts::PI, std::f32::consts::PI));
-                let away = between(rng, CROWD_BACK);
-                let at = player + forward(angle) * away;
-                let cell = survey::cell_at(grid, origin, at)?;
-                let pavement = |(x, z): (usize, usize)| crowd.pavement.get(z * grid.width + x).copied().unwrap_or(false);
-                if !pavement(cell) {
-                    return None;
-                }
-                let feet = grid.on_floor(origin, cell);
-                if !hidden(graph, feet) {
-                    return None;
-                }
-                let heading = between(rng, (-std::f32::consts::PI, std::f32::consts::PI));
-                let about: Option<Vec<Vector3<f32>>> = slots
-                    .iter()
-                    .map(|&slot| {
-                        let cell = survey::cell_at(grid, origin, about_leader(feet, heading, slot)).filter(|&cell| pavement(cell))?;
-                        Some(grid.on_floor(origin, cell))
-                    })
-                    .collect();
-                Some((feet, heading, about?))
-            });
+            let spot = crowd.spot((grid, origin), player, &slots, rng, |at| hidden(graph, at));
             let Some((feet, heading, about)) = spot else {
                 continue;
             };
@@ -1535,6 +1817,49 @@ impl Inhabitants {
         }
         if moved > 0 && crate::platform::var("MAZE_DEBUG").is_some() {
             Log::info(format!("Crowd: {moved} turned up again nearer by"));
+        }
+        // Those lying where they went down, far off out of sight, make way for others.
+        let mut renewed = 0;
+        for n in 0..self.droids.len() {
+            if moved + renewed >= CROWD_AT_ONCE {
+                break;
+            }
+            let droid = &self.droids[n];
+            let gone = droid.down
+                && droid.side.is_none()
+                && droid.pursuit.is_none()
+                && flat(droid.feet - player).norm() > CROWD_GONE
+                && hidden(&scene.graph, droid.feet);
+            if !gone {
+                continue;
+            }
+            let Some(crowd) = self.crowd.as_ref() else {
+                return;
+            };
+            let graph = &scene.graph;
+            let Some((feet, heading, _)) = crowd.spot((grid, origin), player, &[], rng, |at| hidden(graph, at)) else {
+                continue;
+            };
+            let character = self.droids[n].character;
+            if !self.spawn_one(scene, feet, heading, between(rng, CROWD_REST), character, rng) {
+                continue;
+            }
+            self.leave_group(n);
+            let Some(fresh) = self.droids.pop() else {
+                continue;
+            };
+            let mut old = std::mem::replace(&mut self.droids[n], fresh);
+            old.avatar.sweep_up(&mut scene.graph);
+            if scene.graph.is_valid_handle(old.body) {
+                scene.graph.remove_node(old.body);
+            }
+            if let Some(ragdoll) = &old.ragdoll {
+                ragdoll.remove(&mut scene.graph);
+            }
+            renewed += 1;
+        }
+        if renewed > 0 {
+            Log::info(format!("Crowd: {renewed} that went down made way for others"));
         }
     }
 
@@ -1606,6 +1931,7 @@ impl Inhabitants {
             stamina: SENTRY_STAMINA,
             winded: false,
             most: SENTRY_STAMINA,
+            easing: false,
             sentry: false,
             hits: 0,
             down: false,
@@ -2136,7 +2462,9 @@ impl Inhabitants {
                 _ => None,
             }
             .filter(|&at| flat(at - droid.feet).norm() < FIRE_RANGE);
-            let standing_to_shoot = target.is_some_and(|at| flat(at - droid.feet).norm() < ENGAGE);
+            let gang = droid.side == Some(Side::Gang);
+            let engage = if gang { GANG_ENGAGE } else { ENGAGE };
+            let standing_to_shoot = target.is_some_and(|at| flat(at - droid.feet).norm() < engage);
             if target.is_some() {
                 droid.armed_left = ARMED_FOR;
                 droid.aimed_at = target;
@@ -2426,7 +2754,11 @@ impl Inhabitants {
             // Running after the player, and jogging to where it lost them.
             let running = matches!(droid.pursuit, Some(Pursuit::Chasing(_) | Pursuit::Fleeing(_)));
             let after = droid.alert == Some(Alert::Alert) || fighting.is_some() || running;
+            // Called to a shootout, it hurries there.
+            let called = matches!(droid.side, Some(Side::Security | Side::Gang))
+                && droid.post.is_some_and(|post| flat(post - droid.feet).norm() > POST_REACH * 2.0);
             let hurrying = after
+                || called
                 || catching_up
                 || (droid.alert == Some(Alert::Evasion) && droid.searched <= 1)
                 || droid.trip.is_some_and(|trip| trip.hurrying());
@@ -2434,13 +2766,28 @@ impl Inhabitants {
             let chasing = (droid.alert == Some(Alert::Alert) && droid.windup == 0.0 || running) && !droid.down;
             (droid.sprint_in, droid.sprinting) =
                 sprints(droid.sprint_in, droid.sprinting, chasing, rng, dt);
-            // In a foot chase, both flat out for as long as they have the breath.
-            if running && !droid.winded {
+            // A sentry paces itself: its sprints kept for while it has breath to spare, easing
+            // off to get some back when it is low - all it has left spent only on a last burst,
+            // whoever it is after near enough to catch.
+            let quarry = match droid.pursuit {
+                Some(Pursuit::Chasing(other)) => placed.get(other).copied().flatten().map(|(feet, _)| feet),
+                _ => (hunting && droid.sees_player).then_some(player),
+            };
+            let burst = quarry.is_some_and(|at| flat(at - droid.feet).norm() < BURST);
+            let saving;
+            (droid.easing, saving) = pace(droid.sentry && !burst, droid.easing, droid.stamina / droid.most);
+            if saving {
+                droid.sprinting = 0.0;
+            }
+            // In a foot chase, both flat out for as long as they have the breath - or, a sentry,
+            // as long as it has breath to spare.
+            if running && !droid.winded && !saving {
                 droid.sprinting = droid.sprinting.max(dt * 2.0);
             }
             // Out of breath, it walks until enough is back, and a sprint it was due waits.
             let gait = match (hurrying, droid.sprinting > 0.0) {
                 _ if droid.winded => Gait::Walking,
+                (true, _) if droid.easing => Gait::Jogging,
                 (true, true) => Gait::Sprinting,
                 (true, false) if after => Gait::Running,
                 (true, false) => Gait::Jogging,
@@ -2613,7 +2960,7 @@ impl Inhabitants {
             });
             let trigger = facing_them.is_some() && droid.reload == 0.0 && !droid.down;
             if trigger {
-                droid.reload = between(rng, FIRE_EVERY);
+                droid.reload = between(rng, if gang { GANG_FIRE_EVERY } else { FIRE_EVERY });
             }
             // Its body is never turned - only the model's root is, by the heading - so the way to
             // them is in the world's terms, as the heading is, not ahead of where it faces.
@@ -2997,7 +3344,7 @@ impl Inhabitants {
                     face: self.face(graph, n)?,
                     left: droid.stamina / droid.most,
                     winded: droid.winded,
-                    health: 1.0 - droid.hits as f32 / HITS as f32,
+                    health: 1.0 - droid.hits as f32 / droid.stopped_by() as f32,
                 })
             })
             .collect()
@@ -3043,7 +3390,7 @@ impl Inhabitants {
             at,
             way: (at - from).try_normalize(1.0e-6).unwrap_or_else(Vector3::z),
         };
-        let n = (0..HITS).find_map(|_| self.shot(graph, strike, player))?;
+        let n = (0..SENTRY_HITS.max(HITS)).find_map(|_| self.shot(graph, strike, player))?;
         if let Some(bodies) = crate::platform::var("MAZE_DISMEMBER") {
             for body in bodies
                 .split(',')
@@ -3100,7 +3447,7 @@ impl Inhabitants {
         // A good headshot stops it there and then.
         let headshot = droid.headshot(graph, strike.at, strike.way);
         droid.hits += 1;
-        if droid.hits < HITS && headshot.is_none() {
+        if droid.hits < droid.stopped_by() && headshot.is_none() {
             if droid.side.is_some() {
                 // In capture the flag, it turns to whoever it was, to see them, and goes after
                 // them if it does not.
@@ -3163,6 +3510,8 @@ impl Inhabitants {
         within_talking(self.droids.iter().map(|droid| droid.feet), feet, ahead)
             .into_iter()
             .filter(|&i| self.droids[i].alert.is_none() && !self.droids[i].down)
+            // In the middle of a shootout, it has no time for them.
+            .filter(|&i| !matches!(self.droids[i].side, Some(Side::Security | Side::Gang)))
             .find(|&i| in_sight(self.droids[i].feet))
     }
 
@@ -3355,6 +3704,20 @@ mod tests {
         assert!(sprints_begun >= 3, "again and again: {sprints_begun}");
         // No longer chasing, it forgets, and starts over when it chases again.
         assert_eq!(sprints(2.0, 1.0, false, &mut rng, dt), (-1.0, 0.0));
+    }
+
+    #[test]
+    fn a_sentry_keeps_its_breath_for_a_last_burst() {
+        // Plenty of breath: it sprints and runs as it likes.
+        assert_eq!(pace(true, false, 0.9), (false, false));
+        // Under its reserve it sprints no more, but runs on.
+        assert_eq!(pace(true, false, 0.4), (false, true));
+        // Low, it eases off to a jog, and keeps to it until well back over that.
+        assert_eq!(pace(true, false, 0.15), (true, true));
+        assert_eq!(pace(true, true, 0.4), (true, true));
+        assert_eq!(pace(true, true, 0.65), (false, false));
+        // Near enough to catch them, or not a sentry, it spends all it has.
+        assert_eq!(pace(false, true, 0.1), (false, false));
     }
 
     #[test]

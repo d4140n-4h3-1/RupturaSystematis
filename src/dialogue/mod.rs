@@ -699,14 +699,15 @@ mod tests {
             assert!(gang.threatened.is_some_and(|t| t.then == Provoked::Attacks), "{} goes for them", gang.name);
             assert!(gang.hostile_eyes.is_some_and(|eyes| eyes != [255, 0, 0]), "{} hostile in its own colour", gang.name);
             assert!(gang.lines.is_empty() && gang.chatter.len() >= 2, "{} only chatters", gang.name);
-            for bark in ["warned", "warned_again", "provoked", "calmed", "spotted", "lost", "heard", "gave_up", "flee", "caught"] {
+            for bark in ["warned", "warned_again", "provoked", "calmed", "spotted", "lost", "heard", "gave_up", "flee", "caught", "engaged", "won"] {
                 assert!(gang.barks.contains_key(bark), "{} says {bark}", gang.name);
             }
             assert!(voices.voices.contains_key(&gang.name), "{} has a voice", gang.name);
         }
-        // Its security calls out as it goes after one of a gang in a foot chase.
+        // Its security calls out as it goes after one of a gang in a foot chase, and in a
+        // shootout with a gang.
         for sentry in script.characters.iter().filter(|c| !c.gang && c.threatened.is_some_and(|t| t.then == Provoked::Attacks)) {
-            for bark in ["chase", "caught", "escaped"] {
+            for bark in ["chase", "caught", "escaped", "shootout", "engaged", "won"] {
                 assert!(sentry.barks.contains_key(bark), "{} says {bark}", sentry.name);
             }
         }

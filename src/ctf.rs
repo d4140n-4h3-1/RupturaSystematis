@@ -171,6 +171,10 @@ pub enum Side {
     Blue,
     /// A side of one, in battle royale (see [`crate::royale`]): everyone else is the enemy.
     Lone(u8),
+    /// The two sides of a shootout in a city (see [`crate::inhabitants::Inhabitants::shootouts`]):
+    /// its security, and a gang. Neither is the player's, so the shots of both harm them.
+    Security,
+    Gang,
 }
 
 impl Side {
@@ -181,15 +185,19 @@ impl Side {
             Side::Red => "red",
             Side::Blue => "blue",
             Side::Lone(_) => "a lone droid",
+            Side::Security => "security",
+            Side::Gang => "a gang",
         }
     }
 
-    /// The other side, of red and blue; a side of one has none.
+    /// The other side, of red and blue, or of a shootout's; a side of one has none.
     pub const fn other(self) -> Side {
         match self {
             Side::Red => Side::Blue,
             Side::Blue => Side::Red,
             Side::Lone(n) => Side::Lone(n),
+            Side::Security => Side::Gang,
+            Side::Gang => Side::Security,
         }
     }
 
@@ -214,10 +222,10 @@ pub struct Bases {
 }
 
 impl Bases {
-    /// Where `side`'s flag is: red's, for a side of one, which has none.
+    /// Where `side`'s flag is: red's, for a side with none.
     pub fn flag(&self, side: Side) -> Vector3<f32> {
         match side {
-            Side::Red | Side::Lone(_) => self.red,
+            Side::Red | Side::Lone(_) | Side::Security | Side::Gang => self.red,
             Side::Blue => self.blue,
         }
     }

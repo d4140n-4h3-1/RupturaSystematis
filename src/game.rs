@@ -1580,7 +1580,7 @@ impl MazeGame {
             .collect();
         // In a city, those far off out of sight turn up again nearer by.
         let ahead = self.player.ahead();
-        self.inhabitants.recycle(&mut scene.graph, (grid, *origin), player, ahead, rng, ctx.dt, |graph, feet| {
+        self.inhabitants.recycle(scene, (grid, *origin), player, ahead, rng, ctx.dt, |graph, feet| {
             self.player.can_see(graph, feet)
         });
         // And now and then one of its security goes after one of a gang, which runs.
@@ -1604,6 +1604,27 @@ impl MazeGame {
                 "chase" | "caught" => Mood::Warning,
                 "flee" => Mood::Agitated,
                 _ => Mood::Normal,
+            };
+            self.chase_barks.push((n, name, mood));
+        }
+        // And now and then six of security shoot it out with a gang of six.
+        let shootout = self.inhabitants.shootouts(
+            player,
+            rng,
+            ctx.dt,
+            |character| script.is_some_and(|script| is_sentry(script, character)),
+            |character| script.is_some_and(|script| script.characters.get(character).is_some_and(|c| c.gang)),
+        );
+        for n in shootout.started {
+            self.inhabitants.set_eyes(n, screen::eyes(Mood::Hostile));
+        }
+        for n in shootout.ended {
+            self.inhabitants.set_eyes(n, None);
+        }
+        for (n, name) in shootout.said {
+            let mood = match name {
+                "won" => Mood::Normal,
+                _ => Mood::Hostile,
             };
             self.chase_barks.push((n, name, mood));
         }
@@ -1745,9 +1766,11 @@ impl MazeGame {
             self.health_sounds.play(graph, Heard::Hit, at);
             if last {
                 self.gloat(side);
-                let by = match self.heist {
-                    Some(_) => "security".to_string(),
-                    None => format!("{}'s side", side.name()),
+                // Caught in a shootout's crossfire, by whichever side it was.
+                let by = match (self.heist.as_ref(), side) {
+                    (Some(_), _) => "security".to_string(),
+                    (None, Side::Security | Side::Gang) => side.name().to_string(),
+                    (None, _) => format!("{}'s side", side.name()),
                 };
                 self.delete_player(ctx, &by);
             }
@@ -1767,6 +1790,8 @@ impl MazeGame {
         }
         if let Some(n) = self.inhabitants.shot(graph, strike, from) {
             match self.inhabitants.side(n) {
+                // In a shootout, each side's own business.
+                Some(Side::Security | Side::Gang) => Log::info(format!("Shootout: droid {n} is down")),
                 // In battle royale, each by its number.
                 Some(Side::Lone(who)) => {
                     Log::info(format!("Battle royale: droid {who} is down"));
@@ -2080,7 +2105,7 @@ impl MazeGame {
             engaged,
             shots,
         } = self.update_inhabitants(ctx);
-        // A foot chase is called out by whichever of a pair is in it.
+        // A foot chase, or a shootout, is called out by whichever of those in it says so.
         for (n, name, mood) in std::mem::take(&mut self.chase_barks) {
             self.bark_anyway(n, name, mood);
         }
@@ -2088,6 +2113,8 @@ impl MazeGame {
         // droids' shots leave their pistols.
         for n in engaged {
             match self.inhabitants.side(n) {
+                // A shootout's are called out once for each side (see `Inhabitants::shootouts`).
+                Some(Side::Security | Side::Gang) => continue,
                 Some(Side::Lone(who)) => Log::info(format!("Battle royale: droid {who} goes after someone")),
                 side => {
                     let side = side.map_or("", Side::name);
