@@ -472,7 +472,8 @@ pub struct MazeGame {
     #[reflect(hidden)]
     last_chat: Option<usize>,
     /// A group talking among itself near the player, if one is; how long till another is looked
-    /// for, in seconds; and which of its kind's talks was had last (see [`MazeGame::talk_among`]).
+    /// for, in seconds; and which kind had a talk last, and which of its talks (see
+    /// [`MazeGame::talk_among`]).
     #[visit(skip)]
     #[reflect(hidden)]
     talk: Option<Talk>,
@@ -481,7 +482,7 @@ pub struct MazeGame {
     talk_in: f32,
     #[visit(skip)]
     #[reflect(hidden)]
-    last_talk: Option<usize>,
+    last_talk: Option<(usize, usize)>,
     /// In capture the flag, whether the player has the enemy's flag, to bring home.
     #[visit(skip)]
     #[reflect(hidden)]
@@ -2213,8 +2214,8 @@ impl MazeGame {
         }
     }
 
-    /// Now and then has a group near the player that has things to say among itself talk: the
-    /// lines of one of its kind's talks - never the one had last - one after the other, each by
+    /// Now and then has a pair or group near the player that has things to say among itself talk:
+    /// the lines of one of its kind's talks - never the one it had last - one after the other, each by
     /// the next of them in turn, each in the time it takes to say. Any of it with something else
     /// to do, or the player gone off, and it breaks off.
     fn talk_among(&mut self, ctx: &mut PluginContext) {
@@ -2232,12 +2233,13 @@ impl MazeGame {
             let Some(members) = self.inhabitants.talkers(player, TALK_HEARD, |character| talks_of(character) > 0) else {
                 return;
             };
-            let count = self.inhabitants.who(members[0]).map_or(0, |(character, _)| talks_of(character));
+            let character = self.inhabitants.who(members[0]).map_or(0, |(character, _)| character);
+            let count = talks_of(character);
             let mut pick = self.rng().below(count.max(1));
-            if count > 1 && Some(pick) == self.last_talk {
+            if count > 1 && Some((character, pick)) == self.last_talk {
                 pick = (pick + 1) % count;
             }
-            self.last_talk = Some(pick);
+            self.last_talk = Some((character, pick));
             Log::info(format!("Droids {members:?} talk among themselves"));
             self.talk = Some(Talk { members, talk: pick, line: 0, next_in: 0.0 });
             return;

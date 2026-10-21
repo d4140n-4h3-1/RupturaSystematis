@@ -739,6 +739,11 @@ mod tests {
             for bark in ["chase", "caught", "escaped", "shootout", "engaged", "won"] {
                 assert!(sentry.barks.contains_key(bark), "{} says {bark}", sentry.name);
             }
+            // And those walking about in pairs talk between themselves.
+            assert!(sentry.in_pairs > 0.0 && sentry.talks.len() >= 4, "{} talks between its pairs", sentry.name);
+            for talk in &sentry.talks {
+                assert!(talk.len() >= 2 && talk.iter().all(|line| !line.means.is_empty()), "{} answers itself", sentry.name);
+            }
         }
     }
 
