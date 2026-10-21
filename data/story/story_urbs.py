@@ -30,7 +30,8 @@ a door that swings open (vault_door_<n>, with vault_<n> in the middle of the str
 a stream of chance of their own.
 
 Windows are lit or dark at random, warm in homes and cool in offices. Streets have dashed lines,
-crossings at every junction, lamps, trees and parked light cycles. Every coloured line of light
+crossings at every junction, lamps, trees and parked light cycles. Every building with corners has
+them lit, in its own colour (a bank's in gold). Every coloured line of light
 near the ground glows and is written to story_urbs.glow.json for the game to light with; those
 higher up only glow. Where the roads and their crossings are is written to story_urbs.roads.json,
 for the game to keep its droids on the pavements but to cross.
@@ -392,6 +393,7 @@ def twist_tower(m, rng, poly, district, height=None):
         m.prism(p, k * floor, (k + 1) * floor - 0.6, mat)
         m.prism(shrink(p, 0.6), (k + 1) * floor - 0.6, (k + 1) * floor, m.facades["slate"])
         m.facade_windows(p, k * floor, (k + 1) * floor - 0.6, floor, "office", rng, lit=0.7, bands=True)
+        m.fins(p, p, k * floor, (k + 1) * floor - 0.6, m.lines[shade])
         if k % 3 == 0:
             m.ring(p, (k + 1) * floor - 0.62, m.lines[shade], width=0.08)
     top = turned(base, turn_all)
@@ -460,6 +462,7 @@ def podium_tower(m, rng, poly, district):
     m.facade_windows(poly, 4.0, h, 4.0, "office", rng, lit=0.5, bands=True)
     m.ring(poly, h - 0.05, m.lines[shade])
     m.ring(poly, 4.2, m.lines[shade], width=0.08)
+    m.fins(poly, poly, 0.0, h, m.lines[shade])
     c = middle(poly)
     w, d = abs(poly[1].x - poly[0].x), abs(poly[2].y - poly[1].y)
     k = rng.uniform(0.5, 0.7)
@@ -535,6 +538,7 @@ def apartments(m, rng, poly, district, street_faces):
     m.prism(poly, 0.0, height, mat)
     m.facade_windows(poly, 0.0, height, floor, "warm", rng, lit=0.45)
     m.ring(poly, height - 0.05, m.lines[shade], width=0.08)
+    m.fins(poly, poly, 0.0, height, m.lines[shade])
     # A lit entrance on one street face.
     n = len(poly)
     c = middle(poly)
@@ -588,6 +592,7 @@ def courtyard(m, rng, poly, district, street_faces):
         m.prism(p, 0.0, height, mat)
         m.facade_windows(p, 0.0, height, floor, "warm", rng, lit=0.45)
         m.ring(p, height - 0.05, m.lines[shade], width=0.08)
+    outline_corners(m, [p for side, p in wings.items() if side != open_side], 0.0, height, m.lines[shade])
     cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
     m.tree(cx, cy, rng, size=1.3)
     for dx, dy in ((-4, -3), (4, 3)):
@@ -606,6 +611,7 @@ def stilts(m, rng, poly, district):
             m.prism(polygon(0.6, 8, 0, x, y), 0.0, lift_h, m.facades["concrete"])
             m.line(Vector((x + 0.62, y, 0.0)), Vector((x + 0.62, y, lift_h)), m.lines[shade], width=0.08)
     m.prism(poly, lift_h, height, mat)
+    m.fins(poly, poly, lift_h, height, m.lines[shade])
     m.facade_windows(poly, lift_h + 0.4, height, 3.6, rng.choice(("warm", "office")), rng, lit=0.55,
                      bands=rng.random() < 0.5)
     m.ring(poly, lift_h - 0.05, m.lines[shade])
@@ -644,6 +650,7 @@ def shops(m, rng, poly, district, street_faces):
             # The shop window, lit warm.
             m.line(a + u * 0.6 - v * 0.05 + Vector((0, 0, 1.6)), b - u * 0.6 - v * 0.05 + Vector((0, 0, 1.6)),
                    m.windows["warm"], width=2.2, height=0.06, across=Z, light=False)
+        m.fins(p, p, 0.0, max(h, STORE_HEIGHT), m.lines[shade])
         # A sign over the awning.
         q0, q1 = a + u * 0.2, b - u * 0.2
         m.solid([q0, q1, q1 - v * 1.6, q0 - v * 1.6], 3.1, 3.25, m.struct, m.rail)
@@ -666,6 +673,27 @@ def shops(m, rng, poly, district, street_faces):
         else:
             c = middle(p)
             m.tree(c.x, c.y, rng)
+
+
+def outline_corners(m, rects, z0, z1, mat, out=0.06):
+    """Lines of light up the corners of what the rectangles `rects` make together - each corner
+    of their outline, going in or out - not where one meets another along a wall."""
+    def inside(x, y):
+        return any(min(p.x for p in r) < x < max(p.x for p in r) and min(p.y for p in r) < y < max(p.y for p in r)
+                   for r in rects)
+    seen = set()
+    for r in rects:
+        for c in r:
+            key = (round(c.x, 3), round(c.y, 3))
+            if key in seen:
+                continue
+            seen.add(key)
+            empty = [Vector((dx, dy, 0)) for dx in (-1, 1) for dy in (-1, 1) if not inside(c.x + dx * 0.05, c.y + dy * 0.05)]
+            # A corner has one quarter round it empty (going out) or three (going in); a wall, two.
+            if len(empty) not in (1, 3):
+                continue
+            way = sum(empty, Vector()).normalized() * out
+            m.line(Vector((c.x + way.x, c.y + way.y, z0)), Vector((c.x + way.x, c.y + way.y, z1)), mat)
 
 
 def quad(at, u, v, u0, u1, v0, v1):
@@ -781,6 +809,7 @@ def bank(m, poly, street_faces):
     top = hall + rng.uniform(4.0, 9.0)
     m.prism(quad(a, u, v, -0.4, w + 0.4, -0.4, depth + 0.4), hall, hall + 0.6, mat)
     m.prism(quad(a, u, v, 0.0, w, 0.0, depth), hall + 0.6, top, mat)
+    m.fins(quad(a, u, v, 0.0, w, 0.0, depth), quad(a, u, v, 0.0, w, 0.0, depth), 0.0, top, gold)
     m.facade_windows(quad(a, u, v, 0.0, w, 0.0, depth), hall + 1.5, top, 3.0, "office", rng, lit=0.4)
     m.ring(quad(a, u, v, -0.4, w + 0.4, -0.4, depth + 0.4), hall + 0.62, gold, width=0.1)
     m.ring(quad(a, u, v, 0.0, w, 0.0, depth), top + 0.02, gold, width=0.1, light=False)
@@ -880,6 +909,7 @@ def townhouses(m, rng, poly, district, street_faces):
         m.prism(p, 0.0, h, mat)
         m.facade_windows(p, 0.0, h, 3.2, "warm", rng, lit=0.5)
         m.ring(p, h - 0.05, m.lines[shade], width=0.06, light=False)
+        m.fins(p, p, 0.0, h, m.lines[shade])
         if rng.random() < 0.4:
             m.prism(shrink(p, 1.5), h, h + 2.2, m.facades["slate"])
 
@@ -912,6 +942,7 @@ def terraces(m, rng, poly, district, street_faces):
         m.box(f, -hw, hw, ya, hd, t * tier, (t + 1) * tier, m.struct, mat)
         face = [f.at(-hw, ya), f.at(hw, ya), f.at(hw, hd), f.at(-hw, hd)]
         m.facade_windows(face, t * tier, (t + 1) * tier, tier, "warm", rng, lit=0.55, faces=[0])
+        m.fins(face, face, t * tier, (t + 1) * tier, m.lines[shade])
         m.line(f.at(-hw, ya - 0.06, (t + 1) * tier - 0.05), f.at(hw, ya - 0.06, (t + 1) * tier - 0.05),
                m.lines[shade])
         # Its flight, up to its front from the terrace below (or the yard), at one end or the other.
@@ -938,6 +969,7 @@ def industrial(m, rng, poly, district):
         yard = (x0, x1, y0 + (y1 - y0) * split + 2, y1)
     m.prism(shed, 0.0, h, mat)
     m.ring(shed, h - 0.05, m.lines[shade])
+    m.fins(shed, shed, 0.0, h, m.lines[shade])
     m.facade_windows(shed, 0.0, h, h, "office", rng, lit=0.4, bands=True)
     # The sawtooth roof: prisms across the shed.
     sx0, sy0, sx1, sy1 = shed[0].x, shed[0].y, shed[2].x, shed[2].y
@@ -984,6 +1016,7 @@ def warehouse(m, rng, poly, district):
     h = rng.uniform(8.0, 13.0)
     mat, shade = facade(m, rng, "docks"), rng.choice(("orange", "yellow", "cyan"))
     m.prism(poly, 0.0, h, mat, top=shrink(poly, 0.8))
+    m.fins(poly, shrink(poly, 0.8), 0.0, h, m.lines[shade])
     m.ring(poly, 0.4, m.lines[shade])
     for i in range(4):
         a, b = poly[i], poly[(i + 1) % 4]
@@ -1339,6 +1372,7 @@ def summa(m, rng, cx, cy, inner):
     # the north half.
     podium = rect(x0, x1, y0 + 10.0, y1)
     m.prism(podium, 0.0, pod_h, m.facades["stone"])
+    m.fins(podium, podium, 0.0, pod_h, m.lines["yellow"])
     m.facade_windows(podium, 0.0, pod_h, 3.0, "warm", rng, lit=0.85, bands=True)
     m.ring(podium, pod_h - 0.05, m.lines["yellow"])
     # Broad stairs up the middle of its south face, from the pavement to the terrace on top,
@@ -1439,6 +1473,7 @@ def civic_hall(m, rng, cx, cy, inner):
     m.ring(rect(cx - hw, cx + hw, cy - hd, cy + hd), top - 0.03, m.lines["yellow"], out=0.03, width=0.06)
     hall = rect(cx - hw + 4, cx + hw - 4, cy - hd + 4, cy + hd - 4)
     m.prism(hall, top, top + 12.0, m.facades["white"])
+    m.fins(hall, hall, top, top + 12.0, m.lines["yellow"])
     m.facade_windows(hall, top, top + 12.0, 6.0, "warm", rng, lit=0.8)
     # Columns round it.
     for k in range(9):
