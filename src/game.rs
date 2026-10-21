@@ -1538,6 +1538,7 @@ impl MazeGame {
                                     in_pairs: c.in_pairs,
                                     groups_of: c.in_groups_of,
                                     share: c.share,
+                                    turf: c.turf.map(|turf| (turf.share, turf.reach)),
                                 })
                         };
                         self.inhabitants.populate(

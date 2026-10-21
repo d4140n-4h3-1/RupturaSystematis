@@ -446,6 +446,10 @@ struct Inhabitant {
     /// Where the shooting it is taking cover from is, a bystander to a shootout, and whether it
     /// has picked where to take cover yet (see [`Inhabitants::shootouts`]).
     cover: Option<(Vector3<f32>, bool)>,
+    /// One of a group keeping to turf of its own: the spot it stands about, and how far round it
+    /// is theirs, in meters. The player on it is as the pistol pointed at it, and the others
+    /// keep off it.
+    turf: Option<(Vector3<f32>, f32)>,
     /// How long since it was last posed, in seconds (see [`POSE_EVERY`]).
     unposed: f32,
 }
@@ -572,17 +576,19 @@ impl Livery {
 
 /// How the droids of a kind walk about: in twos, as often as `in_pairs` says, from 0 to 1; or in
 /// groups of two up to `groups_of`; and how often one of the kind is put down against the others,
-/// its `share`.
+/// its `share`. Of its groups, the share `turf` says keep to turf of their own, as far round as
+/// it says, in meters (see [`Inhabitant::turf`]).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Grouping {
     pub in_pairs: f32,
     pub groups_of: usize,
     pub share: f32,
+    pub turf: Option<(f32, f32)>,
 }
 
 impl Default for Grouping {
     fn default() -> Self {
-        Self { in_pairs: 0.0, groups_of: 0, share: 1.0 }
+        Self { in_pairs: 0.0, groups_of: 0, share: 1.0, turf: None }
     }
 }
 
@@ -807,6 +813,13 @@ pub struct ShootoutNews {
 
 /// How many of each side are in a shootout.
 const SHOOTOUT_SIDE: usize = 6;
+/// A group keeping to its turf: how far from the spot the one leading it wanders, in meters; how
+/// long it stands each time, in seconds, from least to most; and how much more a step onto it
+/// costs the others than one along the pavement, so that their routes go round it.
+const TURF_KEEP: f32 = 2.5;
+const TURF_REST: (f32, f32) = (6.0, 15.0);
+const TURF_COST: f32 = 3.0;
+
 /// How long between one shootout and the next, in seconds, from least to most; how soon another
 /// is looked for when there was no one about for one; and how long into a round the first is.
 const SHOOTOUT_EVERY: (f32, f32) = (150.0, 300.0);
@@ -940,6 +953,7 @@ fn wander(
     feet: Vector3<f32>,
     trip: (f32, f32),
     roads: Option<&Roads>,
+    turfs: &[((usize, usize), f32)],
     rng: &mut Rng,
 ) -> Vec<Vector3<f32>> {
     let Some(roads) = roads else {
@@ -949,19 +963,31 @@ fn wander(
         return Vec::new();
     };
     let on_road = roads.is_road(from.0, from.1);
-    // Somewhere off the road, on any floor there, a trip's steps away across the grid.
+    // On a group's turf: within as many cells as it reaches of the cell its spot is in.
+    let on_turf = |x: usize, z: usize| {
+        turfs.iter().any(|&((tx, tz), reach)| {
+            let (dx, dz) = (x as f32 - tx as f32, z as f32 - tz as f32);
+            dx * dx + dz * dz < reach * reach
+        })
+    };
+    // Somewhere off the road and off anyone's turf, on any floor there, a trip's steps away
+    // across the grid.
     let goal = (0..24).find_map(|_| {
         let angle = between(rng, (-std::f32::consts::PI, std::f32::consts::PI));
         let away = between(rng, trip) * grid.cell_size;
         let spot = feet + Vector3::new(angle.sin(), 0.0, angle.cos()) * away;
         let plan = grid.plan(survey::cell_at(grid, origin, spot)?);
-        let floors: Vec<(usize, usize)> = grid.cells_over(plan).filter(|&(x, z)| !roads.is_road(x, z)).collect();
+        let floors: Vec<(usize, usize)> =
+            grid.cells_over(plan).filter(|&(x, z)| !roads.is_road(x, z) && !on_turf(x, z)).collect();
         (!floors.is_empty()).then(|| (floors[rng.below(floors.len())], away / grid.cell_size))
     });
     let Some((goal, steps)) = goal else {
         return Vec::new();
     };
-    let extra = |x: usize, z: usize| if on_road { 0.0 } else { roads.extra(x, z) };
+    let extra = |x: usize, z: usize| {
+        let road = if on_road { 0.0 } else { roads.extra(x, z) };
+        road + if on_turf(x, z) { TURF_COST } else { 0.0 }
+    };
     grid.route_between_weighted(from, goal, steps * DETOUR + 20.0, extra)
         .map_or_else(Vec::new, |path| along(grid, origin, path))
 }
@@ -1357,7 +1383,7 @@ impl Inhabitants {
                 break;
             }
             // Those walking about with it, about it, if it is one of a pair or a group.
-            let Grouping { in_pairs, groups_of, .. } = grouping(character);
+            let Grouping { in_pairs, groups_of, turf, .. } = grouping(character);
             let size = if groups_of >= 2 {
                 2 + rng.below(groups_of - 1)
             } else if (rng.below(1000) as f32) < in_pairs * 1000.0 {
@@ -1392,9 +1418,21 @@ impl Inhabitants {
                 self.droids[other].slot = s;
                 slot = s + 1;
             }
+            // Some groups keep to where they are, as their turf.
+            if let Some((share, reach)) = turf.filter(|_| self.droids[leader].leads) {
+                if (rng.below(1000) as f32) < share * 1000.0 {
+                    for m in self.group_of(leader) {
+                        self.droids[m].turf = Some((feet, reach));
+                    }
+                }
+            }
         }
         let groups = self.droids.iter().filter(|droid| droid.leads).count();
-        Log::info(format!("Maze: {} inhabitants, {groups} pairs or groups of them", self.droids.len()));
+        let turfs = self.droids.iter().filter(|droid| droid.leads && droid.turf.is_some()).count();
+        Log::info(format!(
+            "Maze: {} inhabitants, {groups} pairs or groups of them, {turfs} keeping to turf of their own",
+            self.droids.len()
+        ));
     }
 
     /// In a city, now and then, has one of its security - a kind `guards` says is one - go after
@@ -1587,6 +1625,8 @@ impl Inhabitants {
                 .collect();
             let first = rng.below(sites.len().max(1));
             sites.rotate_left(first);
+            // A gang on its turf first: security raids it there.
+            sites.sort_by_key(|&n| droids[n].turf.is_none());
             let found = sites.into_iter().find_map(|n| {
                 let site = droids[n].feet;
                 Some((site, nearest(site, &guards, SHOOTOUT_APART)?, nearest(site, &thieves, 0.0)?))
@@ -1599,8 +1639,11 @@ impl Inhabitants {
             let rally = self.droids[guards[0]].feet;
             for (side, members, post) in [(Side::Security, &guards, rally), (Side::Gang, &gang, site)] {
                 for &n in members {
+                    // Its turf it keeps, to go back to after, if it is left standing.
+                    let turf = self.droids[n].turf;
                     self.leave_group(n);
                     let droid = &mut self.droids[n];
+                    droid.turf = turf;
                     droid.side = Some(side);
                     droid.post = Some(post);
                     droid.foe = None;
@@ -1747,6 +1790,7 @@ impl Inhabitants {
         }
         self.droids[n].leads = false;
         self.droids[n].slot = 0;
+        self.droids[n].turf = None;
     }
 
     /// Those of `said` near enough the `player`'s feet to be heard (see [`CHASE_HEARD`]).
@@ -1860,6 +1904,12 @@ impl Inhabitants {
                 continue;
             };
             let resting = between(rng, CROWD_REST);
+            // Turf of its own goes with it, where it turns up.
+            for &m in &members {
+                if let Some((_, reach)) = self.droids[m].turf {
+                    self.droids[m].turf = Some((feet, reach));
+                }
+            }
             self.droids[n].put_down(graph, feet, heading, resting, rng);
             for (&m, at) in members.iter().skip(1).zip(about) {
                 self.droids[m].put_down(graph, at, heading, resting, rng);
@@ -2005,6 +2055,7 @@ impl Inhabitants {
             slot: 0,
             pursuit: None,
             cover: None,
+            turf: None,
             // Not all posed on the same frame, far off.
             unposed: between(rng, (0.0, POSE_EVERY[POSE_EVERY.len() - 1].1)),
         });
@@ -2437,6 +2488,17 @@ impl Inhabitants {
             Some(_) => CROWD_REST,
             None => REST,
         };
+        // Each group's turf, for the others to keep off: the cell its spot is in, and how many
+        // cells round it reaches.
+        let turfs: Vec<((usize, usize), f32)> = self
+            .droids
+            .iter()
+            .filter(|droid| !droid.down && (droid.leads || droid.partner.is_none()))
+            .filter_map(|droid| {
+                let (at, reach) = droid.turf?;
+                Some((survey::cell_at(grid, origin, at)?, reach / grid.cell_size))
+            })
+            .collect();
         // The droids' own bodies, which are no cover.
         let bodies: Vec<Handle<Collider>> = self.droids.iter().map(|droid| droid.collider).collect();
         for (me, droid) in self.droids.iter_mut().enumerate() {
@@ -2839,7 +2901,16 @@ impl Inhabitants {
                                     .map(|to| go_to(droid.feet, to))
                                     .unwrap_or_default()
                             }
-                            None => (wander((grid, origin), droid.feet, TRIP, roads, rng), None),
+                            // Keeping to its turf, about its spot; or else anywhere off the
+                            // others' turf.
+                            None => match droid.turf {
+                                Some((at, _)) => (
+                                    spot_near((grid, origin), at, TURF_KEEP, rng)
+                                        .map_or_else(Vec::new, |to| route_to((grid, origin), droid.feet, to, CHASE_REACH)),
+                                    None,
+                                ),
+                                None => (wander((grid, origin), droid.feet, TRIP, roads, &turfs, rng), None),
+                            },
                         },
                     };
                     if droid.route.is_empty() {
@@ -2932,7 +3003,7 @@ impl Inhabitants {
                 let to = flat(next - droid.feet);
                 if droid.route.len() == 1 && to.norm() < ARRIVED {
                     droid.route.clear();
-                    droid.resting = between(rng, rest);
+                    droid.resting = between(rng, if droid.turf.is_some() { TURF_REST } else { rest });
                 } else {
                     let (way, blocked) = make_way(droid.feet, to.normalize(), others, floor_at);
                     droid.heading = way.x.atan2(way.z);
@@ -3212,8 +3283,8 @@ impl Inhabitants {
     /// to the droid. Its back to them, it never knows. `patience` says how
     /// long each kind of droid - as an index into the conversations' characters - stands for
     /// it; none, it pays it no heed. Some kinds take the player standing over them the same way:
-    /// within as many meters as `crowded` says, as long as nothing is in the way. Which droids
-    /// went on to another stage.
+    /// within as many meters as `crowded` says, or on their turf (see [`Inhabitant::turf`]), as
+    /// long as nothing is in the way. Which droids went on to another stage.
     pub fn feel_aimed_at(
         &mut self,
         aim: Option<(Vector3<f32>, Vector3<f32>)>,
@@ -3228,10 +3299,13 @@ impl Inhabitants {
         // speaks for it: none of the rest warn them as well.
         let mut crowding = vec![false; self.droids.len()];
         for (m, droid) in self.droids.iter().enumerate() {
-            let near = !droid.down
-                && crowded(droid.character).is_some_and(|reach| flat(player - droid.feet).norm() < reach)
-                && (player.y - droid.feet.y).abs() < CATCH_HEIGHT
-                && in_sight(droid.feet);
+            // Standing over it, or on its turf, where it can see them.
+            let over = crowded(droid.character).is_some_and(|reach| flat(player - droid.feet).norm() < reach)
+                && (player.y - droid.feet.y).abs() < CATCH_HEIGHT;
+            let trespassing = droid
+                .turf
+                .is_some_and(|(at, reach)| flat(player - at).norm() < reach && (player.y - at.y).abs() < CATCH_HEIGHT);
+            let near = !droid.down && (over || trespassing) && in_sight(droid.feet);
             if let Some(voice) = near.then(|| self.group_of(m).into_iter().find(|&v| !self.droids[v].down)).flatten() {
                 crowding[voice] = true;
             }
@@ -3760,7 +3834,7 @@ mod tests {
         let mut rng = Rng::new(11);
         let mut crossed = 0;
         for _ in 0..40 {
-            let route = wander((&grid, Vector3::zeros()), Vector3::new(2.0, 0.12, 2.0), (10.0, 30.0), Some(&roads), &mut rng);
+            let route = wander((&grid, Vector3::zeros()), Vector3::new(2.0, 0.12, 2.0), (10.0, 30.0), Some(&roads), &[], &mut rng);
             assert!(!route.is_empty());
             for at in &route {
                 let (x, z) = survey::cell_at(&grid, Vector3::zeros(), *at).unwrap();
@@ -3770,10 +3844,39 @@ mod tests {
         }
         assert!(crossed > 0, "it does cross, at the crossing");
         // On the road, it gets off it.
-        let route = wander((&grid, Vector3::zeros()), Vector3::new(10.0, 0.0, 2.0), (10.0, 30.0), Some(&roads), &mut rng);
+        let route = wander((&grid, Vector3::zeros()), Vector3::new(10.0, 0.0, 2.0), (10.0, 30.0), Some(&roads), &[], &mut rng);
         let end = route.first().unwrap();
         let (x, z) = survey::cell_at(&grid, Vector3::zeros(), *end).unwrap();
         assert!(!roads.is_road(x, z));
+    }
+
+    #[test]
+    fn going_about_its_business_it_keeps_off_a_gangs_turf() {
+        // Ground 20 m square, with a street at its edge, and a gang's turf 3 m round in the
+        // middle of the pavement.
+        let mut grid = WalkGrid::new(40, 40, 0.5);
+        for x in 0..40 {
+            for z in 0..40 {
+                grid.set(x, z, true);
+                grid.set_floor(x, z, 0.12);
+            }
+        }
+        let plan: crate::roads::RoadPlan =
+            serde_json::from_str(r#"{ "level": 0.06, "roads": [[19, 0, 20, 20]], "crossings": [] }"#).unwrap();
+        let roads = plan.on(&grid, Vector3::zeros());
+        let spot = Vector3::new(10.0, 0.12, 10.0);
+        let turfs = [(survey::cell_at(&grid, Vector3::zeros(), spot).unwrap(), 3.0 / 0.5)];
+        let mut rng = Rng::new(5);
+        for _ in 0..40 {
+            let route = wander((&grid, Vector3::zeros()), Vector3::new(2.0, 0.12, 2.0), (10.0, 30.0), Some(&roads), &turfs, &mut rng);
+            if let Some(end) = route.first() {
+                // Give or take the half-meter cells it is reckoned in.
+                assert!(flat(end - spot).norm() >= 2.5, "makes for {end:?}, on the turf");
+            }
+            for at in &route {
+                assert!(flat(at - spot).norm() > 1.5, "goes by {at:?}, through the middle of the turf");
+            }
+        }
     }
 
     #[test]

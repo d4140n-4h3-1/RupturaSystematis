@@ -212,6 +212,21 @@ pub struct Character {
     /// without.
     #[serde(default)]
     pub hostile_eyes: Option<[u8; 3]>,
+    /// How many of its groups keep to a spot of their own rather than walk about, and how far
+    /// round it is theirs (see [`Turf`]): none, without.
+    #[serde(default)]
+    pub turf: Option<Turf>,
+}
+
+/// A group's turf: the spot it keeps to, standing about there, and the ground round it that it
+/// takes as its own. The player on it is as the pistol pointed at it (see `threatened`), and the
+/// others keep off it.
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
+pub struct Turf {
+    /// The share of its kind's groups that keep to one, from 0 to 1.
+    pub share: f32,
+    /// How far round the spot is theirs, in meters.
+    pub reach: f32,
 }
 
 fn one() -> f32 {
@@ -699,6 +714,11 @@ mod tests {
             assert!(gang.threatened.is_some_and(|t| t.then == Provoked::Attacks), "{} goes for them", gang.name);
             assert!(gang.hostile_eyes.is_some_and(|eyes| eyes != [255, 0, 0]), "{} hostile in its own colour", gang.name);
             assert!(gang.lines.is_empty() && gang.chatter.len() >= 2, "{} only chatters", gang.name);
+            assert!(
+                gang.turf.is_some_and(|turf| (0.0..=1.0).contains(&turf.share) && turf.reach > gang.crowded.unwrap_or(0.0)),
+                "{} keeps to turf of its own, wider than it minds the player standing over it",
+                gang.name
+            );
             for bark in ["warned", "warned_again", "provoked", "calmed", "spotted", "lost", "heard", "gave_up", "flee", "caught", "engaged", "won"] {
                 assert!(gang.barks.contains_key(bark), "{} says {bark}", gang.name);
             }
