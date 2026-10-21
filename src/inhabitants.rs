@@ -443,6 +443,9 @@ struct Inhabitant {
     slot: usize,
     /// Its part in a foot chase, if it is in one (see [`Chase`]).
     pursuit: Option<Pursuit>,
+    /// Where the shooting it is taking cover from is, a bystander to a shootout, and whether it
+    /// has picked where to take cover yet (see [`Inhabitants::shootouts`]).
+    cover: Option<(Vector3<f32>, bool)>,
     /// How long since it was last posed, in seconds (see [`POSE_EVERY`]).
     unposed: f32,
 }
@@ -484,6 +487,7 @@ impl Inhabitant {
         self.unaimed = 0.0;
         self.no_way = false;
         self.shot_from = None;
+        self.cover = None;
         // Posed where it is now on the next update, however far off: it is as long since it was
         // as the longest wait there is between.
         self.unposed = self.unposed.max(POSE_EVERY[POSE_EVERY.len() - 1].1);
@@ -794,9 +798,11 @@ pub struct ShootoutNews {
     /// enough to hear it: `shootout` as security calls the rest of it in; `engaged` as the first
     /// of each side goes after the other; and `won` by one of the side left standing.
     pub said: Vec<(usize, &'static str)>,
-    /// Everyone in a shootout begun, and those left standing of one over.
+    /// Everyone in a shootout begun, and those left standing of one over - and those taking
+    /// cover from it, once it is - and those that have just run for cover.
     pub started: Vec<usize>,
     pub ended: Vec<usize>,
+    pub sheltering: Vec<usize>,
 }
 
 /// How many of each side are in a shootout.
@@ -818,6 +824,11 @@ const SHOOTOUT_APART: f32 = 35.0;
 /// seconds.
 const RALLY_NEAR: f32 = 6.0;
 const RALLY_FOR: f32 = 30.0;
+/// How near the shooting, in meters, those going about their business run for cover from it; how
+/// far they run, about; and how many ways off they try for somewhere it cannot be seen from.
+const COVER_NEAR: f32 = 45.0;
+const COVER_RUN: f32 = 20.0;
+const COVER_TRIES: usize = 8;
 /// How long it goes on at most, in seconds, and how far off the player can go, in meters, before
 /// it is over all the same.
 const SHOOTOUT_FOR: f32 = 120.0;
@@ -1419,6 +1430,7 @@ impl Inhabitants {
                     && droid.trip.is_none()
                     && droid.pursuit.is_none()
                     && droid.side.is_none()
+                    && droid.cover.is_none()
                     && droid.speaking == 0.0
                     && flat(droid.feet - player).norm() < CHASE_SEEN
             };
@@ -1551,6 +1563,7 @@ impl Inhabitants {
                     && droid.trip.is_none()
                     && droid.pursuit.is_none()
                     && droid.side.is_none()
+                    && droid.cover.is_none()
                     && droid.speaking == 0.0
             };
             let droids = &self.droids;
@@ -1635,6 +1648,37 @@ impl Inhabitants {
                 said.push((n, "engaged"));
             }
         }
+        // Once the shooting starts, those about it going about their business run for cover;
+        // and those that have something else to do - the player, say - think better of it.
+        let shooting = shootout.engaged.iter().any(|&engaged| engaged);
+        for (n, droid) in self.droids.iter_mut().enumerate() {
+            if droid.cover.is_some() && (droid.down || droid.alert.is_some() || droid.talking || droid.trip.is_some()) {
+                droid.cover = None;
+                // Its eyes its own again, but for one down, or after the player, whose show that.
+                if !droid.down && droid.alert.is_none() {
+                    news.ended.push(n);
+                }
+            }
+            let bystander = shooting
+                && droid.cover.is_none()
+                && droid.side.is_none()
+                && droid.pursuit.is_none()
+                && !droid.down
+                && droid.alert.is_none()
+                && !droid.talking
+                && droid.warned == 0
+                && droid.trip.is_none()
+                && flat(droid.feet - shootout.site).norm() < COVER_NEAR;
+            if bystander {
+                droid.cover = Some((shootout.site, false));
+                droid.route.clear();
+                droid.resting = 0.0;
+                news.sheltering.push(n);
+            }
+        }
+        if !news.sheltering.is_empty() {
+            Log::info(format!("Shootout: {} about it run for cover", news.sheltering.len()));
+        }
         let standing = |members: &[usize]| members.iter().copied().filter(|&n| !self.droids[n].down).collect::<Vec<_>>();
         let (guards, gang) = (standing(&shootout.guards), standing(&shootout.gang));
         let over = guards.is_empty()
@@ -1664,7 +1708,17 @@ impl Inhabitants {
                 droid.resting = between(rng, REST);
             }
         }
-        news.ended = guards.into_iter().chain(gang).collect();
+        news.ended.extend(guards.into_iter().chain(gang));
+        // The danger past, those that took cover come out again.
+        for (n, droid) in self.droids.iter_mut().enumerate() {
+            if droid.cover.take().is_some() {
+                droid.route.clear();
+                droid.resting = between(rng, REST);
+                if !droid.down && droid.alert.is_none() {
+                    news.ended.push(n);
+                }
+            }
+        }
         news.said = self.heard_near(said, player);
         news
     }
@@ -1774,6 +1828,7 @@ impl Inhabitants {
                 && droid.armed_left == 0.0
                 && droid.speaking == 0.0
                 && droid.pursuit.is_none()
+                && droid.cover.is_none()
         };
         let mut moved = 0;
         for n in 0..self.droids.len() {
@@ -1949,6 +2004,7 @@ impl Inhabitants {
             leads: false,
             slot: 0,
             pursuit: None,
+            cover: None,
             // Not all posed on the same frame, far off.
             unposed: between(rng, (0.0, POSE_EVERY[POSE_EVERY.len() - 1].1)),
         });
@@ -2381,6 +2437,8 @@ impl Inhabitants {
             Some(_) => CROWD_REST,
             None => REST,
         };
+        // The droids' own bodies, which are no cover.
+        let bodies: Vec<Handle<Collider>> = self.droids.iter().map(|droid| droid.collider).collect();
         for (me, droid) in self.droids.iter_mut().enumerate() {
             droid.avatar.fly_voxels(graph, dt);
             // In the hostile droid's colours while it is after the player; it goes down in
@@ -2683,6 +2741,51 @@ impl Inhabitants {
                         }
                     }
                 }
+            } else if let Some((danger, picked)) = droid.cover {
+                // A bystander to a shootout: running from it to somewhere it cannot be seen
+                // from, if there is anywhere about, or else as far off as it can; and there,
+                // crouched, it faces the way of it.
+                if !picked {
+                    let away = flat(droid.feet - danger)
+                        .try_normalize(1.0e-3)
+                        .map_or(droid.heading, |away| away.x.atan2(away.z));
+                    let open = |at: Vector3<f32>| {
+                        let (from, to) = (danger + Vector3::new(0.0, CHEST, 0.0), at + Vector3::new(0.0, CHEST, 0.0));
+                        let way = to - from;
+                        let length = way.norm();
+                        let mut hits = Vec::new();
+                        graph.physics.cast_ray(
+                            RayCastOptions {
+                                ray_origin: Point3::from(from),
+                                ray_direction: way / length.max(1.0e-3),
+                                max_len: length,
+                                groups: Default::default(),
+                                sort_results: false,
+                            },
+                            &mut hits,
+                        );
+                        !hits.iter().any(|hit| !bodies.contains(&hit.collider))
+                    };
+                    // Straight away from it first, and then further and further to either side.
+                    let spots: Vec<Vector3<f32>> = (0..COVER_TRIES)
+                        .filter_map(|i| {
+                            let side = if i % 2 == 0 { 1.0 } else { -1.0 };
+                            let turn = side * (i as f32 / 2.0).ceil() * std::f32::consts::FRAC_PI_4 * 0.75;
+                            spot_near((grid, origin), droid.feet + forward(away + turn) * COVER_RUN, COVER_RUN * 0.3, rng)
+                        })
+                        .filter(|&spot| flat(spot - danger).norm() > flat(droid.feet - danger).norm())
+                        .collect();
+                    let to = spots.iter().copied().find(|&spot| !open(spot)).or_else(|| {
+                        spots.iter().copied().max_by(|a, b| flat(*a - danger).norm().total_cmp(&flat(*b - danger).norm()))
+                    });
+                    droid.route = to.map_or_else(Vec::new, |to| route_to((grid, origin), droid.feet, to, CHASE_REACH));
+                    droid.cover = Some((danger, true));
+                } else if droid.route.is_empty() {
+                    let to = flat(danger - droid.feet);
+                    if to.norm() > 1.0e-3 {
+                        droid.heading = to.x.atan2(to.z);
+                    }
+                }
             } else if let Some(leader) = partners[me].filter(|leader| leader.about && !droid.leads) {
                 // Keeping beside its partner, on its right and a step behind - or, one of a
                 // group, wherever about the one leading it it keeps (see [`ABOUT_LEADER`]) - where
@@ -2753,7 +2856,10 @@ impl Inhabitants {
             }
             // Running after the player, and jogging to where it lost them.
             let running = matches!(droid.pursuit, Some(Pursuit::Chasing(_) | Pursuit::Fleeing(_)));
-            let after = droid.alert == Some(Alert::Alert) || fighting.is_some() || running;
+            // Taking cover, it runs for it, and once there crouches in it.
+            let sheltering = droid.cover.is_some() && droid.alert.is_none() && !droid.talking;
+            let sheltered = sheltering && droid.route.is_empty();
+            let after = droid.alert == Some(Alert::Alert) || fighting.is_some() || running || sheltering;
             // Called to a shootout, it hurries there.
             let called = matches!(droid.side, Some(Side::Security | Side::Gang))
                 && droid.post.is_some_and(|post| flat(post - droid.feet).norm() > POST_REACH * 2.0);
@@ -2930,7 +3036,8 @@ impl Inhabitants {
                 || droid.armed_left > 0.0
                 || droid.alert.is_some()
                 || droid.talking
-                || droid.pursuit.is_some();
+                || droid.pursuit.is_some()
+                || droid.cover.is_some();
             let every = match busy {
                 true => 0.0,
                 false => POSE_EVERY.iter().find(|&&(within, _)| away < within).map_or(0.0, |&(_, every)| every),
@@ -2980,7 +3087,7 @@ impl Inhabitants {
             let going = Going {
                 heading: Some(droid.heading),
                 speed: droid.speed,
-                posture: match droid.down {
+                posture: match droid.down || sheltered {
                     true => Posture::Crouching,
                     false => Posture::Standing,
                 },

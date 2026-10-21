@@ -1621,6 +1621,10 @@ impl MazeGame {
         for n in shootout.ended {
             self.inhabitants.set_eyes(n, None);
         }
+        // Those running for cover from it, afraid.
+        for n in shootout.sheltering {
+            self.inhabitants.set_eyes(n, screen::eyes(Mood::Agitated));
+        }
         for (n, name) in shootout.said {
             let mood = match name {
                 "won" => Mood::Normal,
