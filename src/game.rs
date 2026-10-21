@@ -15,7 +15,7 @@ use crate::{
     ctf::{self, Bases, Side, MAPS, PLAYERS},
     royale::{self, RingNews, RingPosts, Royale, Who},
     firewall::{self, Firewalls},
-    drone::{self, Drone, DroneLines, State, Target, DRONE_LINES, DRONE_MODEL},
+    drone::{self, Drone, DroneLines, State, Target, DRONE_LINES, DRONE_MODEL, URBS_DRONE_LINES},
     drone_shot::{Shots, SHOT_MODEL},
     alarm::AlarmSound,
     latency::OutputLatency,
@@ -569,7 +569,8 @@ pub struct MazeGame {
     drone_alarmed: bool,
     /// What each drone has to say about something that happened to it outside its own update, by
     /// its place among the drones; which is saying the line being made into sound; and where
-    /// drones have been called in to since the last update, to be sent there.
+    /// drones have been called in to since the last update, to be sent there, and why (see
+    /// [`drone::CALLED`]).
     #[visit(skip)]
     #[reflect(hidden)]
     drone_says: Vec<(usize, &'static str)>,
@@ -578,7 +579,7 @@ pub struct MazeGame {
     drone_speaking: usize,
     #[visit(skip)]
     #[reflect(hidden)]
-    drone_calls: Vec<Vector3<f32>>,
+    drone_calls: Vec<(Vector3<f32>, &'static str)>,
     #[visit(skip)]
     #[reflect(hidden)]
     drone_saying: Option<Making>,
@@ -1497,6 +1498,14 @@ impl MazeGame {
                 None
             }
         };
+        // The drones talk of the same place as the droids.
+        let drone_lines = if path == URBS_SCRIPT { URBS_DRONE_LINES } else { DRONE_LINES };
+        if let Some((_, lines)) = self.drone_voice.as_mut() {
+            match DroneLines::load(drone_lines) {
+                Ok(loaded) => *lines = loaded,
+                Err(error) => Log::err(format!("Maze: the drones have nothing new to say: {error}")),
+            }
+        }
         // Each kind of droid in its own colours, and any of them in the hostile droid's.
         self.kind_models = self.script.as_ref().map_or_else(Vec::new, |script| {
             let models = script
@@ -1923,7 +1932,7 @@ impl MazeGame {
                 self.hud.show_note(format!("Security wave {}: {came} guards coming", heist.wave));
                 Log::info(format!("Heist: wave {}, {came} guards", heist.wave));
             }
-            self.drone_calls.push(player);
+            self.drone_calls.push((player, "alarm"));
         }
         if self.phase == Phase::Playing {
             heist.alarm(matches!(self.inhabitants.alarm(), Some((Alert::Alert, _))));
@@ -2001,11 +2010,12 @@ impl MazeGame {
         }
     }
 
-    /// Calls a drone in to search where the player is, `at`: the one patrolling nearest there, if
-    /// it is near enough to come soon, or failing that one from out of sight, not too far off - or
-    /// failing that, with every drone already out, the patrolling one nearest there however far,
-    /// or the searching one nearest, to look there instead. Some drone always comes.
-    fn call_drone(&mut self, graph: &mut Graph, at: Vector3<f32>) {
+    /// Calls a drone in to search where the player is, `at`, saying `why`: the one patrolling
+    /// nearest there, if it is near enough to come soon, or failing that one from out of sight,
+    /// not too far off - or failing that, with every drone already out, the patrolling one nearest
+    /// there however far, or the searching one nearest, to look there instead. Some drone always
+    /// comes.
+    fn call_drone(&mut self, graph: &mut Graph, at: Vector3<f32>, why: &'static str) {
         // The klaxon, from where the drone is called to.
         self.alarm_sound.sound(graph, at + Vector3::new(0.0, 1.5, 0.0));
         let (Some((grid, origin)), Some(rng)) = (self.level.grid.as_ref(), self.rng.as_mut()) else {
@@ -2022,8 +2032,8 @@ impl MazeGame {
         };
         let patrolling = nearest(&self.drones, |state| state == State::Patrol);
         if let Some(n) = patrolling.filter(|&n| from(&self.drones[n]) <= drone::ANSWERS_WITHIN) {
-            if let Some(says) = self.drones[n].alarm(at) {
-                self.drone_says.push((n, says));
+            if self.drones[n].alarm(at).is_some() {
+                self.drone_says.push((n, why));
             }
             Log::info(format!("Drone {n}: called to the computer"));
             return;
@@ -2031,15 +2041,15 @@ impl MazeGame {
         let feet = self.player.feet(graph);
         if let Some(n) = self.drones.iter().position(|drone| !drone.is_placed()) {
             if self.drones[n].call_in(graph, (grid, *origin), feet, at, rng) {
-                self.drone_says.push((n, "alarm"));
+                self.drone_says.push((n, why));
                 Log::info(format!("Drone {n}: called in"));
                 return;
             }
         }
         // Every drone out already: the nearest patrolling or searching one comes, however far.
         if let Some(n) = patrolling {
-            if let Some(says) = self.drones[n].alarm(at) {
-                self.drone_says.push((n, says));
+            if self.drones[n].alarm(at).is_some() {
+                self.drone_says.push((n, why));
             }
             Log::info(format!("Drone {n}: called to the computer, from afar"));
             return;
@@ -3082,7 +3092,7 @@ impl MazeGame {
                 self.hud.show_note(format!("+{taken} from the bank. The alarm is up: drones on their way"));
                 Log::info(format!("Credits: +{taken} from a bank, {} in all; its alarm calls drones", self.credits));
                 for at in robbed {
-                    self.drone_calls.extend(std::iter::repeat_n(at, BANK_ALARM_DRONES));
+                    self.drone_calls.extend(std::iter::repeat_n((at, "bank"), BANK_ALARM_DRONES));
                 }
             } else if taken > Credits::default() {
                 self.credits += taken;
@@ -3094,7 +3104,7 @@ impl MazeGame {
             for n in vaults_opened {
                 if let Some(at) = self.level.vaults.open_from(n) {
                     self.hud.show_note("Vault open. The alarm is up".into());
-                    self.drone_calls.push(at);
+                    self.drone_calls.push((at, "vault"));
                 }
             }
             let graph = &mut ctx.scenes[self.scene].graph;
@@ -3106,7 +3116,7 @@ impl MazeGame {
                     self.credits += gold;
                     self.hud.show_note(format!("+{gold} from the vault. Get out: drones on their way"));
                     Log::info(format!("Credits: +{gold} from a vault, {} in all", self.credits));
-                    self.drone_calls.extend(std::iter::repeat_n(at, VAULT_ALARM_DRONES));
+                    self.drone_calls.extend(std::iter::repeat_n((at, "gold"), VAULT_ALARM_DRONES));
                 }
             }
             // A hacked computer opens its firewall.
@@ -3121,7 +3131,7 @@ impl MazeGame {
             // A failed hack calls in a drone, to where the player is.
             } else if denied && self.phase == Phase::Playing {
                 let feet = self.player.feet(&ctx.scenes[self.scene].graph);
-                self.drone_calls.push(feet);
+                self.drone_calls.push((feet, "trace"));
                 self.hud.show_note("Trace complete: a drone is on its way".into());
             }
         }
@@ -3275,11 +3285,11 @@ impl MazeGame {
         if alarm.is_some_and(|at| self.round_time >= at) && !self.drone_alarmed && self.drone_placed {
             self.drone_alarmed = true;
             let feet = self.player.feet(&ctx.scenes[self.scene].graph);
-            self.drone_calls.push(feet);
+            self.drone_calls.push((feet, "trace"));
             Log::info("MAZE_DRONE_ALARM: a drone is called in");
         }
-        for at in std::mem::take(&mut self.drone_calls) {
-            self.call_drone(&mut ctx.scenes[self.scene].graph, at);
+        for (at, why) in std::mem::take(&mut self.drone_calls) {
+            self.call_drone(&mut ctx.scenes[self.scene].graph, at, why);
         }
         let sided = self.sided();
         let (Some((grid, origin)), Some(rng)) = (self.level.grid.as_ref(), self.rng.as_mut()) else {

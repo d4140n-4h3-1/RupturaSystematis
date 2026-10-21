@@ -1,0 +1,47 @@
+{
+  "about": "What the drones of Urbs say, in the story: as data/dialogue/drone.json has it for a maze - System Latin said as beeps, hums and buzzes, 'means' what it says in English, 'lines' by what a drone says them about, one picked in turn each time - but they are the city's own, flying for its security: they hunt the thief robbing its stores and banks, guard the banks' gold, and patrol over the streets at night. Besides 'alarm', 'spotted', 'searching', 'calm' and 'down', a drone called in says why it was called: 'bank' to a bank's computer cleared, 'vault' to a vault opened, 'gold' to a vault's gold taken, and 'trace' to a failed hack's trace. Every line is checked by data/system_latin/sl_parser.py.",
+  "lines": {
+    "alarm": [
+      { "says": "Sirenatio accipatum. Zeto fur in urbs.", "means": "Alarm received. Hunting the thief through the city." },
+      { "says": "Pugna in via. Zeto aggressor.", "means": "Shooting in the street. Searching for the attacker." },
+      { "says": "Signum ex zona proximum. Appropinquo.", "means": "A signal from the next zone over. Closing in." }
+    ],
+    "bank": [
+      { "says": "Furtum in argentaria. Festino ad argentaria.", "means": "A bank robbed. Hurrying to the bank." },
+      { "says": "Terminale violatum. Creditum perdatum. Zeto fur.", "means": "A terminal broken into. The credits are gone. Hunting the thief." }
+    ],
+    "vault": [
+      { "says": "Porta aperiatum in argentaria. Festino.", "means": "A vault door open in a bank. Hurrying." },
+      { "says": "Aurum in periculum. Defendo argentaria.", "means": "The gold is in danger. Guarding the bank." }
+    ],
+    "gold": [
+      { "says": "Aurum perdatum. Requiro unitas.", "means": "The gold is gone. Requesting backup." },
+      { "says": "Aurum perdatum. Fur activum in urbs. Zeto fur.", "means": "The gold is gone. The thief is loose in the city. Hunting the thief." }
+    ],
+    "trace": [
+      { "says": "Terminale violatum. Locus fur detectum.", "means": "A terminal tampered with. The thief's whereabouts traced." },
+      { "says": "Vestigium confirmatum. Appropinquo.", "means": "Trace confirmed. Closing in." }
+    ],
+    "spotted": [
+      { "says": "Fur infra. Sta.", "means": "Thief below. Halt." },
+      { "says": "Fur identificatum. Tu non esas civis.", "means": "Thief identified. You are no citizen." },
+      { "says": "Fur detectum. Restitua aurum.", "means": "Thief sighted. Give back the gold." },
+      { "says": "Tu esas fur. Deletabso tu.", "means": "You are the thief. I will delete you." }
+    ],
+    "searching": [
+      { "says": "Scano via.", "means": "Scanning the street." },
+      { "says": "Zeto fur inter turris.", "means": "Hunting the thief among the towers." },
+      { "says": "Quid? Motus in tenebra. Verifico.", "means": "What? Something moved in the dark. Checking." }
+    ],
+    "calm": [
+      { "says": "Fur evadatum. Resumo patrolium supra urbs.", "means": "The thief got away. Resuming patrol over the city." },
+      { "says": "Nullum vestigium. Redio ad turris summa.", "means": "No trace. Returning to Summa." },
+      { "says": "Phantasma. Resumo patrolium.", "means": "A sensor ghost. Resuming patrol." }
+    ],
+    "down": [
+      { "says": "Damnum criticum. Requiro unitas.", "means": "Critical damage. Requesting backup." },
+      { "says": "Periculum. Energia minimum.", "means": "Danger. Power failing." },
+      { "says": "Systema corrumpatum.", "means": "System corrupted." }
+    ]
+  }
+}

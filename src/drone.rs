@@ -33,8 +33,9 @@
 //! shell and eye, which are traced with the rest of the scene, would shut the light in.
 //!
 //! It speaks System Latin as things happen to it - hearing the alarm, spotting the player,
-//! starting to search, giving up and going down - as [`DRONE_LINES`] has it, said as beeps, hums
-//! and buzzes (see [`crate::formants::chirps`]), which no one would take for speech.
+//! starting to search, giving up and going down, and why it was called in - as [`DRONE_LINES`]
+//! has it, or in Urbs [`URBS_DRONE_LINES`], said as beeps, hums and buzzes (see
+//! [`crate::formants::chirps`]), which no one would take for speech.
 
 use crate::{
     ctf::Side,
@@ -83,6 +84,13 @@ use std::{collections::HashMap, f32::consts::PI};
 /// The drone's model, and what drones say.
 pub const DRONE_MODEL: &str = "data/drone.glb";
 pub const DRONE_LINES: &str = "data/dialogue/drone.json";
+/// What the drones of Urbs say: of its thief, its banks and its gold.
+pub const URBS_DRONE_LINES: &str = "data/dialogue/drone_urbs.json";
+
+/// Why a drone is called in, as what it says names it: to a bank's computer cleared, to a vault
+/// opened, to a vault's gold taken, and to a failed hack's trace. With no lines for why, it says
+/// its "alarm" lines.
+pub const CALLED: [&str; 4] = ["bank", "vault", "gold", "trace"];
 
 /// A line a drone says: in System Latin, and what that means in English.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -104,9 +112,14 @@ impl DroneLines {
         serde_json::from_str(&text).map_err(|error| format!("{path}: {error}"))
     }
 
-    /// The `n`th line, going round, for what is called `name`; None for something with none.
+    /// The `n`th line, going round, for what is called `name`; None for something with none. Why
+    /// it was called in, with no lines of its own, has the alarm's.
     pub fn line(&self, name: &str, n: usize) -> Option<&Said> {
-        let lines = self.lines.get(name)?;
+        let lines = match self.lines.get(name) {
+            Some(lines) => lines,
+            None if CALLED.contains(&name) => self.lines.get("alarm")?,
+            None => return None,
+        };
         lines.get(n % lines.len().max(1))
     }
 }
@@ -1186,6 +1199,24 @@ mod tests {
         let spotted = lines.lines["spotted"].len();
         assert_eq!(lines.line("spotted", spotted), lines.line("spotted", 0));
         assert_eq!(lines.line("nothing", 0), None);
+        // Called in, it says what it says to the alarm.
+        for why in CALLED {
+            assert_eq!(lines.line(why, 0), lines.line("alarm", 0), "{why}");
+        }
+    }
+
+    #[test]
+    fn in_urbs_it_has_something_of_its_own_to_say_about_everything_and_why_it_was_called() {
+        let urbs = DroneLines::load(URBS_DRONE_LINES).expect("Urbs's drones' lines");
+        let maze = DroneLines::load(DRONE_LINES).unwrap();
+        for name in SAYS.iter().chain(&CALLED) {
+            let lines = &urbs.lines.get(*name).unwrap_or_else(|| panic!("nothing for {name}"));
+            for said in lines.iter() {
+                assert!(!said.says.is_empty() && !said.means.is_empty());
+                let elsewhere = maze.lines.values().flatten().any(|other| other.says == said.says);
+                assert!(!elsewhere, "{name}: {} is said in the maze too", said.says);
+            }
+        }
     }
 
     /// Someone standing with their feet at the origin, as the player's capsule is - 1.7 m tall,
