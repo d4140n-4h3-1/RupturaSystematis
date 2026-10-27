@@ -33,6 +33,7 @@ mod dialogue;
 pub mod dismember;
 mod drone;
 mod drone_shot;
+mod escape;
 mod health;
 mod hearts;
 mod heist;

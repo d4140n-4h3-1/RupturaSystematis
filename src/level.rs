@@ -9,6 +9,7 @@ use crate::{
     culling::Culling,
     ferry::Ferries,
     roads::{RoadPlan, Roads},
+    escape::Tunnels,
     precinct::Precincts,
     vault::Vaults,
     fixtures::{self, Glow},
@@ -42,9 +43,10 @@ const FLAG_MIDDLE: f32 = 2.0;
 /// vault and its terminals, ways out, guards, drones and where its waves come from (see
 /// [`crate::heist`]), or a city's stores and banks, each with a computer keeping its takings (see
 /// [`crate::computer::Kind`]).
-const MARKERS: [&str; 19] = [
+const MARKERS: [&str; 23] = [
     "flag_", "computer_", "post_", "spawn_", "heist_start", "door_", "loot", "extract_", "guard_", "drone_",
-    "terminal_", "wave_", "place_", "store_", "bank_", "vault_", "precinct_", "cell_", "tunnel_",
+    "terminal_", "wave_", "place_", "store_", "bank_", "vault_", "precinct_", "cell_", "tunnel_", "hatch_",
+    "cache_", "den_", "fence",
 ];
 
 /// Somewhere a maze model marks with an empty, by the empty's name, for the game to put
@@ -96,6 +98,8 @@ pub struct Level {
     pub vaults: Vaults,
     /// The precincts, where security takes those it arrests: see [`Precincts`].
     pub precincts: Precincts,
+    /// The escape tunnels under a city, and the hatches down to them: see [`Tunnels`].
+    pub tunnels: Tunnels,
     /// The roads the droids keep off but to cross, on a map with streets: see [`Roads`].
     pub roads: Option<Roads>,
 }
@@ -197,6 +201,7 @@ impl Level {
         } else {
             Default::default()
         };
+        let tunnels = if fixed { Tunnels::find(&scene.graph, root, &markers) } else { Tunnels::default() };
         let (precincts, precinct_bodies) = if fixed {
             Precincts::claim(&mut scene.graph, root, &markers)
         } else {
@@ -241,6 +246,7 @@ impl Level {
             ferries,
             vaults,
             precincts,
+            tunnels,
             roads: None,
         }
     }

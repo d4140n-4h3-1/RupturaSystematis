@@ -30,6 +30,13 @@ along the back (cell_<n>_<c>, each behind a firewall, cell_wall_<n>_<c>, which d
 wall has a loose panel (tunnel_panel_<n>, tunnel_<n> before it) onto a stair down into a tunnel
 under the podium, out at the side (tunnel_<n>_exit).
 
+The escape tunnels, out of sight under it all (escape_tunnels): a den at their heart, where a gang keeps
+(den_<k>) and a fence will wipe a record clean (fence), four ways out to a ring, and off the ring
+twelve dead ends, each with a hatch up (hatch_<name>_below) - into each precinct's tunnel, each
+bank's strongroom, and three manholes in the street (hatch_<name>, each); and a side room off each
+way out with a cache of credits in it (cache_<k>, its box cache_box_<k>). The game takes the player
+between a hatch and its other end as through a door.
+
 Stores and banks to rob: some of the shops are stores to walk into, with shelves, a counter and a
 computer at the back keeping the takings (store_<n>); and six blocks have a bank on a corner, a hall
 behind a colonnade with a gold credit sign, a tellers' counter, four computers (bank_<n>_vault,
@@ -109,6 +116,8 @@ PRECINCT_SIZE = (20.0, 13.6)  # its building, along the street at most, and in
 PRECINCT_PODIUM = 3.0         # how high it stands, over the tunnel under it
 PRECINCT_HIGH = 3.4           # its rooms, floor to ceiling
 CELL = 3.0                    # a cell, along the block
+UNDER = -120.0                # the escape tunnels' floor, hung in the void well under the city
+MANHOLES = ((3, 3), (10, 10), (11, 2))   # the blocks with a manhole down to them, on their pavement
 PRECINCT_LANDING = 2.0        # the landing before its door, out from it, up at the podium's height
 
 
@@ -891,6 +900,7 @@ def bank(m, poly, street_faces):
            a + u * (w / 2 + 2.0) + v * (front + WALL + VAULT / 2) + up * 2.9, gold, width=0.14)
     middle_ = a + u * (w / 2) + v * (front + WALL + VAULT / 2)
     br_town.marker(f"vault_{m.n_banks}", middle_.x, middle_.y, KERB, facing(-v))
+    hatch(m, middle_ - u * 2.8, KERB, f"bank_{m.n_banks}")
     # The tellers' counter across the hall, but for a way through in the middle.
     across_at = front * 0.45
     for u0, u1 in ((WALL, w / 2 - 1.5), (w / 2 + 1.5, w - WALL)):
@@ -1056,6 +1066,7 @@ def precinct(m, poly, street_faces):
     br_town.marker(f"tunnel_{n}", spot.x, spot.y, P, facing(v))
     spot = a + u * (w + 0.8) + v * ((back1 + tunnel1) / 2)
     br_town.marker(f"tunnel_{n}_exit", spot.x, spot.y, KERB, facing(u))
+    hatch(m, a + u * ((foot + w) / 2 - 0.5) + v * ((back1 + tunnel1) / 2), KERB, f"precinct_{n}")
     m.prism(quad(a, u, v, end, w - t, bars0, bars1), P, floor_, mat)
     fw = P + 2.6                              # a firewall's top, under its emitter
     for c in range(cells):
@@ -1080,6 +1091,148 @@ def precinct(m, poly, street_faces):
         spot = a + u * cm + v * ((bars1 + back0) / 2)
         br_town.marker(f"cell_{n}_{c + 1}", spot.x, spot.y, P, facing(-v))
 
+
+
+def hatch(m, at, z, name):
+    """A hatch in the floor at `at`, `z` up - a round plate ringed in cyan, with a grip across it - and
+    hatch_<name> on it, for the game to take the player down through to its other end."""
+    plate = polygon(0.55, 16, 0, at.x, at.y)
+    m.prism(plate, z, z + 0.03, m.rail)
+    m.ring(polygon(0.55, 16, 0, at.x, at.y), z + 0.035, m.lines["cyan"], out=0.0, width=0.05, light=False)
+    m.line(Vector((at.x - 0.3, at.y, z + 0.06)), Vector((at.x + 0.3, at.y, z + 0.06)), m.lines["cyan"], width=0.05, light=False)
+    br_town.marker(f"hatch_{name}", at.x, at.y, z, 0.0)
+
+
+def warren(m, rects, z0, mat, light, edge):
+    """Rooms and passages on one floor at z0, each a rectangle (x0, x1, y0, y1, high) touching the
+    ones it opens onto edge to edge: a floor and a ceiling for each, and walls round each but
+    where another opens onto it - over which the taller has a lintel down to the lower's ceiling.
+    Each lit along its middle, under its ceiling; and each wall outlined in `edge` along its foot
+    and its top, as the city's are, to see it by."""
+    t, eps = 0.4, 1e-3
+    for x0, x1, y0, y1, high in rects:
+        m.box(WORLD, x0, x1, y0, y1, z0 - t, z0, m.struct, mat)
+        m.box(WORLD, x0, x1, y0, y1, z0 + high, z0 + high + t, m.struct, mat)
+        # Each edge: the line it is on, which way out is, its extent along it.
+        edges = (("y", y0, -1, x0, x1), ("y", y1, 1, x0, x1), ("x", x0, -1, y0, y1), ("x", x1, 1, y0, y1))
+        for axis, at, out, a, b in edges:
+            opens = []
+            for ox0, ox1, oy0, oy1, ohigh in rects:
+                if axis == "y" and abs((oy1 if out < 0 else oy0) - at) < eps:
+                    lo, hi = max(a, ox0), min(b, ox1)
+                elif axis == "x" and abs((ox1 if out < 0 else ox0) - at) < eps:
+                    lo, hi = max(a, oy0), min(b, oy1)
+                else:
+                    continue
+                if hi - lo > eps:
+                    opens.append((lo, hi, ohigh))
+            opens.sort()
+            walls, k = [], a
+            for lo, hi, ohigh in opens:
+                if lo > k:
+                    walls.append((k, lo, z0 - t, z0 + high + t))
+                if ohigh < high:
+                    walls.append((lo, hi, z0 + ohigh, z0 + high + t))
+                k = max(k, hi)
+            if k < b:
+                walls.append((k, b, z0 - t, z0 + high + t))
+            for lo, hi, za, zb in walls:
+                # Its foot and its top outlined, just in from its face.
+                inset = -out * 0.03
+                for zl in {za + t + 0.02 if za < z0 else za - 0.02, z0 + high - 0.04}:
+                    if zl < za - 0.03 or zl > z0 + high:
+                        continue
+                    if axis == "y":
+                        m.line(Vector((lo, at + inset, zl)), Vector((hi, at + inset, zl)), edge, width=0.04, light=False)
+                    else:
+                        m.line(Vector((at + inset, lo, zl)), Vector((at + inset, hi, zl)), edge, width=0.04, light=False)
+                # Out to the corners at the rectangle's own ends, to close them.
+                lo -= t if abs(lo - a) < eps else 0.0
+                hi += t if abs(hi - b) < eps else 0.0
+                if axis == "y":
+                    m.box(WORLD, lo, hi, *sorted((at, at + out * t)), za, zb, m.struct, mat)
+                else:
+                    m.box(WORLD, *sorted((at, at + out * t)), lo, hi, za, zb, m.struct, mat)
+        cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+        if x1 - x0 >= y1 - y0:
+            m.line(Vector((x0 + 0.5, cy, z0 + high - 0.08)), Vector((x1 - 0.5, cy, z0 + high - 0.08)), light, width=0.06)
+        else:
+            m.line(Vector((cx, y0 + 0.5, z0 + high - 0.08)), Vector((cx, y1 - 0.5, z0 + high - 0.08)), light, width=0.06)
+
+
+def escape_tunnels(m):
+    """The escape tunnels, hung in the void well under the city at UNDER, out of sight: the den in
+    the middle, where a gang keeps and the fence deals; a way out from each of its sides to a
+    ring; off the ring's outsides, twelve dead ends, each with a hatch up to its other end in the
+    city; and off each way out, a side room with a cache of credits."""
+    z = UNDER
+    stone = m.facades["concrete"]
+    rects = [(-10.0, 10.0, -10.0, 10.0, 5.0)]
+    ring, wide, way, high = 45.0, 3.0, 1.5, 3.2
+    r0, r1 = ring - wide / 2, ring + wide / 2
+    # The ring: its north and south sides the full width, its east and west between them.
+    rects += [(-r1, r1, r0, r1, high), (-r1, r1, -r1, -r0, high), (r0, r1, -r0, r0, high), (-r1, -r0, -r0, r0, high)]
+    # The ways out, from the den's sides to the ring.
+    rects += [(-way, way, 10.0, r0, high), (-way, way, -r0, -10.0, high), (10.0, r0, -way, way, high), (-r0, -10.0, -way, way, high)]
+    # The dead ends off the ring, and which hatch is at each: three a side.
+    names = {"n": ("precinct_1", "bank_1", "bank_2"), "e": ("precinct_2", "bank_3", "bank_4"),
+             "s": ("precinct_3", "bank_5", "bank_6"), "w": ("street_1", "street_2", "street_3")}
+    ends = []
+    for side, (dx, dy) in (("n", (0, 1)), ("e", (1, 0)), ("s", (0, -1)), ("w", (-1, 0))):
+        for k, along in enumerate((-25.0, 0.0, 25.0)):
+            if dy:
+                y0, y1 = sorted((dy * r1, dy * (r1 + 5.0)))
+                rects.append((along - 2.0, along + 2.0, y0, y1, high))
+                spot = Vector((along, dy * (r1 + 4.0), 0))
+            else:
+                x0, x1 = sorted((dx * r1, dx * (r1 + 5.0)))
+                rects.append((x0, x1, along - 2.0, along + 2.0, high))
+                spot = Vector((dx * (r1 + 4.0), along, 0))
+            ends.append((names[side][k], spot))
+    # A side room off each way out, through a doorway, with a cache in it.
+    rooms = []
+    for (dx, dy) in ((0, 1), (0, -1), (1, 0), (-1, 0)):
+        mid = 26.0
+        if dy:
+            a, b = sorted((dy * (mid - 1.0), dy * (mid + 1.0)))
+            rects.append((way, way + 1.0, a, b, 2.6))
+            c0, c1 = sorted((dy * (mid - 3.0), dy * (mid + 3.0)))
+            rects.append((way + 1.0, way + 7.0, c0, c1, high))
+            rooms.append(Vector((way + 5.0, dy * mid, 0)))
+        else:
+            a, b = sorted((dx * (mid - 1.0), dx * (mid + 1.0)))
+            rects.append((a, b, way, way + 1.0, 2.6))
+            c0, c1 = sorted((dx * (mid - 3.0), dx * (mid + 3.0)))
+            rects.append((c0, c1, way + 1.0, way + 7.0, high))
+            rooms.append(Vector((dx * mid, way + 5.0, 0)))
+    warren(m, rects, z, stone, m.lines["orange"], m.lines["cyan"])
+    # Pipes along the ring's walls, lit dim green where they run.
+    for y in (r0 + 0.25, -r0 - 0.25):
+        m.line(Vector((-r1, y, z + 2.4)), Vector((r1, y, z + 2.4)), m.facades["rust"], width=0.18, light=False)
+    # A hatch at the end of each dead end: a rung ladder up the wall to a ring in the ceiling.
+    for name, spot in ends:
+        m.ring(polygon(0.55, 16, 0, spot.x, spot.y), z + high - 0.04, m.lines["cyan"], out=0.0, width=0.06, light=False)
+        for k in range(1, 6):
+            m.line(Vector((spot.x - 0.3, spot.y, z + k * 0.5)), Vector((spot.x + 0.3, spot.y, z + k * 0.5)), m.rail,
+                   width=0.05, light=False)
+        br_town.marker(f"hatch_{name}_below", spot.x, spot.y, z, 0.0)
+    # The caches: a crate each, banded gold.
+    for k, spot in enumerate(rooms, 1):
+        box = [Vector((spot.x - 0.45, spot.y - 0.35, 0)), Vector((spot.x + 0.45, spot.y - 0.35, 0)),
+               Vector((spot.x + 0.45, spot.y + 0.35, 0)), Vector((spot.x - 0.45, spot.y + 0.35, 0))]
+        Nexus.mesh(m, *slab(box, z, z + 0.6), m.struct, m.facades["bronze"]).name = f"cache_box_{k}"
+        m.ring(box, z + 0.3, m.lines["yellow"], out=0.02, width=0.04, light=False)
+        br_town.marker(f"cache_{k}", spot.x, spot.y, z, 0.0)
+    # The den: tables about it, the fence's counter at its back, lit warm, and where the gang keeps.
+    for tx, ty in ((-5.0, -4.0), (5.0, -4.0), (-5.0, 4.0)):
+        m.box(WORLD, tx - 0.8, tx + 0.8, ty - 0.5, ty + 0.5, z, z + 0.9, m.cover, m.rail)
+        m.line(Vector((tx - 0.8, ty - 0.52, z + 0.9)), Vector((tx + 0.8, ty - 0.52, z + 0.9)), m.lines["red"], width=0.04)
+    m.box(WORLD, 3.0, 8.0, 6.0, 7.0, z, z + 1.1, m.cover, m.facades["bronze"])
+    m.line(Vector((3.0, 5.97, z + 1.1)), Vector((8.0, 5.97, z + 1.1)), m.lines["yellow"], width=0.05)
+    br_town.marker("fence", 5.5, 5.2, z, -math.pi / 2)
+    for k, (dx, dy) in enumerate(((-3.0, 0.0), (3.0, -1.0), (-7.0, 7.0), (7.0, 2.0)), 1):
+        br_town.marker(f"den_{k}", dx, dy, z, 0.0)
+    m.ring(polygon(9.5, 4, math.pi / 4), z + 4.6, m.lines["red"], out=0.0, width=0.08)
 
 def townhouses(m, rng, poly, district, street_faces):
     """A row of narrow houses, each its own height and colour, a lit door and windows each."""
@@ -1489,6 +1642,8 @@ def block(m, rng, i, j):
                 if rng.random() < 0.6:
                     m.tree(x, y, rng, size=0.9)
     inner = (x0 + SIDEWALK, x1 - SIDEWALK, y0 + SIDEWALK, y1 - SIDEWALK)
+    if (i, j) in MANHOLES:
+        hatch(m, Vector((x0 + 1.5, cy + 6.0, 0)), KERB, f"street_{MANHOLES.index((i, j)) + 1}")
     if special:
         special(m, rng, cx, cy, inner)
         return
@@ -1882,6 +2037,7 @@ def main():
             block(m, rng, i, j)
     railway(m)
     gates(m)
+    escape_tunnels(m)
     parked(m, rng)
     m.build_buckets()
 

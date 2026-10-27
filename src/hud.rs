@@ -107,6 +107,8 @@ pub struct Hud {
     health: Handle<UiNode>,
     health_fill: Handle<Border>,
     hurt: Handle<UiNode>,
+    /// Black over the whole screen, going through a hatch (see [`crate::escape`]).
+    fade: Handle<UiNode>,
     /// What the health bar last showed: how full, how long is left of a hit's flash, whether it
     /// was the shield's, and whether the shield could be raised.
     shown_health: Option<(f32, f32, bool, bool)>,
@@ -310,6 +312,14 @@ impl Hud {
         .with_stroke_thickness(Thickness::zero().into())
         .build(ctx)
         .to_base();
+        let fade = BorderBuilder::new(
+            WidgetBuilder::new()
+                .with_visibility(false)
+                .with_background(Brush::Solid(Color::from_rgba(0, 0, 0, 0)).into()),
+        )
+        .with_stroke_thickness(Thickness::zero().into())
+        .build(ctx)
+        .to_base();
         // The player's credits, in the top right, across from the status line.
         let credits = TextBuilder::new(
             WidgetBuilder::new()
@@ -329,7 +339,8 @@ impl Hud {
                 .with_child(health)
                 .with_child(banner)
                 .with_child(alert)
-                .with_child(bottom),
+                .with_child(bottom)
+                .with_child(fade),
         )
         .build(ctx)
         .to_base();
@@ -344,6 +355,7 @@ impl Hud {
             health,
             health_fill,
             hurt,
+            fade,
             ammo,
             credits,
             screen,
@@ -356,6 +368,13 @@ impl Hud {
     }
 
     /// Puts `note` under the status line for a few seconds.
+    /// How dark the screen is, from 0 to 1, going through a hatch.
+    pub fn set_fade(&self, ui: &UserInterface, dark: f32) {
+        ui.send(self.fade, WidgetMessage::Visibility(dark > 0.0));
+        let alpha = (dark.clamp(0.0, 1.0) * 255.0) as u8;
+        ui.send(self.fade, WidgetMessage::Background(Brush::Solid(Color::from_rgba(0, 0, 0, alpha)).into()));
+    }
+
     pub fn show_note(&mut self, note: String) {
         self.note = note;
         self.note_time = NOTE_TIME;

@@ -223,9 +223,11 @@ mod tests {
         for piece in &glow.pieces {
             let [u, w] = piece.light.edges;
             assert!(u.norm() <= 3.01 && w.norm() <= u.norm() + 1.0e-3, "{u} {w}");
-            // On the platform, its gates or its railway, and no higher than lines are lit.
+            // On the platform, its gates or its railway, and no higher than lines are lit - or down
+            // in the escape tunnels under it all (see [`crate::escape`]).
             assert!(piece.middle.x.abs() < 510.0 && piece.middle.z.abs() < 510.0, "{}", piece.middle);
-            assert!(piece.middle.y > -3.0 && piece.middle.y < 12.0, "{}", piece.middle);
+            let tunnels = piece.middle.y > -125.0 && piece.middle.y < -110.0;
+            assert!(tunnels || (piece.middle.y > -3.0 && piece.middle.y < 12.0), "{}", piece.middle);
         }
     }
 

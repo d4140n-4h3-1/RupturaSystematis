@@ -121,6 +121,13 @@ the crate makes.
 
 26 October 2026:
 
+- **Escape tunnels under Urbs**, as Skyrim's interiors are behind their doors: hatches in each
+  precinct's escape tunnel, each bank's strongroom and three manholes in the street, E at any of
+  which takes you, the screen going dark, down into a warren hung far under the city - and no
+  droid follows. A ring of passages links all twelve hatches, so you can rob a bank and come up
+  across the city; off the ways in to its middle, side rooms with caches of credits; and at its
+  heart, the den, where a gang keeps that minds you no more than its visitors, and a fence who
+  will wipe your record clean - and your escape with it - for a price.
 - **Jail in Urbs.** Three precincts stand on podiums in midtown: a hall with the desk and the
   evidence locker, a firewall gate through to the cell block, and cells behind firewalls. When
   security takes your last hit, or you put your hands up with H, you are arrested rather than
@@ -886,6 +893,7 @@ logs goes to the browser's console there.
 | `MAZE_REFLECTIONS=0`     | Turns floor reflections off.                                            |
 | `MAZE_KNOCKDOWN=<s>`     | That many seconds into a round, shoots down the droid nearest you, to try the ragdolls out. |
 | `MAZE_ARREST=<s>`        | In Urbs, that many seconds into a round, arrests you where you stand, to try jail out; with `MAZE_PICK=1` as well, starts picking your cell's lock. |
+| `MAZE_TUNNELS=<s>`       | In Urbs, that many seconds into a round, takes you down the first hatch into the escape tunnels. |
 | `MAZE_HEIST_OPEN=<n>`    | In a heist, the first n doors' computers count as hacked, to try it out. |
 | `MAZE_SHIELD=<s>`        | That many seconds into a round, raises your shield, as the 1 key does. |
 | `MAZE_DRONE_ALARM=<s>`   | That many seconds into a round, sends the drone after you as if the alarm had sounded, to try it out. |

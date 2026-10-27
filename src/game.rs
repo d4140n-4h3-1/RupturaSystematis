@@ -32,6 +32,7 @@ use crate::{
     formants::{self, chirps::Chirps, speech::Voices, synth, Load, DRONE_VOICE, VOICES},
     generate::Maze,
     glow::GlowLights,
+    escape::{self, Passing},
     jail::{self, Custody},
     lockpick::{self, LockScreen, Picking, PhaseLock},
     roads::RoadPlan,
@@ -306,6 +307,10 @@ pub struct MazeGame {
     #[visit(skip)]
     #[reflect(hidden)]
     beat_in: f32,
+    /// Whether the precincts' guards and the den's gang have been put down this round yet.
+    #[visit(skip)]
+    #[reflect(hidden)]
+    guards_posted: bool,
     #[visit(skip)]
     #[reflect(hidden)]
     picking: Option<(PhaseLock, bool)>,
@@ -315,6 +320,18 @@ pub struct MazeGame {
     #[visit(skip)]
     #[reflect(hidden)]
     lock_screen: Option<LockScreen>,
+    /// Going through a hatch, to or from the escape tunnels (see [`escape`]), while the player is;
+    /// and the hatch last told of, so it is told of once each time they come to it.
+    #[visit(skip)]
+    #[reflect(hidden)]
+    passing: Option<Passing>,
+    #[visit(skip)]
+    #[reflect(hidden)]
+    hatch_told: Option<String>,
+    /// Whether MAZE_TUNNELS has sent the player down yet this round.
+    #[visit(skip)]
+    #[reflect(hidden)]
+    tried_tunnels: bool,
     /// Whether MAZE_ARREST has arrested the player this round yet.
     #[visit(skip)]
     #[reflect(hidden)]
@@ -1109,7 +1126,13 @@ impl MazeGame {
         self.wanted = 0;
         self.locker = None;
         self.precinct_guards.clear();
+        self.guards_posted = false;
         self.tried_arrest = false;
+        self.passing = None;
+        self.hatch_told = None;
+        self.tried_tunnels = false;
+        self.hud.set_fade(ctx.user_interfaces.first(), 0.0);
+        self.level.tunnels.reset(&mut ctx.scenes[self.scene].graph);
         self.player.set_confiscated(false);
         self.stop_picking(ctx);
         let grid = self.level.grid.as_mut().map(|(grid, _)| grid);
@@ -1453,6 +1476,7 @@ impl MazeGame {
             KeyCode::Escape => self.set_paused(ctx, !self.menu.is_open()),
             _ if self.talking.is_some() && !self.menu.is_open() => self.on_talking_key(ctx, code),
             _ if self.picking.is_some() && !self.menu.is_open() => self.on_picking_key(ctx, code),
+            KeyCode::KeyE if !self.menu.is_open() && self.tunnel_action(ctx) => (),
             KeyCode::KeyE if !self.menu.is_open() && self.jail_action(ctx) => (),
             KeyCode::KeyH if !self.menu.is_open() && self.phase == Phase::Playing => self.surrender(ctx),
             KeyCode::KeyE if !self.menu.is_open() && self.talkable.is_some() => {
@@ -1664,7 +1688,8 @@ impl MazeGame {
         }
         // In a city with precincts, once the crowd is down, two guards at each: one at the desk,
         // one in the corridor along the cells.
-        if self.story && self.precinct_guards.is_empty() && self.inhabitants.is_populated() {
+        if self.story && !self.guards_posted && self.inhabitants.is_populated() {
+            self.guards_posted = true;
             let script = self.script.as_ref();
             let kind = script.and_then(|script| (0..script.characters.len()).find(|&c| is_sentry(script, c)));
             if let Some(kind) = kind {
@@ -1676,6 +1701,18 @@ impl MazeGame {
                 }
                 if !self.precinct_guards.is_empty() {
                     Log::info(format!("Precincts: {} guarded", self.precinct_guards.len()));
+                }
+                // And the gang in its den, down in the escape tunnels.
+                let gang = script.and_then(|script| script.characters.iter().position(|c| c.gang));
+                if let Some(gang) = gang {
+                    let kept = self
+                        .level
+                        .tunnels
+                        .den
+                        .iter()
+                        .filter_map(|&at| self.inhabitants.post_guard(scene, (grid, *origin), at, rng.below(628) as f32 / 100.0, gang, rng))
+                        .count();
+                    Log::info(format!("Escape tunnels: {kept} of the gang in the den"));
                 }
             }
         }
@@ -3059,6 +3096,91 @@ impl MazeGame {
         self.say_when_made(ctx);
     }
 
+    /// Does what E does at a hatch, or at the fence's counter: whether it did anything.
+    fn tunnel_action(&mut self, ctx: &mut PluginContext) -> bool {
+        if self.phase != Phase::Playing || self.passing.is_some() {
+            return false;
+        }
+        let feet = self.player.feet(&ctx.scenes[self.scene].graph);
+        if let Some((hatch, down)) = self.level.tunnels.hatch_at(feet).map(|(hatch, down)| (hatch.clone(), down)) {
+            let (to, yaw) = self.level.tunnels.arrival(&hatch, down, self.player.yaw());
+            self.passing = Some(Passing { to, yaw, time: 0.0, moved: false });
+            self.stop_picking(ctx);
+            self.player.release_keys();
+            Log::info(format!("Escape tunnels: through the hatch at {}, {}", hatch.name, if down { "down" } else { "up" }));
+            return true;
+        }
+        if self.level.tunnels.at_fence(feet) {
+            let price = escape::fence_price(self.wanted);
+            let held = self.custody.is_some_and(|custody| custody.escaped);
+            if self.wanted == 0 && !held {
+                self.hud.show_note("The fence: \"Your record is clean. Come back when it is not.\"".to_string());
+            } else if self.credits.spend(Credits::new(price, 0)) {
+                self.wanted = 0;
+                self.custody = None;
+                self.hud.show_note(format!("The fence wiped your record clean, for {price} credits"));
+                Log::info(format!("Escape tunnels: the fence took {price} credits"));
+            } else {
+                self.hud.show_note(format!("The fence wants {price} credits to wipe your record"));
+            }
+            return true;
+        }
+        false
+    }
+
+    /// Sees to the escape tunnels for another frame: going through a hatch, the screen dark as the
+    /// player is moved; the caches taken; and each hatch told of as the player comes to it.
+    fn see_to_tunnels(&mut self, ctx: &mut PluginContext) {
+        if self.level.tunnels.hatches.is_empty() {
+            return;
+        }
+        // With MAZE_TUNNELS=<seconds>, to try them out: that far into the round, the player goes
+        // down through the first hatch, wherever they are.
+        let down_at = platform::var("MAZE_TUNNELS").and_then(|s| s.trim().parse::<f32>().ok());
+        if down_at.is_some_and(|at| self.round_time >= at) && !self.tried_tunnels && self.passing.is_none() {
+            self.tried_tunnels = true;
+            let hatch = &self.level.tunnels.hatches[0];
+            let (to, yaw) = self.level.tunnels.arrival(hatch, true, self.player.yaw());
+            self.passing = Some(Passing { to, yaw, time: 0.0, moved: false });
+            Log::info(format!("MAZE_TUNNELS: down through the hatch at {}", hatch.name));
+        }
+        if let Some(mut passing) = self.passing {
+            passing.time += ctx.dt;
+            if !passing.moved && passing.time >= escape::PASSING / 2.0 {
+                passing.moved = true;
+                let graph = &mut ctx.scenes[self.scene].graph;
+                self.player.teleport_feet(graph, passing.to, passing.yaw);
+            }
+            self.hud.set_fade(ctx.user_interfaces.first(), passing.dark());
+            self.passing = (passing.time < escape::PASSING).then_some(passing);
+            return;
+        }
+        let graph = &mut ctx.scenes[self.scene].graph;
+        let feet = self.player.feet(graph);
+        if let Some(rng) = self.rng.as_mut() {
+            if let Some(taken) = self.level.tunnels.take(graph, feet, |k| rng.below(k)) {
+                self.credits += taken;
+                self.hud.show_note(format!("A cache: {taken}"));
+            }
+        }
+        // What is here to use, told of once as the player comes to it.
+        let here = match self.level.tunnels.hatch_at(feet) {
+            Some((hatch, true)) => Some((hatch.name.clone(), "A hatch: E to climb down into the tunnels".to_string())),
+            Some((hatch, false)) => Some((hatch.name.clone(), "A hatch: E to climb up".to_string())),
+            None if self.level.tunnels.at_fence(feet) => Some((
+                "fence".to_string(),
+                format!("The fence: E to have your record wiped, for {} credits", escape::fence_price(self.wanted)),
+            )),
+            None => None,
+        };
+        if here.as_ref().map(|(name, _)| name) != self.hatch_told.as_ref() {
+            if let Some((_, note)) = &here {
+                self.hud.show_note(note.clone());
+            }
+            self.hatch_told = here.map(|(name, _)| name);
+        }
+    }
+
     /// Whether this is a city with precincts, where security arrests rather than deletes.
     fn in_jail_city(&self) -> bool {
         self.story && !self.level.precincts.precincts.is_empty()
@@ -3475,7 +3597,7 @@ impl MazeGame {
     /// Whether the player is talking or at the computer, and so held still, with the keys and
     /// the mouse for that.
     fn busy(&self) -> bool {
-        self.talking.is_some() || self.hacking || self.picking.is_some()
+        self.talking.is_some() || self.hacking || self.picking.is_some() || self.passing.is_some()
     }
 
     /// Puts the computers into the scene once their model has loaded, and about the maze once a
@@ -4433,7 +4555,8 @@ impl Plugin for MazeGame {
                     self.focused && !talking && !self.hacking,
                 );
                 // Over an edge and down into the void.
-                if self.player.feet(&scene.graph).y < VOID_DEPTH {
+                let feet = self.player.feet(&scene.graph);
+                if feet.y < VOID_DEPTH && !self.level.tunnels.holds(feet) {
                     self.delete_player(ctx, "the void");
                 }
                 self.land_shots(ctx);
@@ -4442,6 +4565,7 @@ impl Plugin for MazeGame {
                 }
                 self.see_to_witnesses(ctx);
                 self.see_to_jail(ctx);
+                self.see_to_tunnels(ctx);
                 // Not won from the void, however close under the flag they fall.
                 if !self.move_inhabitants(ctx) && self.phase == Phase::Playing {
                     let scene = &mut ctx.scenes[self.scene];

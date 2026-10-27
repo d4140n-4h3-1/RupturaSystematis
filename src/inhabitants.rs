@@ -3214,8 +3214,10 @@ impl Inhabitants {
         // speaks for it: none of the rest warn them as well.
         let mut crowding = vec![false; self.droids.len()];
         for (m, droid) in self.droids.iter().enumerate() {
-            // Standing over it, or on its turf, where it can see them.
-            let over = crowded(droid.character).is_some_and(|reach| flat(player - droid.feet).norm() < reach)
+            // Standing over it, or on its turf, where it can see them - but for one keeping to a
+            // post, in its den or its precinct, which has visitors.
+            let over = droid.post.is_none()
+                && crowded(droid.character).is_some_and(|reach| flat(player - droid.feet).norm() < reach)
                 && (player.y - droid.feet.y).abs() < CATCH_HEIGHT;
             let trespassing = droid
                 .turf
