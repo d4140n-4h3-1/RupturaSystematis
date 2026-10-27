@@ -69,7 +69,8 @@
 //! the sentries near it (see [`Inhabitants::report`]). Shot down before it gets there, it tells
 //! no one. One the player shot down that no one saw is found by the first to see it lying there
 //! (see [`Inhabitants::find_bodies`]): a sentry searches from there, and any other runs to tell
-//! one.
+//! one. Shooting one that is after the player is self-defense: no one minds seeing it, nor finding
+//! it lying there.
 //!
 //! A droid that is not hostile minds having the player's pistol pointed at it (see
 //! [`Inhabitants::feel_aimed_at`]): for as long as its kind stands for it, and then it stops,
@@ -3538,6 +3539,14 @@ impl Inhabitants {
         self.droids.get(n).is_some_and(|droid| droid.down)
     }
 
+    /// Whether the `n`th droid is after the player, standing: shooting it is self-defense, no
+    /// crime to be witnessed, and no body to report (see [`Inhabitants::witnesses`]).
+    pub fn attacking_player(&self, n: usize) -> bool {
+        self.droids
+            .get(n)
+            .is_some_and(|droid| !droid.down && droid.hunts_player() && droid.alert == Some(Alert::Alert))
+    }
+
     /// The droid whose body `collider` is, if it is one.
     pub fn hit(&self, collider: Handle<Collider>) -> Option<usize> {
         self.droids
@@ -3692,7 +3701,6 @@ impl Inhabitants {
                 let distance = |n: usize| (self.droids[n].feet - player).norm();
                 distance(a).total_cmp(&distance(b))
             })?;
-        self.set_hostile(n);
         let droid = &self.droids[n];
         let mut at = droid.feet + Vector3::new(0.0, 1.2, 0.0);
         let mut from = player + Vector3::new(0.0, 1.5, 0.0);

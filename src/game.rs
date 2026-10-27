@@ -1704,7 +1704,7 @@ impl MazeGame {
         // With MAZE_KNOCKDOWN=<seconds>, to try the droids' fall out: that far into the round,
         // the droid nearest the player is shot down, as if by the player where they stand.
         let knockdown = platform::var("MAZE_KNOCKDOWN").and_then(|s| s.trim().parse::<f32>().ok());
-        // Anyone about to see it is a witness to it, as to any shot of the player's.
+        // Anyone about to see it is a witness to it: it is shot going about its business.
         let mut victims = Vec::new();
         if knockdown.is_some_and(|at| self.round_time >= at) && !self.knocked_down {
             self.knocked_down = true;
@@ -1771,8 +1771,10 @@ impl MazeGame {
                 None => (),
             }
             droid_shot |= self.inhabitants.hit(collider).is_some();
-            // Shooting one standing, the player may be seen doing it.
-            if let Some(n) = self.inhabitants.hit(collider).filter(|&n| !self.inhabitants.is_down(n)) {
+            // Shooting one standing, the player may be seen doing it - unless it is after them:
+            // that is self-defense.
+            let crime = |n: usize| !self.inhabitants.is_down(n) && !self.inhabitants.attacking_player(n);
+            if let Some(n) = self.inhabitants.hit(collider).filter(|&n| crime(n)) {
                 if !victims.contains(&n) {
                     victims.push(n);
                 }
