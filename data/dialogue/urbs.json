@@ -374,6 +374,18 @@
         "calmed": {
           "says": "Accipatum.",
           "means": "Acknowledged."
+        },
+        "witnessed": {
+          "says": "Aggressio detectum. Quaero praesidium.",
+          "means": "Attack detected! I am looking for a guard."
+        },
+        "body": {
+          "says": "Civis deletatum. Quaero praesidium.",
+          "means": "A citizen deleted. I am looking for a guard."
+        },
+        "reported": {
+          "says": "Aggressio detectum. Civis deletatum. Zeta aggressor.",
+          "means": "Attack detected. A citizen deleted. Hunt the attacker."
         }
       },
       "lines": {
@@ -528,6 +540,18 @@
         "calmed": {
           "says": "Accipatum.",
           "means": "Acknowledged."
+        },
+        "witnessed": {
+          "says": "Aggressio detectum. Quaero praesidium.",
+          "means": "Attack detected! I am looking for a guard."
+        },
+        "body": {
+          "says": "Civis deletatum. Quaero praesidium.",
+          "means": "A citizen deleted. I am looking for a guard."
+        },
+        "reported": {
+          "says": "Aggressio detectum. Civis deletatum. Zeta aggressor.",
+          "means": "Attack detected. A citizen deleted. Hunt the attacker."
         }
       },
       "lines": {

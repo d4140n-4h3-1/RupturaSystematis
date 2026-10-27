@@ -121,7 +121,10 @@
         "warned": { "says": "Quid? Telum tu periculosum.", "means": "What? Your weapon is dangerous." },
         "warned_again": { "says": "Desactiva telum tu. Periculum.", "means": "Put your weapon away. Danger." },
         "provoked": { "says": "Aggressor detectum. Sireno.", "means": "Attacker detected. I am sounding the alarm." },
-        "calmed": { "says": "Accipatum.", "means": "Acknowledged." }
+        "calmed": { "says": "Accipatum.", "means": "Acknowledged." },
+        "witnessed": { "says": "Aggressio detectum. Quaero praesidium.", "means": "Attack detected! I am looking for a guard." },
+        "body": { "says": "Civis deletatum. Quaero praesidium.", "means": "A citizen deleted. I am looking for a guard." },
+        "reported": { "says": "Aggressio detectum. Civis deletatum. Zeta aggressor.", "means": "Attack detected. A citizen deleted. Hunt the attacker." }
       },
       "lines": {
         "hello": {
@@ -200,7 +203,10 @@
         "warned": { "says": "Quid? Telum tu periculosum.", "means": "What? Your weapon is dangerous." },
         "warned_again": { "says": "Desactiva telum tu. Periculum.", "means": "Put your weapon away. Danger." },
         "provoked": { "says": "Aggressor detectum. Sireno.", "means": "Attacker detected. I am sounding the alarm." },
-        "calmed": { "says": "Accipatum.", "means": "Acknowledged." }
+        "calmed": { "says": "Accipatum.", "means": "Acknowledged." },
+        "witnessed": { "says": "Aggressio detectum. Quaero praesidium.", "means": "Attack detected! I am looking for a guard." },
+        "body": { "says": "Civis deletatum. Quaero praesidium.", "means": "A citizen deleted. I am looking for a guard." },
+        "reported": { "says": "Aggressio detectum. Civis deletatum. Zeta aggressor.", "means": "Attack detected. A citizen deleted. Hunt the attacker." }
       },
       "lines": {
         "hello": {

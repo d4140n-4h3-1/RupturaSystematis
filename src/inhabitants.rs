@@ -57,11 +57,19 @@
 //! sees the other as it would see the player standing, and a sentry that sees one that has joined
 //! in joins in as well, so a chase draws in every sentry that catches sight of it.
 //!
-//! Hostile, it cannot be talked to any more, but after [`HITS`] bolts - a sentry, tougher,
-//! [`SENTRY_HITS`] - it goes down, its eyes
+//! Hostile, it cannot be talked to any more. After [`HITS`] bolts - hostile or not; a sentry,
+//! tougher, [`SENTRY_HITS`] - it goes down, its eyes
 //! dark: it goes limp and falls, knocked back by the last bolt, and lies where it falls (see
 //! [`crate::ragdoll`]) - or, without a ragdoll, crouches. Lying there, a bolt still shoves it.
 //! It stays there, for the rest of the round; the others step over it rather than round it.
+//!
+//! Those about that see the player shoot one - it, or the player - are witnesses (see
+//! [`Inhabitants::witnesses`]): a sentry goes after them, and a droid that would sound the alarm
+//! runs to the nearest sentry instead, to tell it, which then searches where it was done with
+//! the sentries near it (see [`Inhabitants::report`]). Shot down before it gets there, it tells
+//! no one. One the player shot down that no one saw is found by the first to see it lying there
+//! (see [`Inhabitants::find_bodies`]): a sentry searches from there, and any other runs to tell
+//! one.
 //!
 //! A droid that is not hostile minds having the player's pistol pointed at it (see
 //! [`Inhabitants::feel_aimed_at`]): for as long as its kind stands for it, and then it stops,
@@ -297,6 +305,44 @@ const SQUARELY: f32 = 0.6;
 /// How tall a droid that has been stopped is, crouched, in meters.
 const DOWN_HEIGHT: f32 = 1.1;
 
+/// How far off, in meters, a droid sees the player shoot one of the others, to be a witness to
+/// it (see [`Inhabitants::witnesses`]); and how far off one going about its business sees one
+/// lying where the player shot it down, and how often they look, in seconds (see
+/// [`Inhabitants::find_bodies`]).
+const WITNESS_REACH: f32 = 30.0;
+const BODY_SIGHT: f32 = 15.0;
+const BODY_LOOK_EVERY: f32 = 0.5;
+/// How far off, in meters, a witness looks for a sentry to tell, and how near it has to get to
+/// tell it; how long it hides, with none about, looking for one now and then, before it gives up,
+/// and how often it looks, in seconds.
+const REPORT_REACH: f32 = 150.0;
+const REPORT_NEAR: f32 = 2.5;
+const HIDE_FOR: f32 = 30.0;
+const REPORT_LOOK_EVERY: f32 = 1.0;
+
+/// A droid that has seen what the player did, on its way to tell a sentry of it (see
+/// [`Inhabitants::report`]). Shot down before it gets there, it tells no one.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Witness {
+    /// Where it was done: where the player stood, or the one they shot down lies, for the sentry
+    /// to search from.
+    at: Vector3<f32>,
+    /// The sentry it is making for, as an index, if it has found one; and how long until it
+    /// looks for one again, or gives up, in seconds.
+    to: Option<usize>,
+    look_in: f32,
+    left: f32,
+}
+
+/// What came of the witnesses' going to tell a sentry (see [`Inhabitants::report`]).
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct Reports {
+    /// Those that have told a sentry: the witness, the sentry, and where it was done.
+    pub told: Vec<(usize, usize, Vector3<f32>)>,
+    /// Those that gave up, with no sentry to be found, and go about their business again.
+    pub gave_up: Vec<usize>,
+}
+
 /// How a droid takes having the pistol pointed at it, as it goes from one stage to the next.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Threat {
@@ -419,6 +465,12 @@ struct Inhabitant {
     down: bool,
     /// Its body gone limp, once it has been stopped, if it has a ragdoll.
     ragdoll: Option<Ragdoll>,
+    /// Whether, stopped, it was the player who stopped it; and whether anyone has seen it done,
+    /// or come across it lying there since, for whoever comes across it next to make nothing of.
+    murdered: bool,
+    found: bool,
+    /// What it has seen the player do, if anything, on its way to tell a sentry.
+    witness: Option<Witness>,
     /// In capture the flag, its side, and where it keeps to (see [`crate::ctf`]); whom of the
     /// other side it is after, if anyone, and how long since it last saw them, in seconds; and
     /// where it was last shot at from by someone it did not see, to go after, and for how much
@@ -492,6 +544,7 @@ impl Inhabitant {
         self.no_way = false;
         self.shot_from = None;
         self.cover = None;
+        self.witness = None;
         // Posed where it is now on the next update, however far off: it is as long since it was
         // as the longest wait there is between.
         self.unposed = self.unposed.max(POSE_EVERY[POSE_EVERY.len() - 1].1);
@@ -716,6 +769,9 @@ pub struct Inhabitants {
     /// seconds (see [`Inhabitants::shootouts`]).
     shootout: Option<Shootout>,
     shootout_in: f32,
+    /// How long till those going about their business next look for anyone the player has shot
+    /// down, in seconds.
+    body_look: f32,
 }
 
 /// A foot chase in a city: one of its security after one of a gang, which runs for it - and if
@@ -1119,6 +1175,32 @@ fn in_sight_of(graph: &Graph, watcher: &Inhabitant, seen: &Inhabitant) -> bool {
     hits.iter()
         .find(|hit| hit.collider != watcher.collider)
         .is_none_or(|hit| hit.collider == seen.collider)
+}
+
+/// Whether nothing is in the way from `from` to `to` but what `passes`.
+fn clear_between(
+    graph: &Graph,
+    from: Vector3<f32>,
+    to: Vector3<f32>,
+    passes: impl Fn(Handle<Collider>) -> bool,
+) -> bool {
+    let way = to - from;
+    let length = way.norm();
+    if length < 1.0e-3 {
+        return true;
+    }
+    let mut hits = Vec::new();
+    graph.physics.cast_ray(
+        RayCastOptions {
+            ray_origin: Point3::from(from),
+            ray_direction: way / length,
+            max_len: length,
+            groups: Default::default(),
+            sort_results: false,
+        },
+        &mut hits,
+    );
+    hits.iter().all(|hit| passes(hit.collider))
 }
 
 /// Someone of the other side in capture the flag who is not one of the droids - a drone: where it
@@ -1906,6 +1988,7 @@ impl Inhabitants {
                 && droid.speaking == 0.0
                 && droid.pursuit.is_none()
                 && droid.cover.is_none()
+                && droid.witness.is_none()
         };
         let mut moved = 0;
         for n in 0..self.droids.len() {
@@ -2074,6 +2157,9 @@ impl Inhabitants {
             hits: 0,
             down: false,
             ragdoll: None,
+            murdered: false,
+            found: false,
+            witness: None,
             side: None,
             post: None,
             foe: None,
@@ -2836,6 +2922,16 @@ impl Inhabitants {
                         }
                     }
                 }
+            } else if let Some(sentry) = droid.witness.and_then(|witness| witness.to) {
+                // A witness, on its way to tell a sentry: the way to it worked out again every
+                // so often as it walks about.
+                droid.replan -= dt;
+                if let Some((feet, _)) = placed.get(sentry).copied().flatten() {
+                    if droid.replan <= 0.0 || droid.route.is_empty() {
+                        droid.replan = REPLAN * 2.0;
+                        (droid.route, droid.trip) = go_to(droid.feet, feet);
+                    }
+                }
             } else if let Some((danger, picked)) = droid.cover {
                 // A bystander to a shootout: running from it to somewhere it cannot be seen
                 // from, if there is anywhere about, or else as far off as it can; and there,
@@ -2963,7 +3059,8 @@ impl Inhabitants {
             // Taking cover, it runs for it, and once there crouches in it.
             let sheltering = droid.cover.is_some() && droid.alert.is_none() && !droid.talking;
             let sheltered = sheltering && droid.route.is_empty();
-            let after = droid.alert == Some(Alert::Alert) || fighting.is_some() || running || sheltering;
+            let reporting = droid.witness.is_some_and(|witness| witness.to.is_some());
+            let after = droid.alert == Some(Alert::Alert) || fighting.is_some() || running || sheltering || reporting;
             // Called to a shootout, it hurries there.
             let called = matches!(droid.side, Some(Side::Security | Side::Gang))
                 && droid.post.is_some_and(|post| flat(post - droid.feet).norm() > POST_REACH * 2.0);
@@ -3433,6 +3530,232 @@ impl Inhabitants {
         }
     }
 
+    /// The player at `player`, their body `them`, has shot the `n`th droid. Those about it that
+    /// could see it done - the one shot, or the player - within [`WITNESS_REACH`], `in_the_dark`
+    /// or not, are witnesses to it: going about their business, or searching, but not after the
+    /// player already, nor busy with a shootout or a chase, and of a kind that `minds`, by its
+    /// kind and the one shot's. Them, as indices. One shot down is the player's doing, for
+    /// whoever comes across it lying there (see [`Inhabitants::find_bodies`]) - unless a witness
+    /// has seen it done already.
+    pub fn witnesses(
+        &mut self,
+        graph: &Graph,
+        n: usize,
+        (player, them): (Vector3<f32>, Handle<Collider>),
+        in_the_dark: bool,
+        minds: impl Fn(usize, usize) -> bool,
+    ) -> Vec<usize> {
+        let Some(shot) = self.droids.get(n) else {
+            return Vec::new();
+        };
+        let (at, character) = (shot.feet, shot.character);
+        // Nothing in the way but the one shot, its limbs flying, the player and the witness.
+        let passes = |watcher: &Inhabitant, collider: Handle<Collider>| {
+            collider == watcher.collider
+                || collider == shot.collider
+                || collider == them
+                || shot.ragdoll.as_ref().is_some_and(|ragdoll| ragdoll.owns(collider))
+        };
+        let witnesses: Vec<usize> = self
+            .droids
+            .iter()
+            .enumerate()
+            .filter(|&(m, droid)| {
+                m != n
+                    && !droid.down
+                    && !droid.talking
+                    && droid.side.is_none()
+                    && droid.pursuit.is_none()
+                    && droid.witness.is_none()
+                    && droid.alert != Some(Alert::Alert)
+                    && droid.hunts_player()
+                    && flat(droid.feet - at).norm() < WITNESS_REACH
+                    && minds(droid.character, character)
+            })
+            .filter(|(_, droid)| {
+                let eyes = droid.feet + Vector3::new(0.0, FACE_HEIGHT, 0.0);
+                [(at, CHEST), (player, PLAYER_CHEST)].iter().any(|&(feet, chest)| {
+                    could_see_droid(droid.alert, droid.feet, droid.heading, feet, in_the_dark)
+                        && clear_between(graph, eyes, feet + Vector3::new(0.0, chest, 0.0), |c| passes(droid, c))
+                })
+            })
+            .map(|(m, _)| m)
+            .collect();
+        let shot = &mut self.droids[n];
+        if shot.down {
+            shot.murdered = true;
+            shot.found |= !witnesses.is_empty();
+        }
+        if !witnesses.is_empty() {
+            Log::info(format!("Witnesses: {} saw droid {n} shot", witnesses.len()));
+        }
+        witnesses
+    }
+
+    /// Every [`BODY_LOOK_EVERY`] seconds of `dt`, those going about their business look for
+    /// anyone the player has shot down that no one has come across yet: each that one of them
+    /// can see lying within [`BODY_SIGHT`], `in_the_dark` or not, of a kind that `minds` by its
+    /// own kind and the one lying there's, has been found, by the first to see it. Who found
+    /// one, and where it lies.
+    pub fn find_bodies(
+        &mut self,
+        graph: &Graph,
+        in_the_dark: bool,
+        dt: f32,
+        minds: impl Fn(usize, usize) -> bool,
+    ) -> Vec<(usize, Vector3<f32>)> {
+        self.body_look -= dt;
+        if self.body_look > 0.0 {
+            return Vec::new();
+        }
+        self.body_look = BODY_LOOK_EVERY;
+        let mut found = Vec::new();
+        for n in 0..self.droids.len() {
+            let body = &self.droids[n];
+            if !body.down || !body.murdered || body.found {
+                continue;
+            }
+            // Low down, where it lies: its pelvis, or crouched, its middle.
+            let lies = body
+                .ragdoll
+                .as_ref()
+                .and_then(|ragdoll| ragdoll.pelvis(graph))
+                .unwrap_or(body.feet + Vector3::new(0.0, 0.5 * DOWN_HEIGHT, 0.0));
+            let finder = self.droids.iter().enumerate().find(|&(m, droid)| {
+                m != n
+                    && !droid.down
+                    && !droid.talking
+                    && droid.side.is_none()
+                    && droid.pursuit.is_none()
+                    && droid.witness.is_none()
+                    && matches!(droid.alert, None | Some(Alert::Caution))
+                    && droid.hunts_player()
+                    && flat(droid.feet - lies).norm() < BODY_SIGHT
+                    && minds(droid.character, body.character)
+                    && could_see_droid(droid.alert, droid.feet, droid.heading, body.feet, in_the_dark)
+                    && clear_between(graph, droid.feet + Vector3::new(0.0, FACE_HEIGHT, 0.0), lies, |collider| {
+                        collider == droid.collider
+                            || collider == body.collider
+                            || body.ragdoll.as_ref().is_some_and(|ragdoll| ragdoll.owns(collider))
+                    })
+            });
+            if let Some((m, _)) = finder {
+                Log::info(format!("Body found: droid {n}, by droid {m}"));
+                found.push((m, lies));
+                self.droids[n].found = true;
+            }
+        }
+        found
+    }
+
+    /// Has the `n`th droid, having seen what the player did at `at`, go and tell a sentry of it
+    /// (see [`Inhabitants::report`]).
+    pub fn witness(&mut self, n: usize, at: Vector3<f32>) {
+        if let Some(droid) = self.droids.get_mut(n).filter(|droid| !droid.down) {
+            droid.witness = Some(Witness { at, to: None, look_in: 0.0, left: HIDE_FOR });
+            droid.warned = 0;
+            droid.threat = 0.0;
+            droid.route.clear();
+            droid.resting = 0.0;
+        }
+    }
+
+    /// Sees the witnesses on, `dt` seconds on from the last time: each makes for the nearest
+    /// sentry - of the kinds `sentry` says are - standing, within
+    /// [`REPORT_REACH`], and tells it once it is within [`REPORT_NEAR`] of it. With none about,
+    /// it hides, running from where it was done, and looks again now and then, till
+    /// [`HIDE_FOR`] is up. What came of it.
+    pub fn report(&mut self, dt: f32, sentry: impl Fn(usize) -> bool) -> Reports {
+        let mut reports = Reports::default();
+        let sentries: Vec<(usize, Vector3<f32>)> = self
+            .droids
+            .iter()
+            .enumerate()
+            .filter(|(_, droid)| !droid.down && sentry(droid.character) && droid.side.is_none() && droid.witness.is_none())
+            .map(|(n, droid)| (n, droid.feet))
+            .collect();
+        for (n, droid) in self.droids.iter_mut().enumerate() {
+            let Some(mut witness) = droid.witness else {
+                continue;
+            };
+            // Gone after the player itself, or caught up in a shootout, it has more to think of.
+            if droid.down || droid.alert.is_some() || droid.side.is_some() {
+                droid.witness = None;
+                continue;
+            }
+            // Its sentry, if it still stands; or, now and then, the nearest there is.
+            let to = witness.to.and_then(|to| sentries.iter().find(|&&(s, _)| s == to)).copied();
+            witness.look_in -= dt;
+            let to = match to {
+                Some(to) => Some(to),
+                None if witness.look_in <= 0.0 => {
+                    witness.look_in = REPORT_LOOK_EVERY;
+                    sentries
+                        .iter()
+                        .copied()
+                        .filter(|&(_, feet)| flat(feet - droid.feet).norm() < REPORT_REACH)
+                        .min_by(|a, b| flat(a.1 - droid.feet).norm().total_cmp(&flat(b.1 - droid.feet).norm()))
+                }
+                None => None,
+            };
+            if let Some((s, feet)) = to {
+                if witness.to != Some(s) {
+                    droid.route.clear();
+                    droid.replan = 0.0;
+                }
+                witness.to = Some(s);
+                droid.cover = None;
+                if flat(feet - droid.feet).norm() < REPORT_NEAR {
+                    droid.witness = None;
+                    droid.route.clear();
+                    droid.resting = REST.1;
+                    Log::info(format!("Witness: droid {n} told sentry {s}"));
+                    reports.told.push((n, s, witness.at));
+                    continue;
+                }
+            } else {
+                witness.to = None;
+                witness.left -= dt;
+                if witness.left <= 0.0 {
+                    droid.witness = None;
+                    droid.cover = None;
+                    droid.route.clear();
+                    droid.resting = REST.0;
+                    reports.gave_up.push(n);
+                    continue;
+                }
+                if droid.cover.is_none() {
+                    droid.cover = Some((witness.at, false));
+                    droid.route.clear();
+                }
+            }
+            droid.witness = Some(witness);
+        }
+        reports
+    }
+
+    /// Has the `n`th droid, if it hunts the player at all, search from `at` - where it found
+    /// one they shot down, say - unless it is after them already.
+    pub fn search_at(&mut self, n: usize, at: Vector3<f32>) {
+        let Some(droid) = self.droids.get_mut(n) else {
+            return;
+        };
+        if droid.down || !droid.hunts_player() || droid.alert == Some(Alert::Alert) {
+            return;
+        }
+        droid.lost_at = at;
+        droid.lost_going = Vector3::zeros();
+        droid.alert = None;
+        droid.enter(n, Some(Alert::Evasion), &mut self.alerts);
+        self.alarmed.push(n);
+        self.search_from = Some(at);
+    }
+
+    /// Whether the `n`th droid has been stopped.
+    pub fn is_down(&self, n: usize) -> bool {
+        self.droids.get(n).is_some_and(|droid| droid.down)
+    }
+
     /// The droid whose body `collider` is, if it is one.
     pub fn hit(&self, collider: Handle<Collider>) -> Option<usize> {
         self.droids
@@ -3655,7 +3978,7 @@ impl Inhabitants {
             .iter_mut()
             .enumerate()
             .find(|(_, droid)| droid.collider == collider)?;
-        if (droid.alert.is_none() && droid.side.is_none()) || droid.down {
+        if droid.down {
             return None;
         }
         // A good headshot stops it there and then.
@@ -3670,8 +3993,10 @@ impl Inhabitants {
                     droid.heading = to.x.atan2(to.z);
                     droid.shot_from = Some((player, FOE_MEMORY));
                 }
-            } else if droid.alert != Some(Alert::Alert) {
-                // After whoever fired, paying no heed to the bolt's own noise hitting it.
+            } else if droid.alert.is_some_and(|alert| alert != Alert::Alert) {
+                // After whoever fired, paying no heed to the bolt's own noise hitting it. One
+                // going about its business does what its kind does about it (see
+                // [`Inhabitants::provoke`]).
                 droid.deaf = HEARING_REST;
                 droid.lost_at = player;
                 droid.lost_going = Vector3::zeros();
@@ -3683,6 +4008,8 @@ impl Inhabitants {
         droid.down = true;
         droid.alert = None;
         droid.sees_player = false;
+        droid.witness = None;
+        droid.cover = None;
         droid.avatar.set_eyes(Some(Color::BLACK));
         droid.ragdoll = Ragdoll::start(
             graph,
@@ -3724,6 +4051,8 @@ impl Inhabitants {
         within_talking(self.droids.iter().map(|droid| droid.feet), feet, ahead)
             .into_iter()
             .filter(|&i| self.droids[i].alert.is_none() && !self.droids[i].down)
+            // On its way to tell a sentry what the player did, it will not stop for them.
+            .filter(|&i| self.droids[i].witness.is_none())
             // In the middle of a shootout, it has no time for them.
             .filter(|&i| !matches!(self.droids[i].side, Some(Side::Security | Side::Gang)))
             .find(|&i| in_sight(self.droids[i].feet))

@@ -259,6 +259,15 @@ fn is_sentry(script: &Script, character: usize) -> bool {
         .is_some_and(|threatened| threatened.then == Provoked::Attacks)
 }
 
+/// Whether droids of the `seer`th kind in `script` mind seeing one of the `shot`th kind shot by
+/// the player: any kind that minds the pistol, but a gang only its own.
+fn minds(script: &Script, seer: usize, shot: usize) -> bool {
+    script
+        .characters
+        .get(seer)
+        .is_some_and(|character| character.threatened.is_some() && (!character.gang || seer == shot))
+}
+
 #[derive(Default, Debug, PartialEq, Visit, Reflect)]
 #[reflect(non_cloneable, type_uuid = "0d3b1c55-7e0a-4f1e-9b53-2f6a8c1d4e90")]
 pub struct MazeGame {
@@ -1700,10 +1709,13 @@ impl MazeGame {
         // With MAZE_KNOCKDOWN=<seconds>, to try the droids' fall out: that far into the round,
         // the droid nearest the player is shot down, as if by the player where they stand.
         let knockdown = platform::var("MAZE_KNOCKDOWN").and_then(|s| s.trim().parse::<f32>().ok());
+        // Anyone about to see it is a witness to it, as to any shot of the player's.
+        let mut victims = Vec::new();
         if knockdown.is_some_and(|at| self.round_time >= at) && !self.knocked_down {
             self.knocked_down = true;
             if let Some(n) = self.inhabitants.knock_down(graph, player) {
                 Log::info(format!("MAZE_KNOCKDOWN: droid {n} shot down"));
+                victims.push(n);
             }
         }
         let mut provoked = Vec::new();
@@ -1764,6 +1776,12 @@ impl MazeGame {
                 None => (),
             }
             droid_shot |= self.inhabitants.hit(collider).is_some();
+            // Shooting one standing, the player may be seen doing it.
+            if let Some(n) = self.inhabitants.hit(collider).filter(|&n| !self.inhabitants.is_down(n)) {
+                if !victims.contains(&n) {
+                    victims.push(n);
+                }
+            }
             if let Some(n) = self.inhabitants.shot(graph, strike, player) {
                 let name = self.name_of(n).unwrap_or_else(|| "The droid".into());
                 self.hud.show_note(format!("{name} is down"));
@@ -1796,6 +1814,96 @@ impl MazeGame {
         }
         for n in provoked {
             self.on_threat(ctx, n, Threat::Provoked);
+        }
+        for n in victims {
+            self.witnessed(ctx, n);
+        }
+    }
+
+    /// The player has shot the `n`th droid: those that saw it do what their kind does about it.
+    /// A sentry, or one of the gang the one shot was of, goes after them; one that would sound
+    /// the alarm runs to tell a sentry - unless it is shot down before it gets there (see
+    /// [`Inhabitants::report`]).
+    fn witnessed(&mut self, ctx: &mut PluginContext, n: usize) {
+        let Some(script) = self.script.as_ref() else {
+            return;
+        };
+        let graph = &ctx.scenes[self.scene].graph;
+        let player = self.player.feet(graph);
+        let in_the_dark = self.lights_off && !self.player.flashlight_on();
+        let witnesses = self.inhabitants.witnesses(
+            graph,
+            n,
+            (player, self.player.collider()),
+            in_the_dark,
+            |seer, shot| minds(script, seer, shot),
+        );
+        let mut running = Vec::new();
+        for m in witnesses {
+            match self.threatened(m).map(|threatened| threatened.then) {
+                Some(Provoked::Attacks) => self.on_threat(ctx, m, Threat::Provoked),
+                Some(Provoked::Alarm) => {
+                    self.inhabitants.witness(m, player);
+                    self.inhabitants.set_eyes(m, screen::eyes(Mood::Agitated));
+                    self.bark(m, "witnessed", Mood::Agitated);
+                    running.push(m);
+                }
+                None => (),
+            }
+        }
+        match running[..] {
+            [] => (),
+            [m] => {
+                let name = self.name_of(m).unwrap_or_else(|| "A droid".into());
+                self.hud.show_note(format!("{name} saw that, and runs for security"));
+            }
+            _ => self.hud.show_note(format!("{} droids saw that, and run for security", running.len())),
+        }
+    }
+
+    /// Sees to those that know what the player did: anyone they shot down that is come across
+    /// lying there - a sentry that finds it searches from there, and calls the others near it in;
+    /// any other that minds runs to tell a sentry - and the witnesses on their way to tell one,
+    /// telling it, which has it and the sentries near it search where it was done.
+    fn see_to_witnesses(&mut self, ctx: &mut PluginContext) {
+        let Some(script) = self.script.as_ref() else {
+            return;
+        };
+        let sentries: Vec<bool> = (0..script.characters.len()).map(|c| is_sentry(script, c)).collect();
+        let sentry = |c: usize| sentries.get(c).copied().unwrap_or(false);
+        let graph = &ctx.scenes[self.scene].graph;
+        let in_the_dark = self.lights_off && !self.player.flashlight_on();
+        let found = self
+            .inhabitants
+            .find_bodies(graph, in_the_dark, ctx.dt, |seer, body| minds(script, seer, body));
+        let reports = self.inhabitants.report(ctx.dt, sentry);
+        for (m, at) in found {
+            match self.threatened(m).map(|threatened| threatened.then) {
+                Some(Provoked::Attacks) => {
+                    self.inhabitants.search_at(m, at);
+                    self.inhabitants.raise_alarm(m, at, sentry);
+                }
+                Some(Provoked::Alarm) => {
+                    self.inhabitants.witness(m, at);
+                    self.inhabitants.set_eyes(m, screen::eyes(Mood::Agitated));
+                    self.bark(m, "body", Mood::Agitated);
+                }
+                None => continue,
+            }
+            let name = self.name_of(m).unwrap_or_else(|| "A droid".into());
+            self.hud.show_note(format!("{name} found one you shot down"));
+        }
+        for (m, s, at) in reports.told {
+            self.inhabitants.set_eyes(m, None);
+            self.bark(m, "reported", Mood::Agitated);
+            self.inhabitants.search_at(s, at);
+            self.inhabitants.raise_alarm(s, at, sentry);
+            self.alert_drone(at);
+            let name = self.name_of(m).unwrap_or_else(|| "A witness".into());
+            self.hud.show_note(format!("{name} told security"));
+        }
+        for m in reports.gave_up {
+            self.inhabitants.set_eyes(m, None);
         }
     }
 
@@ -3830,6 +3938,7 @@ impl Plugin for MazeGame {
                 if !talking {
                     self.threaten(ctx);
                 }
+                self.see_to_witnesses(ctx);
                 // Not won from the void, however close under the flag they fall.
                 if !self.move_inhabitants(ctx) && self.phase == Phase::Playing {
                     let scene = &mut ctx.scenes[self.scene];
