@@ -9,6 +9,7 @@ use crate::{
     culling::Culling,
     ferry::Ferries,
     roads::{RoadPlan, Roads},
+    precinct::Precincts,
     vault::Vaults,
     fixtures::{self, Glow},
     generate::Maze,
@@ -41,9 +42,9 @@ const FLAG_MIDDLE: f32 = 2.0;
 /// vault and its terminals, ways out, guards, drones and where its waves come from (see
 /// [`crate::heist`]), or a city's stores and banks, each with a computer keeping its takings (see
 /// [`crate::computer::Kind`]).
-const MARKERS: [&str; 16] = [
+const MARKERS: [&str; 19] = [
     "flag_", "computer_", "post_", "spawn_", "heist_start", "door_", "loot", "extract_", "guard_", "drone_",
-    "terminal_", "wave_", "place_", "store_", "bank_", "vault_",
+    "terminal_", "wave_", "place_", "store_", "bank_", "vault_", "precinct_", "cell_", "tunnel_",
 ];
 
 /// Somewhere a maze model marks with an empty, by the empty's name, for the game to put
@@ -93,6 +94,8 @@ pub struct Level {
     pub ferries: Ferries,
     /// The banks' vaults' doors, which open: see [`Vaults`].
     pub vaults: Vaults,
+    /// The precincts, where security takes those it arrests: see [`Precincts`].
+    pub precincts: Precincts,
     /// The roads the droids keep off but to cross, on a map with streets: see [`Roads`].
     pub roads: Option<Roads>,
 }
@@ -194,6 +197,11 @@ impl Level {
         } else {
             Default::default()
         };
+        let (precincts, precinct_bodies) = if fixed {
+            Precincts::claim(&mut scene.graph, root, &markers)
+        } else {
+            Default::default()
+        };
         scene.graph.update_hierarchical_data();
 
         let meshes: Vec<GeometrySource> = scene
@@ -214,6 +222,7 @@ impl Level {
         let mut nodes = vec![root, body.to_base()];
         nodes.extend(ferry_bodies);
         nodes.extend(vault_bodies);
+        nodes.extend(precinct_bodies);
         Self {
             nodes,
             collider,
@@ -231,6 +240,7 @@ impl Level {
             culling: None,
             ferries,
             vaults,
+            precincts,
             roads: None,
         }
     }
@@ -243,6 +253,7 @@ impl Level {
         self.grid = survey::survey(graph, self.collider, ignore, open_sky);
         if let Some((grid, origin)) = self.grid.as_mut() {
             self.vaults.keep_out(grid, *origin);
+            self.precincts.keep_out(grid, *origin);
         }
         self.roads = roads.zip(self.grid.as_ref()).map(|(plan, (grid, origin))| plan.on(grid, *origin));
         let fixtures = std::mem::take(&mut self.fixtures);

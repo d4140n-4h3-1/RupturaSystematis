@@ -73,7 +73,7 @@ const POLE_MIDDLE: f32 = 1.5;
 /// at most; and the light it gives off, how far, and how brightly at most.
 const COLOUR: Color = Color::opaque(255, 46, 0);
 const TINT: f32 = 0.4;
-const GLOW: f32 = 0.3;
+pub(crate) const GLOW: f32 = 0.3;
 const LIGHT_RADIUS: f32 = 6.0;
 const LIGHT: f32 = 1.0;
 
@@ -234,19 +234,7 @@ impl Firewall {
         if barrier.is_empty() {
             Log::err(format!("Firewall: {FIREWALL_MODEL} has no {BARRIER}"));
         }
-        let glass = fyrox_gfx::GlassMaterial {
-            tint: COLOUR,
-            tint_strength: TINT,
-            emission: COLOUR,
-            emission_strength: GLOW,
-            // It does not bend what is seen through it, as glass does: the bend is so many meters
-            // behind the surface, which close up is most of the screen, and smears what is behind
-            // into one colour. Nor does it reflect.
-            index_of_refraction: 1.0,
-            reflectivity: 0.0,
-            ..Default::default()
-        }
-        .build_resource();
+        let glass = glass();
         for &node in &barrier {
             graph[node].set_cast_shadows(false);
             if let Some(mesh) = graph[node].cast_mut::<Mesh>() {
@@ -369,6 +357,23 @@ impl Firewall {
     }
 }
 
+/// A firewall's glass: orange, glowing, seen through - a material of its own, to flicker.
+pub(crate) fn glass() -> MaterialResource {
+    fyrox_gfx::GlassMaterial {
+        tint: COLOUR,
+        tint_strength: TINT,
+        emission: COLOUR,
+        emission_strength: GLOW,
+        // It does not bend what is seen through it, as glass does: the bend is so many meters
+        // behind the surface, which close up is most of the screen, and smears what is behind
+        // into one colour. Nor does it reflect.
+        index_of_refraction: 1.0,
+        reflectivity: 0.0,
+        ..Default::default()
+    }
+    .build_resource()
+}
+
 /// Takes the floor within [`TAKEN`] of `at` out of `grid`, whose corner is at `origin`.
 fn take_floor(grid: &mut WalkGrid, origin: Vector3<f32>, at: Vector3<f32>) {
     let reach = Vector3::new(TAKEN, 0.0, TAKEN);
@@ -388,7 +393,7 @@ fn take_floor(grid: &mut WalkGrid, origin: Vector3<f32>, at: Vector3<f32>) {
 /// How brightly a firewall glows, `time` seconds in, from 0 to 1: two quick waves over each
 /// other, and a dip to a fraction of that in some twelfths of a second, picked by a hash of which
 /// twelfth it is.
-fn flicker(time: f32) -> f32 {
+pub(crate) fn flicker(time: f32) -> f32 {
     let waver = 0.78 + 0.12 * (time * 23.0).sin() + 0.1 * (time * 57.3 + 1.7).sin();
     let tick = (time * 12.0).floor();
     let hash = ((tick * 12.9898).sin() * 43_758.547).rem_euclid(1.0);

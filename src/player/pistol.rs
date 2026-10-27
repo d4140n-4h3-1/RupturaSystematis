@@ -495,12 +495,28 @@ impl Player {
 
     /// Takes the pistol out, or puts it away.
     pub(super) fn toggle_pistol(&mut self) {
-        self.armed = !self.armed;
+        self.armed = !self.armed && !self.confiscated;
+    }
+
+    /// Takes the pistol off the player, put away, or gives it back.
+    pub fn set_confiscated(&mut self, taken: bool) {
+        self.confiscated = taken;
+        if taken {
+            self.armed = false;
+        }
+    }
+
+    /// Whether the pistol has been taken off the player.
+    pub fn confiscated(&self) -> bool {
+        self.confiscated
     }
 
     /// Pulls the trigger: draws the pistol if it is away, and otherwise fires it - once it is
     /// all the way out.
     pub fn pull_trigger(&mut self) {
+        if self.confiscated {
+            return;
+        }
         if self.armed {
             self.keys.trigger = true;
         } else {

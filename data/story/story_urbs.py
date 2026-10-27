@@ -22,6 +22,14 @@ hall under a dome behind its colonnade, the arena, and the elevated railway down
 avenue, with a station on it out in the north, climbed by stairs. Bridges cross the canal at every street, steps go
 down to its water, and gates lead out over the void east and west, to pads with an obelisk each.
 
+Precincts, where security takes those it arrests: three blocks have one on a corner (precinct_<n>),
+up on a podium climbed by a flight from the street - a hall with the desk (precinct_<n>_desk) and
+the evidence locker (precinct_<n>_locker), a gate (precinct_<n>_gate) through to the
+cell block - a firewall - a corridor where the guard keeps (precinct_<n>_guard), and the cells
+along the back (cell_<n>_<c>, each behind a firewall, cell_wall_<n>_<c>, which drops). The first cell's back
+wall has a loose panel (tunnel_panel_<n>, tunnel_<n> before it) onto a stair down into a tunnel
+under the podium, out at the side (tunnel_<n>_exit).
+
 Stores and banks to rob: some of the shops are stores to walk into, with shelves, a counter and a
 computer at the back keeping the takings (store_<n>); and six blocks have a bank on a corner, a hall
 behind a colonnade with a gold credit sign, a tellers' counter, four computers (bank_<n>_vault,
@@ -96,6 +104,12 @@ BANK_DOOR = (3.2, 4.2)
 BANK_DEEP = 14.0              # how deep a bank would be, to have room for its vault behind its hall
 VAULT = 3.6                   # the vault, from its wall to the back
 VAULT_DOOR = (1.8, 2.6)       # its doorway, wide and high
+PRECINCTS = ((4, 6), (9, 8), (7, 4))   # the blocks with a security precinct on a corner
+PRECINCT_SIZE = (20.0, 13.6)  # its building, along the street at most, and in
+PRECINCT_PODIUM = 3.0         # how high it stands, over the tunnel under it
+PRECINCT_HIGH = 3.4           # its rooms, floor to ceiling
+CELL = 3.0                    # a cell, along the block
+PRECINCT_LANDING = 2.0        # the landing before its door, out from it, up at the podium's height
 
 
 def rect(x0, x1, y0, y1):
@@ -165,6 +179,8 @@ class Urbs(Nexus):
         self.trade = random.Random(0)
         self.n_stores = self.n_banks = 0
         self.bank_here = False
+        self.precinct_here = False
+        self.n_precincts = 0
 
     # The geometry, gathered by tile.
 
@@ -891,6 +907,180 @@ def bank(m, poly, street_faces):
         br_town.marker(f"bank_{m.n_banks}_{name}", spot.x, spot.y, KERB, facing(face))
 
 
+
+def precinct_frame(poly, street_faces):
+    """Where a precinct on `poly` stands: the corner of its front at the street, which way along the
+    street and which way in, how far it has along the street and in - facing the street that
+    leaves it deep enough, the longest of those - or None if none does."""
+    x0, y0, x1, y1 = poly[0].x, poly[0].y, poly[2].x, poly[2].y
+    frames = {
+        0: (Vector((x0, y0, 0)), Vector((1, 0, 0)), Vector((0, 1, 0)), x1 - x0, y1 - y0),
+        2: (Vector((x1, y1, 0)), Vector((-1, 0, 0)), Vector((0, -1, 0)), x1 - x0, y1 - y0),
+        1: (Vector((x1, y0, 0)), Vector((0, 1, 0)), Vector((-1, 0, 0)), y1 - y0, x1 - x0),
+        3: (Vector((x0, y1, 0)), Vector((0, -1, 0)), Vector((1, 0, 0)), y1 - y0, x1 - x0),
+    }
+    fore = PRECINCT_LANDING + 0.4
+    fits = [f for f in street_faces if frames[f][4] - fore >= PRECINCT_SIZE[1] and frames[f][3] >= 15.0]
+    if not fits:
+        return None
+    return frames[max(fits, key=lambda f: frames[f][3])], fore
+
+
+def precinct_fits(lot, street_faces):
+    x0, x1, y0, y1 = lot
+    return precinct_frame(rect(x0 + 1.5, x1 - 1.5, y0 + 1.5, y1 - 1.5), street_faces) is not None
+
+
+def precinct(m, poly, street_faces):
+    """A security precinct: up on a podium, climbed by a flight from the street, a hall with the
+    desk across it and the evidence locker behind; a firewall through to the cell block, a corridor
+    along it, and the cells along the back, each behind a firewall; and from the first cell, a
+    loose panel onto a stair down into a tunnel under the podium, out at its side. Dark and hard,
+    lit in red and cyan. Its own stream of chance, so the rest of the city is as it was."""
+    rng = m.law
+    (start, u, v, length, reach), fore = precinct_frame(poly, street_faces)
+    w, depth = min(length - 1.0, PRECINCT_SIZE[0]), PRECINCT_SIZE[1]
+    a = start + u * ((length - w) / 2) + v * fore
+    m.n_precincts += 1
+    n = m.n_precincts
+    P, H, t = PRECINCT_PODIUM, PRECINCT_HIGH, WALL
+    up = Vector((0, 0, 1))
+    mat, trim = m.facades["slate"], m.facades["concrete"]
+    red, cyan = m.lines["red"], m.lines["cyan"]
+    # Where things are, from the front: the hall, the gate's wall, the corridor, the bars, the
+    # cells, their back wall, the stair and tunnel behind it, and the back wall.
+    hall, gate0, gate1, bars0, bars1 = 5.6, 5.6, 5.9, 8.3, 8.4
+    back0, back1, tunnel1 = 11.6, 11.9, 13.3
+    cells = int((w - 2 * t) // CELL)
+    landing = 1.2
+    steps = round((P - KERB) / RISE)
+    foot = t + landing + steps * RUN          # where the stair down ends, along the back
+    floor_ = P + H                            # the roof's underside
+    # The podium: solid under everything but the stair and tunnel along the back.
+    m.prism(quad(a, u, v, 0.0, w, 0.0, back1), 0.0, P, trim)
+    m.prism(quad(a, u, v, 0.0, t + landing, back1, tunnel1), 0.0, P, trim)
+    for k in range(steps - 1):
+        top = P - (k + 1) * RISE
+        m.prism(quad(a, u, v, t + landing + k * RUN, t + landing + (k + 1) * RUN, back1, tunnel1), 0.0, top, m.steps)
+    m.line(a + u * (t + landing) + v * (back1 + 0.05) + up * (P - 0.1), a + u * foot + v * (back1 + 0.05) + up * 0.3,
+           red, width=0.05)
+    # The tunnel's roof, from the stair's foot on, and all above it to the roof.
+    m.prism(quad(a, u, v, foot, w, back1, tunnel1), 2.6, floor_, trim)
+    m.line(a + u * foot + v * (back1 + tunnel1) / 2 + up * 2.55, a + u * (w - 0.2) + v * (back1 + tunnel1) / 2 + up * 2.55,
+           red, width=0.06, across=-up)
+    # The walls: front with its door, the sides - the far one with the tunnel's way out - and back.
+    door_w, door_h = 2.4, 2.9
+    d0, d1 = (w - door_w) / 2, (w + door_w) / 2
+    for u0, u1 in ((0.0, d0), (d1, w)):
+        m.prism(quad(a, u, v, u0, u1, 0.0, t), P, floor_, mat)
+    m.prism(quad(a, u, v, d0, d1, 0.0, t), P + door_h, floor_, mat)
+    m.prism(quad(a, u, v, 0.0, t, t, depth), 0.0, floor_, mat)
+    m.prism(quad(a, u, v, w - t, w, t, back1), P, floor_, mat)
+    m.prism(quad(a, u, v, w - t, w, tunnel1, depth), 0.0, floor_, mat)
+    m.prism(quad(a, u, v, w - t, w, back1, tunnel1), 2.4, floor_, mat)
+    m.prism(quad(a, u, v, t, w - t, tunnel1, depth), 0.0, floor_, mat)
+    # The roof, and offices over it: a dark block stepped back, its windows cool.
+    top = floor_ + 0.3
+    m.prism(quad(a, u, v, -0.3, w + 0.3, -0.3, depth + 0.3), floor_, top, mat)
+    over = top + rng.uniform(6.0, 12.0)
+    body = quad(a, u, v, 1.5, w - 1.5, 2.0, depth - 1.0)
+    m.prism(body, top, over, mat)
+    m.facade_windows(body, top + 0.8, over, 3.0, "cool", rng, lit=0.35)
+    m.ring(quad(a, u, v, -0.3, w + 0.3, -0.3, depth + 0.3), top + 0.02, red, width=0.1, light=False)
+    m.ring(body, over + 0.02, cyan, width=0.08, light=False)
+    m.fins(body, body, top, over, red)
+    # The landing before the door, and the flight up to it from the street along the front, lit
+    # red along its edge.
+    out = PRECINCT_LANDING
+    m.prism(quad(a, u, v, d0 - 0.6, d1 + 0.6, -out, 0.0), 0.0, P, trim)
+    m.line(a + u * (d0 - 0.6) - v * (out + 0.04) + up * (P - 0.05), a + u * (d1 + 0.6) - v * (out + 0.04) + up * (P - 0.05),
+           red, width=0.06, across=-v)
+    for k in range(steps - 1):
+        u0 = d1 + 0.6 + k * RUN
+        m.prism(quad(a, u, v, u0, u0 + RUN, -out, -0.02), 0.0, P - (k + 1) * RISE, m.steps)
+    m.line(a + u * (d1 + 0.6) - v * (out + 0.04) + up * (P - RISE), a + u * (d1 + 0.6 + (steps - 1) * RUN) - v * (out + 0.04) + up * 0.3,
+           red, width=0.06, across=-v)
+    # The badge over the door: a shield in cyan, a bar of red across it.
+    badge = a + u * (w / 2) - v * 0.06 + up * (P + door_h + 0.4)
+    shield = [badge + u * x + up * y for x, y in ((-0.6, 0.5), (0.6, 0.5), (0.6, -0.1), (0.0, -0.7), (-0.6, -0.1), (-0.6, 0.5))]
+    for p_, q_ in zip(shield, shield[1:]):
+        m.line(p_, q_, cyan, width=0.1, across=-v, light=False)
+    m.line(badge + u * -0.45 + up * 0.15, badge + u * 0.45 + up * 0.15, red, width=0.1, across=-v, light=False)
+    for k in (d0, d1):
+        m.line(a + u * k - v * 0.06 + up * P, a + u * k - v * 0.06 + up * (P + door_h), cyan, width=0.08)
+    # The hall: lit cyan; the desk across it, but for a way round at one end; the evidence locker
+    # against the far side wall behind it.
+    for k in (w * 0.3, w * 0.7):
+        m.line(a + u * k + v * 1.0 + up * (floor_ - 0.36), a + u * k + v * (hall - 0.8) + up * (floor_ - 0.36), cyan,
+               width=0.12)
+    desk = 2.4
+    m.prism(quad(a, u, v, t, w - t - 2.0, desk, desk + 0.7), P, P + 1.1, m.rail, col=m.cover)
+    m.line(a + u * t + v * (desk - 0.03) + up * (P + 1.1), a + u * (w - t - 2.0) + v * (desk - 0.03) + up * (P + 1.1),
+           red, width=0.05)
+    spot = a + u * (w / 2) + v * (desk + 1.5)
+    br_town.marker(f"precinct_{n}_desk", spot.x, spot.y, P, facing(-v))
+    spot = a + u * (w / 2) + v * (desk - 1.1)
+    br_town.marker(f"precinct_{n}", spot.x, spot.y, P, facing(v))
+    locker = quad(a, u, v, t, t + 0.6, desk + 1.1, hall - 0.2)
+    m.prism(locker, P, P + 2.0, m.facades["bronze"], col=m.cover)
+    m.line(a + u * (t + 0.62) + v * (desk + 1.1) + up * (P + 1.0), a + u * (t + 0.62) + v * (hall - 0.2) + up * (P + 1.0),
+           red, width=0.04, light=False)
+    spot = a + u * (t + 1.1) + v * ((desk + 1.1 + hall - 0.2) / 2)
+    br_town.marker(f"precinct_{n}_locker", spot.x, spot.y, P, facing(-u))
+    # The gate's wall across, and its gate: a firewall, which the game makes glow.
+    gw, gh = 1.4, 2.5
+    g0, g1 = w / 2 - gw / 2, w / 2 + gw / 2
+    for u0, u1 in ((t, g0), (g1, w - t)):
+        m.prism(quad(a, u, v, u0, u1, gate0, gate1), P, floor_, mat)
+    m.prism(quad(a, u, v, g0, g1, gate0, gate1), P + gh, floor_, mat)
+    gate = quad(a, u, v, g0 + 0.02, g1 - 0.02, gate0 + 0.1, gate1 - 0.1)
+    Nexus.mesh(m, *slab(gate, P + 0.02, P + gh - 0.02), m.struct, red).name = f"precinct_{n}_gate"
+    for k in (g0 - 0.08, g1 + 0.08):
+        m.line(a + u * k + v * (gate0 - 0.04) + up * P, a + u * k + v * (gate0 - 0.04) + up * (P + gh), red, width=0.08)
+    # The corridor, lit red, where the guard keeps.
+    m.line(a + u * 1.0 + v * (gate1 + bars0) / 2 + up * (floor_ - 0.3), a + u * (w - 1.0) + v * (gate1 + bars0) / 2 + up * (floor_ - 0.3),
+           red, width=0.1)
+    spot = a + u * (w / 2) + v * (gate1 + bars0) / 2
+    br_town.marker(f"precinct_{n}_guard", spot.x, spot.y, P, facing(u))
+    # The cells: walls between them, their back wall - the first's with its loose panel - and
+    # each behind a firewall.
+    end = t + cells * CELL
+    m.prism(quad(a, u, v, end, w - t, bars0, back0), P, floor_, mat)
+    panel0, panel1 = t + 0.1, t + landing
+    m.prism(quad(a, u, v, t, panel0, back0, back1), P, floor_, mat)
+    m.prism(quad(a, u, v, panel1, w - t, back0, back1), P, floor_, mat)
+    m.prism(quad(a, u, v, panel0, panel1, back0, back1), P + 2.2, floor_, mat)
+    panel = quad(a, u, v, panel0 + 0.02, panel1 - 0.02, back0 + 0.02, back1 - 0.02)
+    Nexus.mesh(m, *slab(panel, P + 0.02, P + 2.18), m.struct, trim).name = f"tunnel_panel_{n}"
+    spot = a + u * ((panel0 + panel1) / 2) + v * (back0 - 0.5)
+    br_town.marker(f"tunnel_{n}", spot.x, spot.y, P, facing(v))
+    spot = a + u * (w + 0.8) + v * ((back1 + tunnel1) / 2)
+    br_town.marker(f"tunnel_{n}_exit", spot.x, spot.y, KERB, facing(u))
+    m.prism(quad(a, u, v, end, w - t, bars0, bars1), P, floor_, mat)
+    fw = P + 2.6                              # a firewall's top, under its emitter
+    for c in range(cells):
+        c0, c1 = t + c * CELL, t + (c + 1) * CELL
+        if c > 0:
+            m.prism(quad(a, u, v, c0 - 0.1, c0 + 0.1, bars0, back0), P, floor_, mat)
+        cm = (c0 + c1) / 2
+        f0, f1 = c0 + (0.1 if c > 0 else 0.0), c1 - (0.1 if c < cells - 1 else 0.0)
+        # The firewall across its front, between its emitters - a sill in the floor and a beam
+        # over it, lit red - which the game makes glow, and drops when the cell is opened.
+        m.prism(quad(a, u, v, f0, f1, bars0 - 0.05, bars1 + 0.05), P, P + 0.06, m.rail)
+        m.prism(quad(a, u, v, f0, f1, bars0 - 0.1, bars1 + 0.1), fw, floor_, m.rail)
+        for z in (P + 0.06, fw):
+            m.line(a + u * f0 + v * (bars0 - 0.12) + up * z, a + u * f1 + v * (bars0 - 0.12) + up * z, red, width=0.04,
+                   light=False)
+        wall = quad(a, u, v, f0, f1, bars0 + 0.02, bars1 - 0.02)
+        Nexus.mesh(m, *slab(wall, P + 0.06, fw), m.struct, red).name = f"cell_wall_{n}_{c + 1}"
+        # Its bunk along the back, and a dim light over it.
+        m.prism(quad(a, u, v, c0 + 0.2, c0 + 2.1, back0 - 0.8, back0), P, P + 0.45, m.rail, col=m.cover)
+        m.line(a + u * (c0 + 0.4) + v * (back0 - 0.4) + up * (floor_ - 0.2), a + u * (c1 - 0.4) + v * (back0 - 0.4) + up * (floor_ - 0.2),
+               m.white, width=0.05)
+        spot = a + u * cm + v * ((bars1 + back0) / 2)
+        br_town.marker(f"cell_{n}_{c + 1}", spot.x, spot.y, P, facing(-v))
+
+
 def townhouses(m, rng, poly, district, street_faces):
     """A row of narrow houses, each its own height and colour, a lit door and windows each."""
     x0, y0, x1, y1 = poly[0].x, poly[0].y, poly[2].x, poly[2].y
@@ -1129,6 +1319,11 @@ def build_lot(m, rng, district, lot, block):
         m.tree(c.x, c.y, rng, size=1.2)
         return
     build = rng.choice(options)
+    if m.precinct_here and street and precinct_fits(lot, street):
+        m.precinct_here = False
+        precinct(m, poly, street)
+        m.n_buildings += 1
+        return
     if m.bank_here and street and small >= BANK_LOT:
         m.bank_here = False
         bank(m, poly, street)
@@ -1298,11 +1493,15 @@ def block(m, rng, i, j):
         special(m, rng, cx, cy, inner)
         return
     m.bank_here = (i, j) in BANKS
+    m.precinct_here = (i, j) in PRECINCTS
     for lot in lots(rng, district, *inner):
         build_lot(m, rng, district, lot, inner)
     if m.bank_here:
         print(f"[map] no lot for a bank in block {(i, j)}")
+    if m.precinct_here:
+        print(f"[map] no lot for a precinct in block {(i, j)}")
     m.bank_here = False
+    m.precinct_here = False
 
 
 def parked(m, rng):
@@ -1675,6 +1874,7 @@ def main():
     bpy.ops.wm.read_factory_settings(use_empty=True)
     m = Urbs(random.Random(seed + 1))
     m.trade = random.Random(seed + 2)
+    m.law = random.Random(seed + 3)
     ground(m)
     streets(m, rng)
     for i in range(BLOCKS):
@@ -1698,7 +1898,7 @@ def main():
     os.makedirs(os.path.dirname(out), exist_ok=True)
     bpy.ops.wm.save_as_mainfile(filepath=out)
     print(f"[map] seed={seed} {HALF * 2:.0f} m across, buildings={m.n_buildings} lights={m.n_lights} "
-          f"cover={m.n_cover} stores={m.n_stores} banks={m.n_banks} pieces of light={len(m.pieces)} -> {out}")
+          f"cover={m.n_cover} stores={m.n_stores} banks={m.n_banks} precincts={m.n_precincts} pieces of light={len(m.pieces)} -> {out}")
     if glb:
         glow_path = os.path.splitext(os.path.abspath(glb))[0] + ".glow.json"
         with open(glow_path, "w") as f:

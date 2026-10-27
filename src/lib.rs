@@ -11,7 +11,8 @@
 //! take cover against a wall - A and D slide along it, and lean round its corner at the edge - F
 //! for the flashlight, V for third or first person, hold the right mouse button to strafe, R to
 //! draw or holster the pistol, the left mouse button to draw it and fire, 1 to raise the shield
-//! (see [`shield`]), E to talk to a droid close by, N for a new maze, Escape to pause. Run with `cargo run` from this directory;
+//! (see [`shield`]), E to talk to a droid close by, H in Urbs to give yourself up to security (see
+//! [`jail`]), N for a new maze, Escape to pause. Run with `cargo run` from this directory;
 //! `MAZE_SIZE=<w>x<d>` sets how many junctions wide and deep the maze is, `MAZE_DEBUG=1` also prints
 //! the walkable map the game made of the level, `MAZE_SEED=<n>` makes every maze identical,
 //! `MAZE_WINDOWED=1` opens a window instead of filling the screen, and `MAZE_MODEL=<path>` plays a
@@ -45,11 +46,14 @@ pub mod game;
 mod generate;
 mod hud;
 mod inhabitants;
+mod jail;
 mod latency;
 mod layout;
 mod level;
+mod lockpick;
 mod menu;
 mod notes;
+mod precinct;
 pub mod platform;
 pub mod player;
 pub mod ragdoll;

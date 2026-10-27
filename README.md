@@ -119,6 +119,28 @@ the crate makes.
 
 ### The game
 
+26 October 2026:
+
+- **Jail in Urbs.** Three precincts stand on podiums in midtown: a hall with the desk and the
+  evidence locker, a firewall gate through to the cell block, and cells behind firewalls. When
+  security takes your last hit, or you put your hands up with H, you are arrested rather than
+  deleted: your pistol goes in the locker, everyone after you stands down, and you go in a cell
+  for as long as you are wanted for - every crime witnessed, reported or found adds to it. Five
+  ways out: serve the sentence; pick the firewall's lock, then the gate's; bribe a guard;
+  lift a guard's key card as it passes with its back to you; or, in the first cell, pry the
+  loose panel off its back wall and take the stair down into the tunnel under the podium.
+  Out without being let go, you have escaped: a guard that sees you in the precinct goes after
+  you, and caught again you are back in for longer. Your pistol is in the locker, behind the
+  desk. A guard that sees you picking or prying adds to your sentence.
+- **Picking a lock** is a phase lock: rings of light round a core, each drifting round, each
+  with a gap. Pick a ring and turn it - held, it stops drifting - until its gap is in the slot
+  at the top, where it lights up, and latch it there; latch one out of line and the trace jumps on. Every ring latched, the
+  firewall drops; the trace run out, the lock throws you out to start again.
+- **Any droid can be shot down**, and those that see it are witnesses: security goes after you,
+  and the rest run to the nearest sentry to tell it, unless you stop them first. A body no one
+  saw is found by the first to come across it. Self-defense is no crime - but shooting security
+  always is.
+
 17 October 2026:
 
 - **Urbs has its own dialogue**, `data/dialogue/urbs.json`: the same three kinds of droid, in
@@ -799,6 +821,12 @@ Pages.
 | Left mouse       | Draw the pistol; once it is drawn, fire                       |
 | Right mouse, drawn | Raise the pistol to aim, rather than hold it at the ready   |
 | E                | Talk to the droid close by and in front of you, or use the computer in front of you |
+| H                | In Urbs, with security after you: put your hands up and go quietly, for a shorter sentence |
+| E, held in a cell | At the firewall: pick its lock (with a key card, open it). At a guard facing you: ask its price to look away, then E again to pay. At a guard with its back to you, close by: lift its key card. At a loose panel: pry it, a little at a time |
+| Lock: W / S      | Pick a ring of the lock, further out or in                    |
+| Lock: A / D (hold) | Turn the picked ring; held, it stops drifting               |
+| Lock: Space      | Latch the ring, once its gap is in the slot at the top - it lights up yellow |
+| Lock: Tab        | Give up picking it                                            |
 | Talking: mouse, W / S, arrows | Pick a reply; E, Enter, Space or a click says it  |
 | Talking: 1 to 9  | Say that reply                                                |
 | Talking: Tab     | Walk away                                                     |
@@ -857,6 +885,7 @@ logs goes to the browser's console there.
 | `MAZE_SSAO=0`            | Turns ambient occlusion off.                                            |
 | `MAZE_REFLECTIONS=0`     | Turns floor reflections off.                                            |
 | `MAZE_KNOCKDOWN=<s>`     | That many seconds into a round, shoots down the droid nearest you, to try the ragdolls out. |
+| `MAZE_ARREST=<s>`        | In Urbs, that many seconds into a round, arrests you where you stand, to try jail out; with `MAZE_PICK=1` as well, starts picking your cell's lock. |
 | `MAZE_HEIST_OPEN=<n>`    | In a heist, the first n doors' computers count as hacked, to try it out. |
 | `MAZE_SHIELD=<s>`        | That many seconds into a round, raises your shield, as the 1 key does. |
 | `MAZE_DRONE_ALARM=<s>`   | That many seconds into a round, sends the drone after you as if the alarm had sounded, to try it out. |

@@ -1334,6 +1334,8 @@ impl Inhabitants {
                     && droid.pursuit.is_none()
                     && droid.side.is_none()
                     && droid.cover.is_none()
+                    && droid.witness.is_none()
+                    && droid.post.is_none()
                     && droid.speaking == 0.0
                     && flat(droid.feet - player).norm() < CHASE_SEEN
             };
@@ -3532,6 +3534,123 @@ impl Inhabitants {
         droid.enter(n, Some(Alert::Evasion), &mut self.alerts);
         self.alarmed.push(n);
         self.search_from = Some(at);
+    }
+
+    /// Has everyone after the player, searching for them or wary of them, or on their way to tell
+    /// a sentry of them, give it up: the player has been arrested. Those that did, as indices.
+    pub fn stand_down(&mut self) -> Vec<usize> {
+        let mut calmed = Vec::new();
+        for (n, droid) in self.droids.iter_mut().enumerate() {
+            if droid.down || droid.side.is_some() {
+                continue;
+            }
+            let was = droid.alert.is_some() || droid.witness.is_some() || droid.warned > 0;
+            droid.witness = None;
+            droid.warned = 0;
+            droid.threat = 0.0;
+            droid.sees_player = false;
+            if droid.alert.is_some() {
+                droid.alert = None;
+                droid.route.clear();
+                droid.trip = None;
+                droid.resting = REST.0;
+            }
+            if was {
+                calmed.push(n);
+            }
+        }
+        self.search = None;
+        self.last_sight = None;
+        self.search_from = None;
+        calmed
+    }
+
+    /// Puts a droid of the `character`th kind down to keep about `post`, on the floor of `grid`
+    /// whose corner is at `origin`, facing `heading`: one of a precinct's guards. It keeps to it for
+    /// good, never turning up again elsewhere as the crowd does, nor called off to a chase or a
+    /// shootout. Which it is, if it was put down.
+    pub fn post_guard(
+        &mut self,
+        scene: &mut Scene,
+        (grid, origin): (&WalkGrid, Vector3<f32>),
+        post: Vector3<f32>,
+        heading: f32,
+        character: usize,
+        rng: &mut Rng,
+    ) -> Option<usize> {
+        let feet = grid.cell_at(origin, post).filter(|&(x, z)| grid.is_walkable(x, z)).map(|cell| grid.on_floor(origin, cell))?;
+        if !self.spawn_one(scene, feet, heading, between(rng, (1.0, 4.0)), character, rng) {
+            return None;
+        }
+        let n = self.droids.len() - 1;
+        self.droids[n].post = Some(post);
+        Some(n)
+    }
+
+    /// Whether a droid of a kind `sentry` says is one is after the player within `reach` of `at`.
+    pub fn hunted_near(&self, at: Vector3<f32>, reach: f32, sentry: impl Fn(usize) -> bool) -> bool {
+        self.droids.iter().any(|droid| {
+            !droid.down
+                && sentry(droid.character)
+                && matches!(droid.alert, Some(Alert::Alert | Alert::Evasion))
+                && flat(droid.feet - at).norm() < reach
+        })
+    }
+
+    /// Whether the `n`th droid is after the player already.
+    pub fn is_hostile(&self, n: usize) -> bool {
+        self.droids.get(n).is_some_and(|droid| droid.alert == Some(Alert::Alert))
+    }
+
+    /// Moves where the `n`th droid keeps to, to `post`.
+    pub fn set_post(&mut self, n: usize, post: Vector3<f32>) {
+        if let Some(droid) = self.droids.get_mut(n) {
+            droid.post = Some(post);
+            droid.route.clear();
+            droid.resting = 0.0;
+        }
+    }
+
+    /// The first standing droid of a kind that `sentry` says is one, calm or not, that sees the
+    /// player at `at` - their body `them` - standing or as `posture` says, `in_the_dark` or not,
+    /// with nothing in the way but what is `see_through`, such as a firewall: as it would see them
+    /// at all.
+    #[allow(clippy::too_many_arguments)]
+    pub fn sentry_seeing(
+        &self,
+        graph: &Graph,
+        at: Vector3<f32>,
+        them: Handle<Collider>,
+        posture: Posture,
+        in_the_dark: bool,
+        see_through: &[Handle<Collider>],
+        sentry: impl Fn(usize) -> bool,
+    ) -> Option<usize> {
+        self.droids.iter().position(|droid| {
+            !droid.down
+                && droid.side.is_none()
+                && sentry(droid.character)
+                && Sight::default().could_see(droid.alert, droid.feet, droid.heading, at, posture.into(), in_the_dark)
+                && clear_between(
+                    graph,
+                    droid.feet + Vector3::new(0.0, FACE_HEIGHT, 0.0),
+                    at + Vector3::new(0.0, PLAYER_CHEST, 0.0),
+                    |collider| collider == droid.collider || collider == them || see_through.contains(&collider),
+                )
+        })
+    }
+
+    /// The nearest standing droid, calm, of a kind that `sentry` says is one, within `reach` of
+    /// `at` along the ground: which it is, and whether it has its back to `at`.
+    pub fn sentry_near(&self, at: Vector3<f32>, reach: f32, sentry: impl Fn(usize) -> bool) -> Option<(usize, bool)> {
+        self.droids
+            .iter()
+            .enumerate()
+            .filter(|(_, droid)| !droid.down && droid.alert.is_none() && droid.side.is_none() && sentry(droid.character))
+            .map(|(n, droid)| (n, flat(droid.feet - at).norm(), droid))
+            .filter(|&(_, off, _)| off < reach)
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(n, _, droid)| (n, forward(droid.heading).dot(&flat(at - droid.feet)) < 0.0))
     }
 
     /// Whether the `n`th droid has been stopped.

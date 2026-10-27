@@ -630,6 +630,16 @@ impl Drone {
         }
     }
 
+    /// Gives up on the player, the one it was after arrested: back to its patrol.
+    pub fn stand_down(&mut self) {
+        if matches!(self.state, State::Alert | State::Search { .. }) {
+            self.state = State::Patrol;
+            self.route.clear();
+            self.scanning = 0.0;
+            self.resting = REST.0;
+        }
+    }
+
     /// The alarm sounded, or a droid shot, with the player's feet at `at`: calm or searching, it
     /// searches there. What it has to say about it, if anything.
     pub fn alarm(&mut self, at: Vector3<f32>) -> Option<&'static str> {

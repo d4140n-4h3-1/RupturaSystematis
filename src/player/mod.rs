@@ -190,8 +190,10 @@ pub struct Player {
     orbit: Orbit,
     /// Where the droid's feet were the last time the graphics effects were told.
     last_seen: Option<Vector3<f32>>,
-    /// Whether the player wants the pistol out.
+    /// Whether the player wants the pistol out; and whether it has been taken off them, arrested,
+    /// so that they cannot.
     armed: bool,
+    confiscated: bool,
     /// The pistol's shots.
     bolts: pistol::Bolts,
     /// The pistol held in view in first person, once the droid has loaded, if it has one.
@@ -253,6 +255,7 @@ impl Default for Player {
             orbit: Orbit::default(),
             last_seen: None,
             armed: false,
+            confiscated: false,
             bolts: Default::default(),
             viewmodel: None,
             in_own_eyes: false,
@@ -386,6 +389,11 @@ impl Player {
     /// Where the player's feet are.
     pub fn feet(&self, graph: &Graph) -> Vector3<f32> {
         self.position(graph) + Vector3::new(0.0, FEET, 0.0)
+    }
+
+    /// Puts the player with their feet at `feet`, facing `yaw`, as [`Player::teleport`] does.
+    pub fn teleport_feet(&mut self, graph: &mut Graph, feet: Vector3<f32>, yaw: f32) {
+        self.teleport(graph, feet - Vector3::new(0.0, FEET, 0.0), yaw);
     }
 
     pub fn teleport(&mut self, graph: &mut Graph, position: Vector3<f32>, yaw: f32) {

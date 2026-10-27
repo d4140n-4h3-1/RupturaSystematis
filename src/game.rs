@@ -32,6 +32,8 @@ use crate::{
     formants::{self, chirps::Chirps, speech::Voices, synth, Load, DRONE_VOICE, VOICES},
     generate::Maze,
     glow::GlowLights,
+    jail::{self, Custody},
+    lockpick::{self, LockScreen, Picking, PhaseLock},
     roads::RoadPlan,
     hud::{self, Hud, Status},
     inhabitants::{Alert, Grouping, Inhabitants, Livery, News, Rival, Threat, HOSTILE_MODEL},
@@ -233,6 +235,16 @@ fn pitch(voices: &Voices, code: u32, mood: Mood) -> f32 {
     (1.0 + VOICE_SPREAD * ((code % 7) as f32 / 3.0 - 1.0)) * voices.mood_pitch(mood.name())
 }
 
+/// In jail (see [`jail`]): how near security has to be after the player for them to give
+/// themselves up to it, in meters, and how much of the sentence they serve for it; how long the
+/// corridor's guard stands before one cell before going on to another, in seconds; how near the
+/// evidence locker to take the pistol back, in meters; and how many counts getting away adds.
+const SURRENDER_REACH: f32 = 20.0;
+const SURRENDERED: f32 = 0.75;
+const BEAT: f32 = 12.0;
+const LOCKER_REACH: f32 = 1.6;
+const ESCAPE_COUNTS: u32 = 2;
+
 /// How many drones there are: one patrolling each round, the rest waiting out of sight to be
 /// called in by a failed hack.
 const DRONES: usize = 4;
@@ -274,6 +286,39 @@ pub struct MazeGame {
     #[visit(skip)]
     #[reflect(hidden)]
     chase_barks: Vec<(usize, &'static str, Mood)>,
+    /// In a city with precincts (see [`jail`]): the player's custody, while they are held or have
+    /// escaped; how many counts they are wanted for; whose evidence locker has their pistol, if
+    /// one has; each precinct's guards, at its desk and in its corridor, and how long till the
+    /// one in the corridor walks on to another cell; the lock being picked, and whether it is the
+    /// gate's, and which way it is being turned - A and D - and its screen.
+    #[visit(skip)]
+    #[reflect(hidden)]
+    custody: Option<Custody>,
+    #[visit(skip)]
+    #[reflect(hidden)]
+    wanted: u32,
+    #[visit(skip)]
+    #[reflect(hidden)]
+    locker: Option<usize>,
+    #[visit(skip)]
+    #[reflect(hidden)]
+    precinct_guards: Vec<[Option<usize>; 2]>,
+    #[visit(skip)]
+    #[reflect(hidden)]
+    beat_in: f32,
+    #[visit(skip)]
+    #[reflect(hidden)]
+    picking: Option<(PhaseLock, bool)>,
+    #[visit(skip)]
+    #[reflect(hidden)]
+    lock_turn: (bool, bool),
+    #[visit(skip)]
+    #[reflect(hidden)]
+    lock_screen: Option<LockScreen>,
+    /// Whether MAZE_ARREST has arrested the player this round yet.
+    #[visit(skip)]
+    #[reflect(hidden)]
+    tried_arrest: bool,
     #[visit(skip)]
     #[reflect(hidden)]
     prefabs: Option<Prefabs>,
@@ -1059,6 +1104,16 @@ impl MazeGame {
             shield.reset(&mut ctx.scenes[self.scene].graph);
         }
         self.knocked_down = false;
+        // Free, armed, wanted for nothing, every precinct shut, and its guards to be put down.
+        self.custody = None;
+        self.wanted = 0;
+        self.locker = None;
+        self.precinct_guards.clear();
+        self.tried_arrest = false;
+        self.player.set_confiscated(false);
+        self.stop_picking(ctx);
+        let grid = self.level.grid.as_mut().map(|(grid, _)| grid);
+        self.level.precincts.reset(&mut ctx.scenes[self.scene].graph, grid);
         self.phase = Phase::Playing;
         self.set_banner(ctx, "");
         self.start_royale(ctx);
@@ -1267,7 +1322,7 @@ impl MazeGame {
                 credits: self.credits,
                 shield: self.shield.as_ref().filter(|s| s.charge.is_up()).map(|s| s.charge.health()),
                 shield_ready: self.shield.as_ref().is_some_and(Shield::can_raise),
-                objective: self.heist.as_ref().map(Heist::objective),
+                objective: self.heist.as_ref().map(Heist::objective).or_else(|| self.jail_objective()),
             },
         };
         // Healing only while playing; the flash of the last hit fades out after too.
@@ -1397,6 +1452,9 @@ impl MazeGame {
             }
             KeyCode::Escape => self.set_paused(ctx, !self.menu.is_open()),
             _ if self.talking.is_some() && !self.menu.is_open() => self.on_talking_key(ctx, code),
+            _ if self.picking.is_some() && !self.menu.is_open() => self.on_picking_key(ctx, code),
+            KeyCode::KeyE if !self.menu.is_open() && self.jail_action(ctx) => (),
+            KeyCode::KeyH if !self.menu.is_open() && self.phase == Phase::Playing => self.surrender(ctx),
             KeyCode::KeyE if !self.menu.is_open() && self.talkable.is_some() => {
                 self.start_talking(ctx)
             }
@@ -1602,6 +1660,23 @@ impl MazeGame {
                         )
                     }
                 },
+            }
+        }
+        // In a city with precincts, once the crowd is down, two guards at each: one at the desk,
+        // one in the corridor along the cells.
+        if self.story && self.precinct_guards.is_empty() && self.inhabitants.is_populated() {
+            let script = self.script.as_ref();
+            let kind = script.and_then(|script| (0..script.characters.len()).find(|&c| is_sentry(script, c)));
+            if let Some(kind) = kind {
+                for precinct in &self.level.precincts.precincts {
+                    let facing = |from: Vector3<f32>, to: Vector3<f32>| (to - from).x.atan2((to - from).z);
+                    let desk = self.inhabitants.post_guard(scene, (grid, *origin), precinct.desk, facing(precinct.desk, precinct.front), kind, rng);
+                    let corridor = self.inhabitants.post_guard(scene, (grid, *origin), precinct.guard, 0.0, kind, rng);
+                    self.precinct_guards.push([desk, corridor]);
+                }
+                if !self.precinct_guards.is_empty() {
+                    Log::info(format!("Precincts: {} guarded", self.precinct_guards.len()));
+                }
             }
         }
         let graph = &scene.graph;
@@ -1851,6 +1926,9 @@ impl MazeGame {
                 None => (),
             }
         }
+        if !running.is_empty() {
+            self.wanted += 1;
+        }
         match running[..] {
             [] => (),
             [m] => {
@@ -1890,10 +1968,12 @@ impl MazeGame {
                 }
                 None => continue,
             }
+            self.wanted += 1;
             let name = self.name_of(m).unwrap_or_else(|| "A droid".into());
             self.hud.show_note(format!("{name} found one you shot down"));
         }
         for (m, s, at) in reports.told {
+            self.wanted += 1;
             self.inhabitants.set_eyes(m, None);
             self.bark(m, "reported", Mood::Agitated);
             self.inhabitants.search_at(s, at);
@@ -1922,6 +2002,10 @@ impl MazeGame {
             let last = self.health.hit();
             let at = self.player.position(graph);
             self.health_sounds.play(graph, Heard::Hit, at);
+            if last && side == Side::Security && self.in_jail_city() {
+                self.arrest(ctx, "security");
+                return;
+            }
             if last {
                 self.gloat(side);
                 // Caught in a shootout's crossfire, by whichever side it was.
@@ -2221,6 +2305,7 @@ impl MazeGame {
         if threat != Threat::Provoked {
             return;
         }
+        self.wanted += 1;
         match self.threatened(n).map(|threatened| threatened.then) {
             Some(Provoked::Attacks) => self.inhabitants.set_hostile(n),
             Some(Provoked::Alarm) => {
@@ -2324,6 +2409,10 @@ impl MazeGame {
                 self.health_sounds.play(graph, Heard::Hit, at);
                 if last {
                     let name = self.name_of(n).unwrap_or_else(|| "A droid".into());
+                    if self.arrests(n) {
+                        self.arrest(ctx, &name);
+                        return false;
+                    }
                     self.delete_player(ctx, &name);
                 }
                 last
@@ -2970,10 +3059,423 @@ impl MazeGame {
         self.say_when_made(ctx);
     }
 
+    /// Whether this is a city with precincts, where security arrests rather than deletes.
+    fn in_jail_city(&self) -> bool {
+        self.story && !self.level.precincts.precincts.is_empty()
+    }
+
+    /// Whether the `n`th droid arrests the player, taking their last hit: security, in a city with
+    /// precincts.
+    fn arrests(&self, n: usize) -> bool {
+        self.in_jail_city()
+            && self.inhabitants.who(n).zip(self.script.as_ref()).is_some_and(|((character, _), script)| is_sentry(script, character))
+    }
+
+    /// Arrests the player, by `by`: their pistol into the nearest precinct's evidence locker,
+    /// everyone after them standing down, and they into one of its cells, behind its firewall,
+    /// for as long as they are wanted for - longer for having escaped before.
+    fn arrest(&mut self, ctx: &mut PluginContext, by: &str) {
+        let graph = &mut ctx.scenes[self.scene].graph;
+        let feet = self.player.feet(graph);
+        let Some(p) = self.level.precincts.nearest(feet) else {
+            return;
+        };
+        let cells = self.level.precincts.precincts[p].cells.len();
+        if cells == 0 {
+            return;
+        }
+        self.stop_talking(ctx);
+        self.stop_hacking(ctx);
+        self.stop_picking(ctx);
+        let again = self.custody.is_some_and(|custody| custody.escaped);
+        let c = self.rng().below(cells);
+        let graph = &mut ctx.scenes[self.scene].graph;
+        // Every firewall in it shut again behind them.
+        let mut grid = self.level.grid.as_mut().map(|(grid, _)| grid);
+        for k in 0..cells {
+            self.level.precincts.set_cell(graph, (p, k), false, grid.as_deref_mut());
+        }
+        self.level.precincts.set_gate(graph, p, false, grid);
+        let cell = &self.level.precincts.precincts[p].cells[c];
+        let (middle, wall) = (cell.middle, cell.wall.middle());
+        let to_wall = wall - middle;
+        self.player.teleport_feet(graph, middle + Vector3::new(0.0, 0.1, 0.0), to_wall.x.atan2(to_wall.z));
+        self.player.set_confiscated(true);
+        self.locker = Some(p);
+        self.health = Health::default();
+        let mut custody = Custody::new(p, c, self.wanted);
+        if again {
+            custody.sentence += jail::CAUGHT_AGAIN;
+        }
+        self.wanted = 0;
+        self.custody = Some(custody);
+        for n in self.inhabitants.stand_down() {
+            self.inhabitants.set_eyes(n, None);
+        }
+        for drone in &mut self.drones {
+            drone.stand_down();
+        }
+        let tunnel = self.level.precincts.precincts[p].tunnel.is_some() && c == 0;
+        Log::info(format!("Arrested by {by}: precinct {}, cell {}, {:.0} s", p + 1, c + 1, custody.sentence));
+        self.hud.show_note(format!(
+            "Arrested by {by}: {} in a cell. E at the firewall to pick it, at a guard to bribe it{}",
+            hud::format_time(custody.sentence),
+            if tunnel { ", at the loose panel to pry it" } else { "" }
+        ));
+    }
+
+    /// Puts the player's hands up, with security after them: arrested, for a little less.
+    fn surrender(&mut self, ctx: &mut PluginContext) {
+        if !self.in_jail_city() || self.custody.is_some_and(|custody| !custody.escaped) {
+            return;
+        }
+        let feet = self.player.feet(&ctx.scenes[self.scene].graph);
+        let Some(script) = self.script.as_ref() else {
+            return;
+        };
+        let sentries: Vec<bool> = (0..script.characters.len()).map(|c| is_sentry(script, c)).collect();
+        if !self.inhabitants.hunted_near(feet, SURRENDER_REACH, |c| sentries.get(c).copied().unwrap_or(false)) {
+            self.hud.show_note("No security near enough to give yourself up to".to_string());
+            return;
+        }
+        self.arrest(ctx, "security, hands up");
+        if let Some(custody) = self.custody.as_mut() {
+            custody.sentence *= SURRENDERED;
+        }
+    }
+
+    /// Lets the player go, from where they are held: their cell's firewall and the gate down, and
+    /// the guards none the wiser. `how` says so.
+    fn release(&mut self, ctx: &mut PluginContext, how: &str) {
+        let Some(custody) = self.custody.take() else {
+            return;
+        };
+        let graph = &mut ctx.scenes[self.scene].graph;
+        let mut grid = self.level.grid.as_mut().map(|(grid, _)| grid);
+        self.level.precincts.set_cell(graph, (custody.precinct, custody.cell), true, grid.as_deref_mut());
+        self.level.precincts.set_gate(graph, custody.precinct, true, grid);
+        self.wanted = 0;
+        self.hud.show_note(format!("{how}: your pistol is in the evidence locker behind the desk"));
+        Log::info(format!("Jail: {how}"));
+    }
+
+    /// What the player held can do, for the status line.
+    fn jail_objective(&self) -> Option<String> {
+        let custody = self.custody?;
+        Some(match (custody.escaped, custody.offer) {
+            (true, _) => "Escaped: get clear of the precinct unseen".to_string(),
+            (false, Some((_, price, _))) => format!("Sentence {}    E: pay the guard {price} credits", hud::format_time(custody.sentence)),
+            (false, None) => format!("Sentence {}", hud::format_time(custody.sentence)),
+        })
+    }
+
+    /// Does what E does for the player held, or for their pistol: whether it did anything.
+    fn jail_action(&mut self, ctx: &mut PluginContext) -> bool {
+        if !self.in_jail_city() || self.phase != Phase::Playing {
+            return false;
+        }
+        let graph = &ctx.scenes[self.scene].graph;
+        let feet = self.player.feet(graph);
+        // Their pistol back, from the locker, once out.
+        if let Some(p) = self.locker.filter(|_| self.custody.is_none_or(|custody| custody.escaped)) {
+            let locker = self.level.precincts.precincts[p].locker;
+            if (locker - feet).xz().norm() < LOCKER_REACH && (locker.y - feet.y).abs() < 1.5 {
+                self.locker = None;
+                self.player.set_confiscated(false);
+                self.hud.show_note("Your pistol, back from the evidence locker".to_string());
+                return true;
+            }
+        }
+        let Some(mut custody) = self.custody else {
+            return false;
+        };
+        let Some(script) = self.script.as_ref() else {
+            return false;
+        };
+        let sentries: Vec<bool> = (0..script.characters.len()).map(|c| is_sentry(script, c)).collect();
+        let sentry = |c: usize| sentries.get(c).copied().unwrap_or(false);
+        let p = custody.precinct;
+        let precinct = &self.level.precincts.precincts[p];
+        let wall = &precinct.cells[custody.cell].wall;
+        let in_cell = self.level.precincts.in_cell((p, custody.cell), feet);
+        let near_wall = in_cell && !wall.is_open() && wall.distance(feet) < jail::AT_LOCK;
+        let near_gate = !precinct.gate.is_open() && precinct.gate.distance(feet) < jail::AT_LOCK && !in_cell;
+        let near_panel = precinct
+            .tunnel
+            .as_ref()
+            .filter(|tunnel| custody.cell == 0 && tunnel.pried < 1.0)
+            .is_some_and(|tunnel| (tunnel.at - feet).xz().norm() < jail::AT_LOCK);
+        let guard = self.inhabitants.sentry_near(feet, jail::GUARD_REACH, sentry);
+        let done = if let Some((g, price, _)) = custody.offer.filter(|_| in_cell) {
+            // Paying what the guard asked.
+            if self.credits.spend(Credits::new(price, 0)) {
+                self.custody = Some(custody);
+                self.bark(g, "calmed", Mood::Normal);
+                self.release(ctx, &format!("The guard took {price} credits and looked away"));
+                return true;
+            }
+            self.hud.show_note(format!("You have not got {price} credits"));
+            custody.offer = None;
+            true
+        } else if let Some((g, true)) = guard.filter(|_| in_cell && !custody.card) {
+            // Its back to them: within reach, its key card.
+            let feet_of = self.inhabitants.feet(g).unwrap_or(feet);
+            if (feet_of - feet).xz().norm() < jail::CARD_REACH {
+                custody.card = true;
+                self.hud.show_note("You lifted the guard's key card: E at the firewall, then at the gate".to_string());
+            } else {
+                self.hud.show_note("The guard is too far off to reach through the firewall".to_string());
+            }
+            true
+        } else if let Some((g, false)) = guard.filter(|_| in_cell) {
+            // Facing them: what it would take to look away.
+            let price = jail::bribe(custody.sentence);
+            custody.offer = Some((g, price, jail::OFFER_STANDS));
+            self.bark(g, "warned", Mood::Warning);
+            self.hud.show_note(format!("The guard would look away for {price} credits: E again to pay"));
+            true
+        } else if near_wall || near_gate {
+            if custody.card {
+                let graph = &mut ctx.scenes[self.scene].graph;
+                let grid = self.level.grid.as_mut().map(|(grid, _)| grid);
+                if near_wall {
+                    self.level.precincts.set_cell(graph, (p, custody.cell), true, grid);
+                } else {
+                    self.level.precincts.set_gate(graph, p, true, grid);
+                }
+                self.hud.show_note("The key card opens it".to_string());
+            } else {
+                let lock = if near_gate { lockpick::GATE_LOCK } else { lockpick::CELL_LOCK };
+                let phase = PhaseLock::new(lock, self.rng());
+                self.picking = Some((phase, near_gate));
+                self.lock_turn = (false, false);
+                self.player.release_keys();
+            }
+            true
+        } else if near_panel {
+            custody.prying = !custody.prying;
+            self.hud.show_note(match custody.prying {
+                true => "Prying the panel loose: stay by it, unseen".to_string(),
+                false => "You leave the panel be".to_string(),
+            });
+            true
+        } else {
+            false
+        };
+        self.custody = Some(custody);
+        done
+    }
+
+    /// A key while a lock is being picked: W and S pick a ring, Space latches it, Tab gives up.
+    fn on_picking_key(&mut self, ctx: &mut PluginContext, code: KeyCode) {
+        let Some((lock, _)) = self.picking.as_mut() else {
+            return;
+        };
+        match code {
+            KeyCode::KeyW | KeyCode::ArrowUp => lock.pick(1),
+            KeyCode::KeyS | KeyCode::ArrowDown => lock.pick(-1),
+            KeyCode::Space | KeyCode::Enter => lock.latch(),
+            KeyCode::Tab | KeyCode::KeyE => self.stop_picking(ctx),
+            _ => (),
+        }
+    }
+
+    /// Stops picking the lock, if one was being picked, and puts its screen away.
+    fn stop_picking(&mut self, ctx: &mut PluginContext) {
+        self.picking = None;
+        self.lock_turn = (false, false);
+        if let Some(screen) = &self.lock_screen {
+            screen.show(ctx.user_interfaces.first(), false);
+        }
+    }
+
+    /// Sees to the player held, or escaped, for another frame: the sentence running down in the
+    /// cell, the lock being picked, the panel being pried, the guards' beat and what they see,
+    /// and getting away.
+    fn see_to_jail(&mut self, ctx: &mut PluginContext) {
+        if !self.in_jail_city() {
+            return;
+        }
+        let dt = ctx.dt;
+        self.level.precincts.flicker(self.round_time);
+        // With MAZE_ARREST=<seconds>, to try jail out: that far into the round, the player is
+        // arrested where they stand; and with MAZE_PICK as well, starts picking their cell's lock.
+        let arrest_at = platform::var("MAZE_ARREST").and_then(|s| s.trim().parse::<f32>().ok());
+        if arrest_at.is_some_and(|at| self.round_time >= at) && !self.tried_arrest {
+            self.tried_arrest = true;
+            self.arrest(ctx, "MAZE_ARREST");
+            if platform::var("MAZE_PICK").is_some() {
+                let phase = PhaseLock::new(lockpick::CELL_LOCK, self.rng());
+                self.picking = Some((phase, false));
+            }
+        }
+        // The corridor's guards walk on to stand before another cell now and then.
+        self.beat_in -= dt;
+        if self.beat_in <= 0.0 {
+            self.beat_in = BEAT;
+            for (p, guards) in self.precinct_guards.clone().into_iter().enumerate() {
+                let Some(n) = guards[1] else {
+                    continue;
+                };
+                let cells = self.level.precincts.precincts[p].cells.len();
+                if cells == 0 {
+                    continue;
+                }
+                let k = self.rng().below(cells);
+                let cell = &self.level.precincts.precincts[p].cells[k];
+                let out = (cell.wall.middle() - cell.middle).xz().try_normalize(1.0e-3);
+                if let Some(out) = out {
+                    let before = cell.wall.middle() + Vector3::new(out.x, 0.0, out.y) * 1.1;
+                    self.inhabitants.set_post(n, Vector3::new(before.x, cell.middle.y, before.z));
+                }
+            }
+        }
+        let Some(mut custody) = self.custody else {
+            return;
+        };
+        let graph = &ctx.scenes[self.scene].graph;
+        let feet = self.player.feet(graph);
+        let p = custody.precinct;
+        // Dropped through the floor just after being put in: back in.
+        custody.held += dt;
+        let middle = self.level.precincts.precincts[p].cells[custody.cell].middle;
+        if !custody.escaped && custody.held < jail::PUT_BACK && feet.y < middle.y - 0.5 && (feet - middle).xz().norm() < 2.0 {
+            let wall = self.level.precincts.precincts[p].cells[custody.cell].wall.middle();
+            let graph = &mut ctx.scenes[self.scene].graph;
+            self.player.teleport_feet(graph, middle + Vector3::new(0.0, 0.1, 0.0), (wall - middle).x.atan2((wall - middle).z));
+            custody.settled = false;
+            self.custody = Some(custody);
+            Log::warn("Jail: dropped through the cell's floor, put back");
+            return;
+        }
+        let in_cell = self.level.precincts.in_cell((p, custody.cell), feet);
+        custody.settled |= in_cell;
+        if !custody.escaped && !in_cell && custody.settled {
+            custody.escaped = true;
+            custody.offer = None;
+            self.hud.show_note("You are out of the cell: get clear of the precinct, unseen".to_string());
+            Log::info("Jail: out of the cell");
+        }
+        if let Some((_, _, left)) = custody.offer.as_mut() {
+            *left -= dt;
+        }
+        custody.offer = custody.offer.filter(|&(_, _, left)| left > 0.0);
+        // The lock being picked.
+        let mut opened = None;
+        if let Some((lock, gate)) = self.picking.as_mut() {
+            let turn = match self.lock_turn {
+                (true, false) => -1.0,
+                (false, true) => 1.0,
+                _ => 0.0,
+            };
+            match lock.update(turn, dt) {
+                Picking::Going => (),
+                Picking::Opened => opened = Some(*gate),
+                Picking::Thrown => (),
+            }
+            if lock.trace <= 0.0 {
+                self.hud.show_note("The lock threw the pick out: start again".to_string());
+                self.picking = None;
+            }
+        }
+        if let Some(gate) = opened {
+            self.picking = None;
+            let graph = &mut ctx.scenes[self.scene].graph;
+            let grid = self.level.grid.as_mut().map(|(grid, _)| grid);
+            if gate {
+                self.level.precincts.set_gate(graph, p, true, grid);
+                self.hud.show_note("The gate's firewall drops".to_string());
+            } else {
+                self.level.precincts.set_cell(graph, (p, custody.cell), true, grid);
+                self.hud.show_note("The firewall drops: now the gate".to_string());
+            }
+        }
+        // Its screen, drawn as it is now.
+        if self.picking.is_some() && self.lock_screen.is_none() {
+            self.lock_screen = Some(LockScreen::build(ctx.user_interfaces.first_mut()));
+        }
+        if let Some(screen) = &self.lock_screen {
+            let ui = ctx.user_interfaces.first_mut();
+            screen.show(ui, self.picking.is_some());
+            if let Some((lock, _)) = &self.picking {
+                screen.draw(ui, lock);
+            }
+        }
+        // The panel being pried: by it, a little more each moment.
+        if custody.prying {
+            let at_panel = self.level.precincts.precincts[p]
+                .tunnel
+                .as_ref()
+                .is_some_and(|tunnel| (tunnel.at - feet).xz().norm() < jail::AT_LOCK);
+            if !at_panel {
+                custody.prying = false;
+            } else if let Some(tunnel) = self.level.precincts.precincts[p].tunnel.as_mut() {
+                tunnel.pried += dt / jail::PRYING;
+                if tunnel.pried >= 1.0 {
+                    custody.prying = false;
+                    self.level.precincts.open_tunnel(&mut ctx.scenes[self.scene].graph, p);
+                    self.hud.show_note("The panel comes away: a stair down, into a tunnel".to_string());
+                }
+            }
+        }
+        // What the guards see: one escaped, in the precinct, they go after; one at something, they
+        // stop, and add to their sentence.
+        let graph = &ctx.scenes[self.scene].graph;
+        let in_the_dark = self.lights_off && !self.player.flashlight_on();
+        let glass = self.level.precincts.glass(p);
+        let seen = self.script.as_ref().and_then(|script| {
+            let sentries: Vec<bool> = (0..script.characters.len()).map(|c| is_sentry(script, c)).collect();
+            self.inhabitants.sentry_seeing(
+                graph,
+                feet,
+                self.player.collider(),
+                self.player.posture(),
+                in_the_dark,
+                &glass,
+                |c| sentries.get(c).copied().unwrap_or(false),
+            )
+        });
+        let at_it = self.picking.is_some() || custody.prying;
+        if let Some(g) = seen {
+            if custody.escaped && self.level.precincts.inside(p, feet) && !self.inhabitants.is_hostile(g) {
+                self.stop_picking(ctx);
+                self.inhabitants.set_hostile(g);
+                self.bark(g, "spotted", Mood::Hostile);
+                if let Some(script) = self.script.as_ref() {
+                    let sentries: Vec<bool> = (0..script.characters.len()).map(|c| is_sentry(script, c)).collect();
+                    self.inhabitants.raise_alarm(g, feet, |c| sentries.get(c).copied().unwrap_or(false));
+                }
+                self.hud.show_note("A guard saw you out of your cell".to_string());
+            } else if !custody.escaped && at_it {
+                self.stop_picking(ctx);
+                custody.prying = false;
+                custody.sentence += jail::CAUGHT_AT_IT;
+                self.bark(g, "warned_again", Mood::Agitated);
+                self.hud.show_note(format!("A guard saw you at it: {} more", hud::format_time(jail::CAUGHT_AT_IT)));
+            }
+        }
+        // The sentence runs down in the cell, and then they are let go.
+        if !custody.escaped && in_cell {
+            custody.sentence -= dt;
+        }
+        // Away, well clear and unseen.
+        let front = self.level.precincts.precincts[p].front;
+        let away = custody.escaped && seen.is_none() && (front - feet).xz().norm() > jail::AWAY && self.inhabitants.alarm().is_none();
+        self.custody = Some(custody);
+        if !custody.escaped && custody.sentence <= 0.0 {
+            self.release(ctx, "Sentence served");
+        } else if away {
+            self.custody = None;
+            self.wanted += ESCAPE_COUNTS;
+            self.hud.show_note("You got away".to_string());
+            Log::info("Jail: got away");
+        }
+    }
+
     /// Whether the player is talking or at the computer, and so held still, with the keys and
     /// the mouse for that.
     fn busy(&self) -> bool {
-        self.talking.is_some() || self.hacking
+        self.talking.is_some() || self.hacking || self.picking.is_some()
     }
 
     /// Puts the computers into the scene once their model has loaded, and about the maze once a
@@ -3939,6 +4441,7 @@ impl Plugin for MazeGame {
                     self.threaten(ctx);
                 }
                 self.see_to_witnesses(ctx);
+                self.see_to_jail(ctx);
                 // Not won from the void, however close under the flag they fall.
                 if !self.move_inhabitants(ctx) && self.phase == Phase::Playing {
                     let scene = &mut ctx.scenes[self.scene];
@@ -4198,6 +4701,12 @@ impl Plugin for MazeGame {
                         // key still counts.
                         if (!self.menu.is_open() && !self.busy()) || !pressed {
                             self.player.on_key(code, pressed);
+                        }
+                        // Picking a lock, A and D turn its ring for as long as they are held.
+                        match code {
+                            KeyCode::KeyA | KeyCode::ArrowLeft => self.lock_turn.0 = pressed && self.picking.is_some(),
+                            KeyCode::KeyD | KeyCode::ArrowRight => self.lock_turn.1 = pressed && self.picking.is_some(),
+                            _ => (),
                         }
                         // At the computer, what is typed goes to it; Enter and Tab are keys.
                         if pressed && !input.repeat && self.hacking && !self.menu.is_open() {
