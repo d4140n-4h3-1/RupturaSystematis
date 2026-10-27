@@ -70,7 +70,7 @@
 //! no one. One the player shot down that no one saw is found by the first to see it lying there
 //! (see [`Inhabitants::find_bodies`]): a sentry searches from there, and any other runs to tell
 //! one. Shooting one that is after the player is self-defense: no one minds seeing it, nor finding
-//! it lying there.
+//! it lying there - unless it is a sentry, which the game takes as assault, whatever it was doing.
 //!
 //! A droid that is not hostile minds having the player's pistol pointed at it (see
 //! [`Inhabitants::feel_aimed_at`]): for as long as its kind stands for it, and then it stops,
@@ -3540,7 +3540,8 @@ impl Inhabitants {
     }
 
     /// Whether the `n`th droid is after the player, standing: shooting it is self-defense, no
-    /// crime to be witnessed, and no body to report (see [`Inhabitants::witnesses`]).
+    /// crime to be witnessed, and no body to report (see [`Inhabitants::witnesses`]) - unless the
+    /// game holds its kind above that, as it does sentries.
     pub fn attacking_player(&self, n: usize) -> bool {
         self.droids
             .get(n)

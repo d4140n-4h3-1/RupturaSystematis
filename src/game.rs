@@ -1772,8 +1772,11 @@ impl MazeGame {
             }
             droid_shot |= self.inhabitants.hit(collider).is_some();
             // Shooting one standing, the player may be seen doing it - unless it is after them:
-            // that is self-defense.
-            let crime = |n: usize| !self.inhabitants.is_down(n) && !self.inhabitants.attacking_player(n);
+            // that is self-defense. Shooting a sentry is assault, whatever it was doing.
+            let sentry = |n: usize| {
+                self.inhabitants.who(n).zip(self.script.as_ref()).is_some_and(|((character, _), script)| is_sentry(script, character))
+            };
+            let crime = |n: usize| !self.inhabitants.is_down(n) && (sentry(n) || !self.inhabitants.attacking_player(n));
             if let Some(n) = self.inhabitants.hit(collider).filter(|&n| crime(n)) {
                 if !victims.contains(&n) {
                     victims.push(n);
