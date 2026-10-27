@@ -38,6 +38,8 @@ const OPENING: f32 = 3.0;
 /// How near the middle of the strongroom the player's feet have to come to take what is in it,
 /// across and up, in meters.
 const TAKE_WITHIN: (f32, f32) = (1.6, 1.5);
+/// How near the middle of a strongroom somewhere has to be to be in it, across and up, in meters.
+const INSIDE: (f32, f32) = (4.0, 2.0);
 
 #[derive(Debug, Default, PartialEq)]
 pub struct Vaults {
@@ -188,6 +190,19 @@ impl Vaults {
         let vault = self.vaults.iter_mut().find(|vault| vault.computer == Some(computer))?;
         vault.open = true;
         Log::info(format!("Vault {}: opened", vault.bank));
+        Some(vault.hinge)
+    }
+
+    /// Opens, from inside, a vault whose strongroom `at` is in and whose door is shut: there is
+    /// no opening it from its computer, out in the bank, from in there. Where its door is, if
+    /// one was.
+    pub fn open_from_inside(&mut self, at: Vector3<f32>) -> Option<Vector3<f32>> {
+        let vault = self.vaults.iter_mut().find(|vault| {
+            !vault.open
+                && vault.middle.is_some_and(|middle| (at - middle).xz().norm() < INSIDE.0 && (at.y - middle.y).abs() < INSIDE.1)
+        })?;
+        vault.open = true;
+        Log::info(format!("Vault {}: opened from inside", vault.bank));
         Some(vault.hinge)
     }
 

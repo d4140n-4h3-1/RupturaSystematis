@@ -336,6 +336,10 @@ pub struct MazeGame {
     #[visit(skip)]
     #[reflect(hidden)]
     tried_grate: bool,
+    /// Whether MAZE_TUNNELS_UP has brought the player back up yet this round.
+    #[visit(skip)]
+    #[reflect(hidden)]
+    tried_up: bool,
     /// Whether MAZE_ARREST has arrested the player this round yet.
     #[visit(skip)]
     #[reflect(hidden)]
@@ -1136,6 +1140,7 @@ impl MazeGame {
         self.hatch_told = None;
         self.tried_tunnels = false;
         self.tried_grate = false;
+        self.tried_up = false;
         self.hud.set_fade(ctx.user_interfaces.first(), 0.0);
         self.level.tunnels.reset(&mut ctx.scenes[self.scene].graph);
         self.player.set_confiscated(false);
@@ -3168,12 +3173,29 @@ impl MazeGame {
             self.passing = Some(Passing { to, yaw, time: 0.0, moved: false });
             Log::info(format!("MAZE_TUNNELS: down through the hatch at {}", hatch.name));
         }
+        // And with MAZE_TUNNELS_UP=<seconds> as well, that long after: back up through it.
+        let up_after = platform::var("MAZE_TUNNELS_UP").and_then(|s| s.trim().parse::<f32>().ok());
+        if let (Some(at), Some(after)) = (down_at, up_after) {
+            if self.round_time >= at + after && !self.tried_up && self.passing.is_none() {
+                self.tried_up = true;
+                let hatch = &self.level.tunnels.hatches[0];
+                let (to, yaw) = self.level.tunnels.arrival(hatch, false, self.player.yaw());
+                self.passing = Some(Passing { to, yaw, time: 0.0, moved: false });
+                Log::info(format!("MAZE_TUNNELS_UP: up through the hatch at {}", hatch.name));
+            }
+        }
         if let Some(mut passing) = self.passing {
             passing.time += ctx.dt;
             if !passing.moved && passing.time >= escape::PASSING / 2.0 {
                 passing.moved = true;
                 let graph = &mut ctx.scenes[self.scene].graph;
                 self.player.teleport_feet(graph, passing.to, passing.yaw);
+                // Up into a bank's strongroom, its door shut: it opens from inside, but the
+                // alarm goes up all the same.
+                if let Some(at) = self.level.vaults.open_from_inside(passing.to) {
+                    self.hud.show_note("The vault door opens from inside. The alarm is up".into());
+                    self.drone_calls.push((at, "vault"));
+                }
                 // Down out of sight, where no droid can follow: those after them lose them.
                 if self.level.tunnels.holds(passing.to) {
                     for n in self.inhabitants.lose_player() {

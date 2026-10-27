@@ -902,6 +902,7 @@ logs goes to the browser's console there.
 | `MAZE_KNOCKDOWN=<s>`     | That many seconds into a round, shoots down the droid nearest you, to try the ragdolls out. |
 | `MAZE_ARREST=<s>`        | In Urbs, that many seconds into a round, arrests you where you stand, to try jail out; with `MAZE_PICK=1` as well, starts picking your cell's lock. |
 | `MAZE_TUNNELS=<s>`       | In Urbs, that many seconds into a round, takes you down the first hatch into the escape tunnels. |
+| `MAZE_TUNNELS_UP=<s>`    | With `MAZE_TUNNELS`, that many seconds after going down, brings you back up through the same hatch. |
 | `MAZE_GRATE=<s>`         | With `MAZE_ARREST`, that many seconds after the arrest, pries up your cell's grate and drops you down the drain into the escape tunnels. |
 | `MAZE_HEIST_OPEN=<n>`    | In a heist, the first n doors' computers count as hacked, to try it out. |
 | `MAZE_SHIELD=<s>`        | That many seconds into a round, raises your shield, as the 1 key does. |

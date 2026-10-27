@@ -133,8 +133,9 @@ impl Tunnels {
     }
 
     /// Where the player comes out through `hatch`, going `down` or up, facing `yaw` as they went
-    /// in: a little off its other end, so as not to stand on it and go straight back - down, out
-    /// of its dead end toward the den, facing that way; up, on the way they were facing.
+    /// in: on its other end, where there is always room to stand, as there need not be a step
+    /// off it in a narrow tunnel or a strongroom - going back takes E again. Down, facing toward
+    /// the den; up, the way they were facing.
     pub fn arrival(&self, hatch: &Hatch, down: bool, yaw: f32) -> (Vector3<f32>, f32) {
         let (to, yaw) = match down {
             true => {
@@ -144,7 +145,7 @@ impl Tunnels {
             }
             false => (hatch.above, yaw),
         };
-        (to + Vector3::new(yaw.sin(), 0.0, yaw.cos()) * 1.6 + Vector3::new(0.0, 0.1, 0.0), yaw)
+        (to + Vector3::new(0.0, 0.1, 0.0), yaw)
     }
 
     /// Whether the player's `feet` are at the fence's counter.
