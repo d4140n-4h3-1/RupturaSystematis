@@ -8,7 +8,7 @@
 //!
 //! It keeps to floor it can walk: up and down stairs a step at a time, never off the edge of a
 //! platform or a walkway, and where one floor is over another, on the one it is on - a point it
-//! is going to is on the floor at that point's own height (see [`crate::trip`]). Where a ferry
+//! is going to is on the floor at that point's own height (see [`hydroxus_ai::trip`]). Where a ferry
 //! gets it there sooner than walking - or there is no way round - it takes the ferry: waits for it
 //! at one end, gets on as it waits, rides it across and gets off at the other end.
 //!
@@ -31,7 +31,7 @@
 //! droid hunts the player the way Metal Gear's guards do, through its [`Alert`] phases:
 //!
 //! - **Alert**: it can see the player, and after a first moment runs at them, breaking into a
-//!   sprint now and then (see [`SPRINT_EVERY`]), on breath spent and got back as the player's
+//!   sprint now and then (see [`hydroxus_ai::pace::SPRINT_EVERY`]), on breath spent and got back as the player's
 //!   is: out of it, it walks until enough is back. A bar over its head shows how much it has
 //!   left, as the player's does (see [`Inhabitants::breath`]). If it gets close enough to touch them, it
 //!   has caught them.
@@ -73,26 +73,28 @@
 //!
 //! A droid that is not hostile minds having the player's pistol pointed at it (see
 //! [`Inhabitants::feel_aimed_at`]): for as long as its kind stands for it, and then it stops,
-//! faces the player and warns them. Each warning then holds for [`WARNING`] seconds more, time
+//! faces the player and warns them. Each warning then holds for [`hydroxus_ai::threat::WARNING`] seconds more, time
 //! to say it and for the player to take it in, before the next: the last warning, and then
 //! being provoked. What it does then is up to its kind: it turns hostile, or sounds the alarm
 //! (see [`Inhabitants::raise_alarm`]) for those near it that would. Looking away only holds the
 //! next stage off; with the pistol off it for [`CALM`] seconds, it calms down again.
 
 pub use hydroxus_ai::alert::{Alert, CAUTION, EVASION};
-pub(crate) use hydroxus_ai::route::{between, plan, route_to};
-use hydroxus_ai::route::along;
-use crate::{
-    ferry::Crossing,
-    roads::Roads,
-    trip::{self, Doing, Trip},
-};
+pub use hydroxus_ai::threat::Threat;
+pub(crate) use hydroxus_ai::route::{between, plan, route_to, spot_near};
+use crate::{ferry::Crossing, roads::Roads};
 use hydroxus_ai::{
     flat, forward, heading_of,
+    group::{about_leader, ABOUT_LEADER, BESIDE},
     hearing::Heard,
+    join::{could_see_other, joiners, Watch},
+    pace::{pace, sprints},
+    route::{plan_avoiding, spot_on_any_floor_near},
     search::SearchMap,
-    sight::{Sight, Stance},
+    sight::Sight,
     steer::{make_way, step_aside},
+    threat::{pointed_at, stage_after, CALM},
+    trip::{self, Doing, Trip},
 };
 use crate::{
     ctf::{self, Side},
@@ -136,10 +138,9 @@ use fyrox::{
 pub const HOSTILE_MODEL: &str = "data/droid_hostile.glb";
 /// How many droids live in a maze, unless the conversations or MAZE_INHABITANTS say otherwise.
 const COUNT: usize = 6;
-/// A pair walking about together: how far to its partner's right the one keeping beside it walks,
-/// and how far behind, in meters; how far off that it hurries to catch up; and how far behind
-/// the one leading lets it get before waiting for it.
-const BESIDE: (f32, f32) = (1.1, 0.3);
+/// A pair walking about together (see [`BESIDE`]): how far off where it keeps that the one
+/// keeping beside its partner hurries to catch up; and how far behind the one leading lets it
+/// get before waiting for it.
 const CATCH_UP: f32 = 3.0;
 /// How far ahead of where its partner is, in seconds of its walking, the one keeping beside it
 /// makes for: where it will be by the time it gets there.
@@ -157,9 +158,6 @@ const EYE_LAMP_NEAR: f32 = 30.0;
 /// no smaller than anyone makes way for another from (see [`hydroxus_ai::steer`]), so that all
 /// of those near enough are in the square one is in or those round it.
 const NEIGHBOURS: f32 = 3.0;
-/// How much further than as the crow flies a droid going about its business will walk to get
-/// somewhere, before giving it up for somewhere else.
-const DETOUR: f32 = 2.5;
 /// Their bodies: a capsule this far out from its middle line, with its middle this far above the
 /// feet - 1.7 m tall, like the player's.
 const RADIUS: f32 = 0.3;
@@ -220,17 +218,8 @@ const LOOK_ABOUT: f32 = 3.0;
 const LOOK_SWEEP: f32 = 70.0 * std::f32::consts::PI / 180.0;
 /// How far each spot it searches is from the last, in steps across the grid, from least to most.
 const SEARCH_TRIP: (f32, f32) = (10.0, 40.0);
-/// How far off, in meters, the pistol pointed at a droid bothers it, and how far to the side of
-/// the middle of the view it can be, in meters, for the pistol to count as pointed at it.
-const AIM_RANGE: f32 = 20.0;
-const AIM_WIDTH: f32 = 0.6;
 /// How far above its feet, in meters, the middle of the view is taken to be pointed at a droid.
 const CHEST: f32 = 1.2;
-/// How long each warning holds, in seconds, on top of how long the droid stands for the pistol
-/// in the first place, before it goes on to the next; and how long the pistol has to be off it,
-/// in seconds, for it to calm down again.
-const WARNING: f32 = 2.5;
-const CALM: f32 = 2.5;
 /// How far off, in meters, droids that answer an alarm hear it.
 const ALARM_RANGE: f32 = 40.0;
 /// How often a hostile droid that can see the player works out its way to them again, in
@@ -278,22 +267,12 @@ const PLAYER_RADIUS: f32 = 0.35;
 const HIT_PAUSE: f32 = 1.2;
 const CATCH: f32 = RADIUS + PLAYER_RADIUS + 0.05;
 const CATCH_HEIGHT: f32 = 1.0;
-/// How long, in seconds, a droid on Alert runs before it breaks into a sprint, from least to
-/// most - picked afresh each time, so the player cannot count on when - and how long each sprint
-/// lasts. It never sprints the moment it turns on them.
-const SPRINT_EVERY: (f32, f32) = (4.0, 10.0);
-const SPRINT_FOR: (f32, f32) = (1.5, 3.0);
 /// How much breath a sentry has, to the player's 1: it is trained; and how fast it gets it back,
 /// to the player's 1: it is heavier.
 const SENTRY_STAMINA: f32 = 1.5;
 const SENTRY_RECOVERY: f32 = 2.0 / 3.0;
-/// How a sentry paces itself after someone, by the share of its breath it has left: under
-/// [`SPRINT_RESERVE`] it sprints no more, and under [`EASE_OFF`] it eases off to a jog until it is
-/// back over [`EASED`] - so that it is never left winded, walking - unless whoever it is after is
+/// A sentry paces itself after someone (see [`hydroxus_ai::pace`]) unless whoever it is after is
 /// within [`BURST`] meters, near enough for all it has left to catch them.
-const SPRINT_RESERVE: f32 = 0.5;
-const EASE_OFF: f32 = 0.2;
-const EASED: f32 = 0.6;
 const BURST: f32 = 6.0;
 /// How many of the pistol's bolts it takes to stop a hostile droid, and a sentry, armoured.
 pub const HITS: u32 = 3;
@@ -343,19 +322,6 @@ pub struct Reports {
     pub gave_up: Vec<usize>,
 }
 
-/// How a droid takes having the pistol pointed at it, as it goes from one stage to the next.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Threat {
-    /// It stops, faces the player and warns them.
-    Warned,
-    /// It warns them for the last time.
-    WarnedAgain,
-    /// It has stood for it long enough: its kind does something about it.
-    Provoked,
-    /// The pistol has been lowered long enough for it to calm down again.
-    Calmed,
-}
-
 /// What came of moving everyone along.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct News {
@@ -398,7 +364,7 @@ struct Inhabitant {
     heading: f32,
     /// The rest of its route, as points on the floor, the next one last.
     route: Vec<Vector3<f32>>,
-    /// Its way across by ferry, if it is taking one (see [`crate::trip`]).
+    /// Its way across by ferry, if it is taking one (see [`hydroxus_ai::trip`]).
     trip: Option<Trip>,
     /// How long it has left to stand still, in seconds.
     resting: f32,
@@ -455,7 +421,7 @@ struct Inhabitant {
     /// How much breath it has at most: 1, or a sentry's more.
     most: f32,
     /// Whether, a sentry low on breath, it has eased off to a jog to get it back (see
-    /// [`EASE_OFF`]).
+    /// [`hydroxus_ai::pace::EASE_OFF`]).
     easing: bool,
     /// Whether it is a sentry.
     sentry: bool,
@@ -643,23 +609,6 @@ impl Default for Grouping {
     fn default() -> Self {
         Self { in_pairs: 0.0, groups_of: 0, share: 1.0, turf: None }
     }
-}
-
-/// Where each of a group keeps about the one leading it, after the first: how far to its right,
-/// in meters (to its left, less than none), and how far behind. The first of them is a pair's.
-const ABOUT_LEADER: [(f32, f32); 5] = [
-    (BESIDE.0, BESIDE.1),
-    (-BESIDE.0, BESIDE.1),
-    (0.0, 1.5),
-    (BESIDE.0, 1.9),
-    (-BESIDE.0, 1.9),
-];
-
-/// Where the one keeping to `slot` of [`ABOUT_LEADER`] stands, about a leader at `feet` facing
-/// `heading`.
-fn about_leader(feet: Vector3<f32>, heading: f32, slot: usize) -> Vector3<f32> {
-    let (right, behind) = ABOUT_LEADER[slot.min(ABOUT_LEADER.len() - 1)];
-    feet + right_of(heading) * right - forward(heading) * behind
 }
 
 /// Each of `from`'s materials that `to` has a different one in place of, mesh by mesh by name and
@@ -993,17 +942,12 @@ fn square_of(at: Vector3<f32>) -> (i32, i32) {
     ((at.x / NEIGHBOURS).floor() as i32, (at.z / NEIGHBOURS).floor() as i32)
 }
 
-/// Which way is to the right of one facing `heading`: facing +z, -x.
-fn right_of(heading: f32) -> Vector3<f32> {
-    Vector3::new(-heading.cos(), 0.0, heading.sin())
-}
-
 /// As [`plan`], a trip for a droid going about its business from `feet` - but keeping off the
-/// `roads`, if there are any: to somewhere off them a `trip` away as the crow flies, the way that
-/// crosses them least (see [`Roads::extra`]). One that finds itself on a road, as it might after
-/// a chase, gets off it the shortest way. The way there is found by heading for it, so it costs
-/// about as much as the route is long, however big the city; a spot it cannot get to within
-/// [`DETOUR`] times as far, it tries no further for. Empty, with nowhere found to go.
+/// `roads`, if there are any, and off the `turfs` of the groups that keep to one, each a cell and
+/// how many cells round it is theirs: to somewhere off them a `trip` away as the crow flies, the
+/// way that crosses them least (see [`Roads::extra`], [`plan_avoiding`]). One that finds itself
+/// on a road, as it might after a chase, gets off it the shortest way. Empty, with nowhere found
+/// to go.
 fn wander(
     (grid, origin): (&WalkGrid, Vector3<f32>),
     feet: Vector3<f32>,
@@ -1015,10 +959,7 @@ fn wander(
     let Some(roads) = roads else {
         return plan((grid, origin), feet, trip, rng);
     };
-    let Some(from) = survey::cell_at(grid, origin, feet).filter(|&(x, z)| grid.is_walkable(x, z)) else {
-        return Vec::new();
-    };
-    let on_road = roads.is_road(from.0, from.1);
+    let on_road = survey::cell_at(grid, origin, feet).is_some_and(|(x, z)| roads.is_road(x, z));
     // On a group's turf: within as many cells as it reaches of the cell its spot is in.
     let on_turf = |x: usize, z: usize| {
         turfs.iter().any(|&((tx, tz), reach)| {
@@ -1026,134 +967,21 @@ fn wander(
             dx * dx + dz * dz < reach * reach
         })
     };
-    // Somewhere off the road and off anyone's turf, on any floor there, a trip's steps away
-    // across the grid.
-    let goal = (0..24).find_map(|_| {
-        let angle = between(rng, (-std::f32::consts::PI, std::f32::consts::PI));
-        let away = between(rng, trip) * grid.cell_size;
-        let spot = feet + Vector3::new(angle.sin(), 0.0, angle.cos()) * away;
-        let plan = grid.plan(survey::cell_at(grid, origin, spot)?);
-        let floors: Vec<(usize, usize)> =
-            grid.cells_over(plan).filter(|&(x, z)| !roads.is_road(x, z) && !on_turf(x, z)).collect();
-        (!floors.is_empty()).then(|| (floors[rng.below(floors.len())], away / grid.cell_size))
-    });
-    let Some((goal, steps)) = goal else {
-        return Vec::new();
-    };
-    let extra = |x: usize, z: usize| {
-        let road = if on_road { 0.0 } else { roads.extra(x, z) };
-        road + if on_turf(x, z) { TURF_COST } else { 0.0 }
-    };
-    grid.route_between_weighted(from, goal, steps * DETOUR + 20.0, extra)
-        .map_or_else(Vec::new, |path| along(grid, origin, path))
-}
-
-/// Whether a droid at `feet`, facing `heading`, in `alert` - or calm, with none - could see
-/// another droid at `other`, if nothing were in the way: as it would see the player standing
-/// there.
-fn could_see_droid(
-    alert: Option<Alert>,
-    feet: Vector3<f32>,
-    heading: f32,
-    other: Vector3<f32>,
-    in_the_dark: bool,
-) -> bool {
-    Sight::default().could_see(alert, feet, heading, other, Stance::Standing, in_the_dark)
-}
-
-/// What deciding who joins a chase takes from a droid.
-struct Watch {
-    /// Whether its kind is a sentry.
-    sentry: bool,
-    alert: Option<Alert>,
-    sees_player: bool,
-    /// Down, or talking to the player.
-    busy: bool,
-    windup: f32,
-    feet: Vector3<f32>,
-    heading: f32,
-}
-
-/// Which of `droids` join a chase: each sentry, not busy nor after the player already, that
-/// could see a sentry after them - done standing, having just turned hostile - by
-/// [`could_see_droid`], `in_the_dark` or not, where `clear` says nothing is in the way from the
-/// one, as an index, to the other.
-fn joiners(
-    droids: &[Watch],
-    in_the_dark: bool,
-    clear: impl Fn(usize, usize) -> bool,
-) -> Vec<usize> {
-    let after_player =
-        |droid: &Watch| droid.alert == Some(Alert::Alert) && droid.sees_player && !droid.busy;
-    let chasing: Vec<usize> = (0..droids.len())
-        .filter(|&n| droids[n].sentry && after_player(&droids[n]) && droids[n].windup == 0.0)
-        .collect();
-    (0..droids.len())
-        .filter(|&m| {
-            let droid = &droids[m];
-            droid.sentry
-                && !droid.busy
-                && !after_player(droid)
-                && chasing.iter().any(|&n| {
-                    n != m
-                        && could_see_droid(
-                            droid.alert,
-                            droid.feet,
-                            droid.heading,
-                            droids[n].feet,
-                            in_the_dark,
-                        )
-                        && clear(m, n)
-                })
-        })
-        .collect()
+    plan_avoiding(
+        (grid, origin),
+        feet,
+        trip,
+        |x, z| roads.is_road(x, z) || on_turf(x, z),
+        |x, z| {
+            let road = if on_road { 0.0 } else { roads.extra(x, z) };
+            road + if on_turf(x, z) { TURF_COST } else { 0.0 }
+        },
+        rng,
+    )
 }
 
 /// Whether nothing is in the way of `watcher` seeing `seen`: a ray from its face to the other's
 /// chest meets the other before anything else - aside from its own body, which the ray starts in.
-/// Somewhere on the floor of `grid`, whose corner is at `origin`, within `reach` of `at` as the
-/// crow flies, picked by `rng` - or, with nowhere there, the floor nearest `at`.
-pub(crate) fn spot_near(
-    (grid, origin): (&WalkGrid, Vector3<f32>),
-    at: Vector3<f32>,
-    reach: f32,
-    rng: &mut Rng,
-) -> Option<Vector3<f32>> {
-    for _ in 0..24 {
-        let angle = between(rng, (-std::f32::consts::PI, std::f32::consts::PI));
-        let away = between(rng, (0.0, reach));
-        let spot = at + Vector3::new(angle.sin(), 0.0, angle.cos()) * away;
-        if let Some(cell) = survey::cell_at(grid, origin, spot).filter(|&(x, z)| grid.is_walkable(x, z)) {
-            return Some(grid.on_floor(origin, cell));
-        }
-    }
-    survey::nearest_walkable(grid, origin, at).map(|cell| grid.on_floor(origin, cell))
-}
-
-/// Somewhere on any floor of `grid` within `reach` of `at` as the crow flies - in a building, up
-/// on one of its floors as likely as on the ground - picked by `rng`; or, with nowhere there,
-/// the floor nearest `at`.
-pub(crate) fn spot_on_any_floor_near(
-    (grid, origin): (&WalkGrid, Vector3<f32>),
-    at: Vector3<f32>,
-    reach: f32,
-    rng: &mut Rng,
-) -> Option<Vector3<f32>> {
-    for _ in 0..24 {
-        let angle = between(rng, (-std::f32::consts::PI, std::f32::consts::PI));
-        let away = between(rng, (0.0, reach));
-        let spot = at + Vector3::new(angle.sin(), 0.0, angle.cos()) * away;
-        let Some(cell) = survey::cell_at(grid, origin, spot) else {
-            continue;
-        };
-        let floors: Vec<(usize, usize)> = grid.cells_over(grid.plan(cell)).collect();
-        if !floors.is_empty() {
-            return Some(grid.on_floor(origin, floors[rng.below(floors.len())]));
-        }
-    }
-    survey::nearest_walkable(grid, origin, at).map(|cell| grid.on_floor(origin, cell))
-}
-
 fn in_sight_of(graph: &Graph, watcher: &Inhabitant, seen: &Inhabitant) -> bool {
     let from = watcher.feet + Vector3::new(0.0, FACE_HEIGHT, 0.0);
     let way = seen.feet + Vector3::new(0.0, CHEST, 0.0) - from;
@@ -1243,52 +1071,6 @@ fn in_sight_of_point(graph: &Graph, watcher: &Inhabitant, at: Vector3<f32>, seen
     hits.iter()
         .find(|hit| hit.collider != watcher.collider)
         .is_none_or(|hit| hit.collider == seen)
-}
-
-/// Whether the middle of a view from `eye`, looking `ahead` - one meter long - is on `target`:
-/// in front, not too far off, and not too far to its side.
-fn pointed_at(eye: Vector3<f32>, ahead: Vector3<f32>, target: Vector3<f32>) -> bool {
-    let to = target - eye;
-    let along = to.dot(&ahead);
-    along > 0.0 && along < AIM_RANGE && (to - ahead * along).norm() < AIM_WIDTH
-}
-
-/// How long a droid that stands `patience` seconds of the pistol has it pointed at it, in
-/// seconds, after it has warned the player `warned` times, before it goes on to the next stage:
-/// first its patience, then that and as long again as it takes to warn them.
-fn stage_after(warned: u8, patience: f32) -> f32 {
-    if warned == 0 {
-        patience
-    } else {
-        patience + WARNING
-    }
-}
-
-/// How long until a droid sprints, `sprint_in` - below 0 before it has been picked - and how
-/// long it has left `sprinting`, after another `dt` of `chasing` the player or not: a sprint
-/// comes some while into a chase, never at its start, and again some while after each ends.
-fn sprints(sprint_in: f32, sprinting: f32, chasing: bool, rng: &mut Rng, dt: f32) -> (f32, f32) {
-    if !chasing {
-        return (-1.0, 0.0);
-    }
-    if sprinting > 0.0 {
-        return (sprint_in, sprinting - dt);
-    }
-    if sprint_in < 0.0 {
-        return (between(rng, SPRINT_EVERY), 0.0);
-    }
-    match sprint_in - dt {
-        due if due <= 0.0 => (between(rng, SPRINT_EVERY), between(rng, SPRINT_FOR)),
-        due => (due, 0.0),
-    }
-}
-
-/// Whether one pacing itself - a sentry, with no one near enough for a last burst - eases off to
-/// a jog, having been `easing` or not, with `left` of its breath, as a share of its most; and
-/// whether it keeps from sprinting (see [`SPRINT_RESERVE`]).
-fn pace(pacing: bool, easing: bool, left: f32) -> (bool, bool) {
-    let ease_under = if easing { EASED } else { EASE_OFF };
-    (pacing && left < ease_under, pacing && left < SPRINT_RESERVE)
 }
 
 impl Inhabitant {
@@ -2521,7 +2303,7 @@ impl Inhabitants {
                             Foe::Droid(n) => (self.droids[n].collider, NOTICE_DROID),
                             Foe::Rival(body) => (body, NOTICE_RIVAL),
                         };
-                        let looks = could_see_droid(Some(Alert::Alert), droid.feet, droid.heading, feet, false);
+                        let looks = could_see_other(Some(Alert::Alert), droid.feet, droid.heading, feet, false);
                         ((looks || away <= notice) && in_sight_of_point(graph, droid, middle, body)).then_some((foe, away))
                     })
                     .min_by(|a, b| a.1.total_cmp(&b.1))
@@ -3366,7 +3148,7 @@ impl Inhabitants {
 
     /// Has each sentry - each droid whose kind, as an index into the conversations' characters,
     /// `sentry` says is one - that sees another sentry after the player go after them too, as if
-    /// it saw them itself. It sees the other as [`could_see_droid`] has it, `in_the_dark` or not,
+    /// it saw them itself. It sees the other as [`could_see_other`] has it, `in_the_dark` or not,
     /// and as long as nothing is in the way. Calm, it stands a moment first, as one does that has
     /// just turned hostile. Call it after [`Self::look_for_player`]: those after the player are the
     /// ones that can see them, or see another that can.
@@ -3575,7 +3357,7 @@ impl Inhabitants {
             .filter(|(_, droid)| {
                 let eyes = droid.feet + Vector3::new(0.0, FACE_HEIGHT, 0.0);
                 [(at, CHEST), (player, PLAYER_CHEST)].iter().any(|&(feet, chest)| {
-                    could_see_droid(droid.alert, droid.feet, droid.heading, feet, in_the_dark)
+                    could_see_other(droid.alert, droid.feet, droid.heading, feet, in_the_dark)
                         && clear_between(graph, eyes, feet + Vector3::new(0.0, chest, 0.0), |c| passes(droid, c))
                 })
             })
@@ -3632,7 +3414,7 @@ impl Inhabitants {
                     && droid.hunts_player()
                     && flat(droid.feet - lies).norm() < BODY_SIGHT
                     && minds(droid.character, body.character)
-                    && could_see_droid(droid.alert, droid.feet, droid.heading, body.feet, in_the_dark)
+                    && could_see_other(droid.alert, droid.feet, droid.heading, body.feet, in_the_dark)
                     && clear_between(graph, droid.feet + Vector3::new(0.0, FACE_HEIGHT, 0.0), lies, |collider| {
                         collider == droid.collider
                             || collider == body.collider
@@ -4171,14 +3953,6 @@ mod tests {
     }
 
     #[test]
-    fn its_right_is_to_the_right() {
-        // Facing +z, the right is -x; facing +x, it is +z.
-        assert!((right_of(0.0) - Vector3::new(-1.0, 0.0, 0.0)).norm() < 1.0e-6);
-        assert!((right_of(std::f32::consts::FRAC_PI_2) - Vector3::new(0.0, 0.0, 1.0)).norm() < 1.0e-6);
-        assert!(right_of(0.7).dot(&forward(0.7)).abs() < 1.0e-6);
-    }
-
-    #[test]
     fn going_about_its_business_it_keeps_off_the_road_but_to_cross() {
         // A street 4 m wide down the middle of ground 20 m square, a crossing over it at z 10.
         let mut grid = WalkGrid::new(40, 40, 0.5);
@@ -4255,136 +4029,4 @@ mod tests {
             [1, 0]
         );
     }
-
-    #[test]
-    fn it_sprints_now_and_then_but_never_as_the_chase_starts() {
-        let dt = 0.05;
-        let mut rng = Rng::new(3);
-        let (mut sprint_in, mut sprinting) = (-1.0, 0.0);
-        let mut first = None;
-        let mut sprints_begun = 0;
-        for frame in 0..(60.0 / dt) as u32 {
-            let was = sprinting > 0.0;
-            (sprint_in, sprinting) = sprints(sprint_in, sprinting, true, &mut rng, dt);
-            if !was && sprinting > 0.0 {
-                sprints_begun += 1;
-                first.get_or_insert(frame as f32 * dt);
-            }
-        }
-        let first = first.expect("it sprints");
-        assert!(first >= SPRINT_EVERY.0 - dt, "not straight away: {first}");
-        assert!(sprints_begun >= 3, "again and again: {sprints_begun}");
-        // No longer chasing, it forgets, and starts over when it chases again.
-        assert_eq!(sprints(2.0, 1.0, false, &mut rng, dt), (-1.0, 0.0));
-    }
-
-    #[test]
-    fn a_sentry_keeps_its_breath_for_a_last_burst() {
-        // Plenty of breath: it sprints and runs as it likes.
-        assert_eq!(pace(true, false, 0.9), (false, false));
-        // Under its reserve it sprints no more, but runs on.
-        assert_eq!(pace(true, false, 0.4), (false, true));
-        // Low, it eases off to a jog, and keeps to it until well back over that.
-        assert_eq!(pace(true, false, 0.15), (true, true));
-        assert_eq!(pace(true, true, 0.4), (true, true));
-        assert_eq!(pace(true, true, 0.65), (false, false));
-        // Near enough to catch them, or not a sentry, it spends all it has.
-        assert_eq!(pace(false, true, 0.1), (false, false));
-    }
-
-    #[test]
-    fn a_sentry_sees_another_as_it_would_the_player_standing() {
-        let sees = |alert, x: f32, z: f32, dark| {
-            could_see_droid(alert, Vector3::zeros(), 0.0, Vector3::new(x, 0.0, z), dark)
-        };
-        // Calm, it looks about it as it does wary: ahead, off to the side only near, out of the
-        // corner of its eye, and not behind.
-        assert!(sees(None, 0.0, 20.0, false), "ahead");
-        assert!(!sees(None, 0.0, -10.0, false), "behind");
-        assert!(sees(None, 5.0, 1.0, false), "near, off to the side");
-        assert!(!sees(None, 15.0, 1.0, false), "far off to the side");
-        assert!(!sees(None, 0.0, 20.0, true), "far off, in the dark");
-        // Searching or after the player, the same: only in front.
-        assert!(!sees(Some(Alert::Evasion), 0.0, -10.0, false));
-        assert!(!sees(Some(Alert::Alert), 0.0, -10.0, false));
-        assert!(sees(Some(Alert::Alert), 0.0, 10.0, false));
-        assert!(!sees(Some(Alert::Alert), 0.0, Sight::default().range + 1.0, false));
-    }
-
-    #[test]
-    fn a_sentry_that_sees_another_after_the_player_joins_in() {
-        let droid = |sentry, alert, sees_player, z: f32| Watch {
-            sentry,
-            alert,
-            sees_player,
-            busy: false,
-            windup: 0.0,
-            feet: Vector3::new(0.0, 0.0, z),
-            heading: 0.0,
-        };
-        let chaser = || droid(true, Some(Alert::Alert), true, 10.0);
-        let open = |_, _| true;
-        // Calm and searching sentries facing the chase join in; the chaser does not.
-        let calm = droid(true, None, false, 0.0);
-        let searching = droid(true, Some(Alert::Evasion), false, 0.0);
-        assert_eq!(joiners(&[chaser(), calm], false, open), [1]);
-        assert_eq!(joiners(&[chaser(), searching], false, open), [1]);
-        // Not a sentry, facing away, with a wall between, or talking: it does not.
-        assert!(joiners(&[chaser(), droid(false, None, false, 0.0)], false, open).is_empty());
-        let facing_away = droid(true, None, false, 20.0);
-        assert!(joiners(&[chaser(), facing_away], false, open).is_empty());
-        let walled_off = joiners(&[chaser(), droid(true, None, false, 0.0)], false, |_, _| {
-            false
-        });
-        assert!(walled_off.is_empty());
-        let talking = Watch {
-            busy: true,
-            ..droid(true, None, false, 0.0)
-        };
-        assert!(joiners(&[chaser(), talking], false, open).is_empty());
-        // One still standing, having just turned hostile, is not yet after them; nor is one on
-        // Alert that has lost sight of them.
-        let winding_up = Watch {
-            windup: 0.5,
-            ..chaser()
-        };
-        assert!(joiners(&[winding_up, droid(true, None, false, 0.0)], false, open).is_empty());
-        let lost = droid(true, Some(Alert::Alert), false, 10.0);
-        assert!(joiners(&[lost, droid(true, None, false, 0.0)], false, open).is_empty());
-    }
-
-    #[test]
-    fn the_pistol_is_pointed_at_what_is_in_the_middle_of_the_view() {
-        let eye = Vector3::zeros();
-        let ahead = Vector3::z();
-        assert!(pointed_at(eye, ahead, Vector3::new(0.3, 0.0, 10.0)));
-        assert!(
-            !pointed_at(eye, ahead, Vector3::new(1.0, 0.0, 10.0)),
-            "off to the side"
-        );
-        assert!(
-            !pointed_at(eye, ahead, Vector3::new(0.0, 0.0, -5.0)),
-            "behind"
-        );
-        assert!(
-            !pointed_at(eye, ahead, Vector3::new(0.0, 0.0, AIM_RANGE + 1.0)),
-            "too far"
-        );
-    }
-
-    #[test]
-    fn each_warning_holds_long_enough_to_be_said() {
-        assert_eq!(
-            stage_after(0, 1.0),
-            1.0,
-            "its patience, before it first warns"
-        );
-        assert!(stage_after(1, 1.0) >= WARNING, "then time to say it");
-        assert_eq!(stage_after(1, 1.0), stage_after(2, 1.0));
-        assert!(
-            stage_after(0, 1.0) < stage_after(0, 2.0),
-            "a less patient droid is sooner"
-        );
-    }
-
 }

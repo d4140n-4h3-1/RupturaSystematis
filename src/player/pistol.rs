@@ -19,7 +19,7 @@
 //! shot, and a bolt hitting something, are heard by the droids too: see [`noise`](super::noise).
 
 use super::{noise, Player};
-use crate::formants::{self, Sounds};
+use crate::formants::{self, Load, Sounds};
 use fyrox::{
     core::{
         algebra::{Matrix4, UnitQuaternion, Vector3},

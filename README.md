@@ -55,7 +55,9 @@ browser with WebGL 2 is all it needs.
   crates keep Fyrox's names, so the game still says `fyrox`. `VULKAN.md` in Hydroxus describes
   every change.
   [`fyrox-gfx`](https://github.com/d4140n-4h3-1/fyrox-gfx) holds the graphics effects the game
-  adds on top of the engine.
+  adds on top of the engine, [`hydroxus-ai`](https://github.com/d4140n-4h3-1/hydroxus-ai) the
+  droids' and drones' AI, and [`hydroxus-voice`](https://github.com/d4140n-4h3-1/hydroxus-voice)
+  their voices.
 
 This project is a Cargo workspace of its own. That keeps other crates from switching on the
 engine's OpenGL backend, which it would otherwise pick over Vulkan.
@@ -93,16 +95,27 @@ Hydroxus's `vulkan` branch began as two commits on top of upstream Fyrox as of 1
 
 Graphics effects the game adds on top of the engine, kept out of it: refractive glass, softer
 shadow edges, temporal anti-aliasing, further-reaching ambient occlusion, screen-space
-reflections, a budget that keeps shadow maps for the nearest lamps only, and the ray-traced
-shadows (its `raytracing` feature).
+reflections, a budget that keeps shadow maps for the nearest lamps only, the ray-traced
+shadows (its `raytracing` feature), and surfaces drawn from both sides for the maze's tube-shaped
+pieces.
 
 ### hydroxus-ai
 
 The droids' and drones' AI, in a crate of its own
 ([hydroxus-ai](https://github.com/d4140n-4h3-1/hydroxus-ai)) that knows nothing of the engine
 but its vectors: the walk grid and the routes over it, what an NPC sees and hears, Metal Gear's
-alert phases, and making way in a corridor. The game casts the rays, moves the droids and plays
+alert phases, making way in a corridor, getting about over more than one floor and by ferry,
+joining a chase, pacing it, taking a pistol pointed at it, and walking about in pairs and groups.
+The game casts the rays, moves the droids and plays
 their animations; the crate decides what they make of what is round them.
+
+### hydroxus-voice
+
+The voices, in a crate of their own
+([hydroxus-voice](https://github.com/d4140n-4h3-1/hydroxus-voice)) that knows nothing of the
+engine: sounds made from formants, System Latin read aloud by the droids and chirped by the
+drones, and the city's echo. The game reads the JSON that describes them and plays the samples
+the crate makes.
 
 ### The game
 

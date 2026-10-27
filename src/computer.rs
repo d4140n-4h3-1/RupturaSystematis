@@ -31,7 +31,7 @@
 
 use crate::{
     credits::Credits,
-    formants::{self, Sounds},
+    formants::{self, Load, Sounds},
     layout::{Rng, WalkGrid},
     notes::{self, Entry},
     ragdoll::CHARACTERS,

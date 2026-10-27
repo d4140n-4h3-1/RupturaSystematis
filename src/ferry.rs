@@ -46,31 +46,7 @@ struct Ferry {
     half: f32,
 }
 
-/// A ferry as the droids go by it.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Crossing {
-    /// The middle of its deck where it waits at each end.
-    pub ends: [Vector3<f32>; 2],
-    /// The middle of its deck now, and how fast it is going.
-    pub deck: Vector3<f32>,
-    pub velocity: Vector3<f32>,
-    /// Half as wide across as its deck is, the narrower way, in meters: within that of the
-    /// middle, someone is on it.
-    pub half: f32,
-    /// The end it is waiting at, if it is, and for how much longer, in seconds.
-    pub waiting: Option<(usize, f32)>,
-    /// How long it takes to get from one end to the other, at worst: waiting for it to come back
-    /// from the other end, and the crossing.
-    pub longest: f32,
-}
-
-impl Crossing {
-    /// Whether `at` is on its deck.
-    pub fn carries(&self, at: Vector3<f32>) -> bool {
-        let off = at - self.deck;
-        off.x.abs() < self.half && off.z.abs() < self.half && off.y.abs() < 0.5
-    }
-}
+pub use hydroxus_ai::trip::Crossing;
 
 /// The places a ferry goes through, from one end to the other.
 #[derive(Debug, Clone, PartialEq)]

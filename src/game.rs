@@ -29,12 +29,7 @@ use crate::{
         screen::{self, DialogueScreen, Pointer, Subtitles},
         Bark, Conversation, Facts, Mood, Provoked, Script, CTF_SCRIPT, HEIST_SCRIPT, ROYALE_SCRIPT, SCRIPT, URBS_SCRIPT,
     },
-    formants::{
-        self,
-        chirps::{Chirps, DRONE_VOICE},
-        speech::{Voices, VOICES},
-        synth,
-    },
+    formants::{self, chirps::Chirps, speech::Voices, synth, Load, DRONE_VOICE, VOICES},
     generate::Maze,
     glow::GlowLights,
     roads::RoadPlan,
@@ -235,7 +230,7 @@ impl PartialEq for Making {
 /// little higher or lower than the rest of its kind, and always the same; and higher or lower
 /// again with how it feels.
 fn pitch(voices: &Voices, code: u32, mood: Mood) -> f32 {
-    (1.0 + VOICE_SPREAD * ((code % 7) as f32 / 3.0 - 1.0)) * voices.mood_pitch(mood)
+    (1.0 + VOICE_SPREAD * ((code % 7) as f32 / 3.0 - 1.0)) * voices.mood_pitch(mood.name())
 }
 
 /// How many drones there are: one patrolling each round, the rest waiting out of sight to be
@@ -793,7 +788,7 @@ impl MazeGame {
     /// The echo the droids' voices have in the level, if they echo there (see
     /// [`ctf::Map::echoes`]).
     fn voice_echo(&self) -> Option<synth::Echo> {
-        ctf::map_at(&self.model_path).filter(|map| map.echoes).map(|_| synth::CITY_ECHO)
+        ctf::map_at(&self.model_path).filter(|map| map.echoes).map(|_| formants::CITY_ECHO)
     }
 
     /// Whether it is night in the level (see [`ctf::Map::night`]).

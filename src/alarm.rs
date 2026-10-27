@@ -2,7 +2,7 @@
 //! player has provoked into it, or by a computer whose hack has failed - and heard through the
 //! maze. Made from the formants in [`ALARM_SOUNDS`]; without them, alarms are silent.
 
-use crate::formants::{self, Sounds};
+use crate::formants::{self, Load, Sounds};
 use fyrox::{
     core::{algebra::Vector3, log::Log},
     scene::{

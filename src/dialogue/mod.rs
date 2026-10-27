@@ -108,6 +108,20 @@ pub enum Mood {
     Hostile,
 }
 
+impl Mood {
+    /// Its name, as the files have it: what a voice's pitch in it is kept under (see
+    /// [`crate::formants::speech::Voices::mood_pitch`]).
+    pub fn name(self) -> &'static str {
+        match self {
+            Mood::Normal => "normal",
+            Mood::Success => "success",
+            Mood::Warning => "warning",
+            Mood::Agitated => "agitated",
+            Mood::Hostile => "hostile",
+        }
+    }
+}
+
 /// Something a droid says, and what the player can say back.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct Line {
@@ -694,7 +708,7 @@ mod tests {
     #[test]
     fn urbs_is_peopled_some_of_its_security_in_pairs_and_each_kind_talks_of_summa() {
         let script = Script::load(URBS_SCRIPT).unwrap();
-        let voices = crate::formants::speech::Voices::load(crate::formants::speech::VOICES).unwrap();
+        let voices = <crate::formants::speech::Voices as crate::formants::Load>::load(crate::formants::VOICES).unwrap();
         assert!(script.inhabitants.is_some_and(|n| n > 6), "more than a maze has");
         let sentries = script.characters.iter().filter(|c| !c.gang && c.threatened.is_some_and(|t| t.then == Provoked::Attacks));
         assert!(sentries.clone().count() > 0 && sentries.clone().all(|c| (0.0..1.0).contains(&c.in_pairs) && c.in_pairs > 0.0), "some of security in pairs, not all");
@@ -709,7 +723,7 @@ mod tests {
     #[test]
     fn urbs_has_gangs_in_groups_of_up_to_six_that_mind_the_player_standing_over_them() {
         let script = Script::load(URBS_SCRIPT).unwrap();
-        let voices = crate::formants::speech::Voices::load(crate::formants::speech::VOICES).unwrap();
+        let voices = <crate::formants::speech::Voices as crate::formants::Load>::load(crate::formants::VOICES).unwrap();
         let gangs: Vec<&Character> = script.characters.iter().filter(|c| c.gang).collect();
         assert!(!gangs.is_empty(), "a gang");
         for gang in gangs {
@@ -754,7 +768,7 @@ mod tests {
     #[test]
     fn battle_royales_droids_call_out_and_taunt_each_in_a_voice_of_its_own() {
         let script = Script::load(ROYALE_SCRIPT).unwrap();
-        let voices = crate::formants::speech::Voices::load(crate::formants::speech::VOICES).unwrap();
+        let voices = <crate::formants::speech::Voices as crate::formants::Load>::load(crate::formants::VOICES).unwrap();
         assert!(script.characters.len() >= 2, "more than one kind of competitor");
         let mut pitches = Vec::new();
         for character in &script.characters {
@@ -776,7 +790,7 @@ mod tests {
     #[test]
     fn heist_guards_call_out_each_in_a_voice_of_its_own() {
         let script = Script::load(HEIST_SCRIPT).unwrap();
-        let voices = crate::formants::speech::Voices::load(crate::formants::speech::VOICES).unwrap();
+        let voices = <crate::formants::speech::Voices as crate::formants::Load>::load(crate::formants::VOICES).unwrap();
         assert!(!script.characters.is_empty());
         for character in &script.characters {
             assert!(character.lines.is_empty(), "{} is not talked to", character.name);
@@ -791,7 +805,7 @@ mod tests {
     #[test]
     fn capture_the_flags_droids_only_call_out_each_side_in_a_voice_of_its_own() {
         let script = Script::load(CTF_SCRIPT).unwrap();
-        let voices = crate::formants::speech::Voices::load(crate::formants::speech::VOICES).unwrap();
+        let voices = <crate::formants::speech::Voices as crate::formants::Load>::load(crate::formants::VOICES).unwrap();
         let [ally, enemy] = &script.characters[..] else {
             panic!("a kind of droid for each side");
         };

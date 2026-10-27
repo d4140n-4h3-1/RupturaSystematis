@@ -26,7 +26,7 @@ pub struct Map {
     /// Whether it is night there: the void's black sky over it and no sun, lit only by its lamps.
     pub night: bool,
     /// Whether voices echo there, off the buildings of a city in the open (see
-    /// [`crate::formants::synth::CITY_ECHO`]).
+    /// [`crate::formants::CITY_ECHO`]).
     pub echoes: bool,
 }
 

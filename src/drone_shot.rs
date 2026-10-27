@@ -12,7 +12,7 @@
 use crate::{
     drone::{claim_glows, light_colour},
     fixtures::{DIFFUSE_COLOR, EMISSION_STRENGTH},
-    formants::{self, Sounds},
+    formants::{self, Load, Sounds},
     player::{pistol::Pass, PISTOL_SOUNDS},
 };
 use fyrox::{

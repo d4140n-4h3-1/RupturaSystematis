@@ -7,7 +7,7 @@
 //! they pick up a heart, a soft swell as resting starts to heal them, and two notes once they
 //! are whole again.
 
-use crate::formants::{self, Sounds};
+use crate::formants::{self, Load, Sounds};
 use fyrox::{
     core::{algebra::Vector3, log::Log},
     scene::{

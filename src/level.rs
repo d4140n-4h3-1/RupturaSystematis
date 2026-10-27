@@ -12,7 +12,6 @@ use crate::{
     vault::Vaults,
     fixtures::{self, Glow},
     generate::Maze,
-    inward,
     layout::WalkGrid,
     survey,
     tiles::{self, Measured, Prefabs},
@@ -183,7 +182,7 @@ impl Level {
         let mut glow = fixtures::claim_glow(&mut scene.graph, root);
         let panes = fixtures::glaze(&mut scene.graph, root, &mut glow);
         Log::info(format!("Maze: {panes} glass surfaces"));
-        inward::make_double_sided(&mut scene.graph, root, doubled);
+        fyrox_gfx::make_double_sided(&mut scene.graph, root, doubled);
         // Out of the level before its shape is taken, which they are no part of.
         let (ferries, ferry_bodies) = if fixed {
             Ferries::claim(&mut scene.graph, root)

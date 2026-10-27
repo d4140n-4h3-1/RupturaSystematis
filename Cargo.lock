@@ -1616,7 +1616,7 @@ dependencies = [
 [[package]]
 name = "fyrox-gfx"
 version = "0.1.0"
-source = "git+https://github.com/d4140n-4h3-1/fyrox-gfx.git?branch=main#b9eb9dff0885d6881a89df9b5ce2b6d8c9205dee"
+source = "git+https://github.com/d4140n-4h3-1/fyrox-gfx.git?branch=main#61ae40d396cbf39cabd1107ebefc399b74258a9d"
 dependencies = [
  "fyrox",
  "fyrox-graphics-wgpu",
@@ -2100,9 +2100,17 @@ dependencies = [
 [[package]]
 name = "hydroxus-ai"
 version = "0.1.0"
-source = "git+https://github.com/d4140n-4h3-1/hydroxus-ai.git?branch=main#aa44f01487f354b5596216a28955d077b242cf15"
+source = "git+https://github.com/d4140n-4h3-1/hydroxus-ai.git?branch=main#6a86df1d48e31065afe50a22346fd0cc5e9fcbcd"
 dependencies = [
  "nalgebra 0.35.0",
+]
+
+[[package]]
+name = "hydroxus-voice"
+version = "0.1.0"
+source = "git+https://github.com/d4140n-4h3-1/hydroxus-voice.git?branch=main#8e41c661dcd133f88d0a4639fa03910a9e2b3127"
+dependencies = [
+ "serde",
 ]
 
 [[package]]
@@ -2680,6 +2688,7 @@ dependencies = [
  "fyrox-gfx",
  "fyrox-graphics-wgpu",
  "hydroxus-ai",
+ "hydroxus-voice",
  "serde",
  "serde_json",
  "web-sys",
