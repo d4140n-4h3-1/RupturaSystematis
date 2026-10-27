@@ -8,7 +8,9 @@
 //! another, `precinct_<n>_gate`; the game makes them glow as capture the flag's firewalls do (see
 //! [`crate::firewall`]) and drops them when they are opened. The first cell's back wall has a
 //! loose panel, `tunnel_panel_<n>`, before which `tunnel_<n>` is, onto a stair down to a tunnel
-//! that comes out at `tunnel_<n>_exit`.
+//! that comes out at `tunnel_<n>_exit`. And each cell has a drain in its floor, `grate_<n>_<c>`,
+//! under a grate, the mesh `cell_grate_<n>_<c>`, which pried up lets the player down into the
+//! escape tunnels (see [`crate::escape`]), at the precinct's hatch there.
 //!
 //! The firewalls and the panel are taken out of the level's static collider, as a vault's door is
 //! (see [`crate::vault`]), each on a body of its own; and out of the droids' grid, so that none of
@@ -32,6 +34,7 @@ use fyrox::{
 
 const WALL: &str = "cell_wall_";
 const PANEL: &str = "tunnel_panel_";
+const GRATE: &str = "cell_grate_";
 /// How far round a tunnel's way out the floor is taken out of the grid, in meters.
 const EXIT_TAKEN: f32 = 1.3;
 /// How far a precinct reaches round its markers, in meters, for whether someone is in it.
@@ -57,6 +60,30 @@ pub struct Cell {
     /// The middle of its floor.
     pub middle: Vector3<f32>,
     pub wall: Barrier,
+    pub grate: Option<Grate>,
+}
+
+/// A drain in a cell's floor, under its grate.
+#[derive(Debug, PartialEq)]
+pub struct Grate {
+    pub at: Vector3<f32>,
+    mesh: Handle<Node>,
+    /// How far it has been pried up, from 0 to 1.
+    pub pried: f32,
+}
+
+impl Grate {
+    pub fn is_open(&self) -> bool {
+        self.pried >= 1.0
+    }
+
+    /// Pries it up, the grate gone from over the drain, or puts it back.
+    fn set_open(&mut self, graph: &mut Graph, open: bool) {
+        self.pried = if open { 1.0 } else { 0.0 };
+        if graph.is_valid_handle(self.mesh) {
+            graph[self.mesh].set_visibility(!open);
+        }
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -206,7 +233,9 @@ impl Precincts {
             .traverse_handle_iter(root)
             .filter(|&h| graph[h].is_mesh())
             .map(|h| (h, graph[h].name().to_string()))
-            .filter(|(_, name)| name.starts_with(WALL) || name.starts_with(PANEL) || name.starts_with("precinct_"))
+            .filter(|(_, name)| {
+                name.starts_with(WALL) || name.starts_with(PANEL) || name.starts_with(GRATE) || name.starts_with("precinct_")
+            })
             .collect();
         let glass = firewall::glass();
         let mut precincts = Vec::new();
@@ -236,7 +265,11 @@ impl Precincts {
                 .into_iter()
                 .filter_map(|(c, wall)| {
                     let middle = marker(format!("cell_{n}_{c}"))?;
-                    Some(Cell { middle, wall: Barrier::claim(graph, wall, Some(&glass)) })
+                    let grate = marker(format!("grate_{n}_{c}")).and_then(|at| {
+                        let (mesh, _) = named.iter().find(|(_, name)| *name == format!("{GRATE}{n}_{c}"))?;
+                        Some(Grate { at, mesh: *mesh, pried: 0.0 })
+                    });
+                    Some(Cell { middle, wall: Barrier::claim(graph, wall, Some(&glass)), grate })
                 })
                 .collect();
             let tunnel = named
@@ -251,7 +284,12 @@ impl Precincts {
             let extent = corners.fold((Vector3::repeat(f32::MAX), Vector3::repeat(f32::MIN)), |(lo, hi), p| {
                 (lo.inf(&p), hi.sup(&p))
             });
-            Log::info(format!("Precinct {n}: {} cells{}", cells.len(), if tunnel.is_some() { ", a tunnel" } else { "" }));
+            let grates = cells.iter().filter(|c| c.grate.is_some()).count();
+            Log::info(format!(
+                "Precinct {n}: {} cells, {grates} with a drain{}",
+                cells.len(),
+                if tunnel.is_some() { ", a tunnel" } else { "" }
+            ));
             precincts.push(Precinct { number: n, front, desk, locker, guard, cells, gate, tunnel, extent });
         }
         precincts.sort_by_key(|p| p.number);
@@ -297,6 +335,9 @@ impl Precincts {
         for precinct in &mut self.precincts {
             for cell in &mut precinct.cells {
                 cell.wall.set_open(graph, false, grid.as_deref_mut());
+                if let Some(grate) = cell.grate.as_mut() {
+                    grate.set_open(graph, false);
+                }
             }
             precinct.gate.set_open(graph, false, grid.as_deref_mut());
             if let Some(tunnel) = precinct.tunnel.as_mut() {
@@ -325,6 +366,13 @@ impl Precincts {
         if let Some(tunnel) = self.precincts.get_mut(p).and_then(|p| p.tunnel.as_mut()) {
             tunnel.pried = 1.0;
             tunnel.panel.set_open(graph, true, None);
+        }
+    }
+
+    /// Pries up the grate over the drain in the `c`th cell of the `p`th precinct.
+    pub fn open_grate(&mut self, graph: &mut Graph, (p, c): (usize, usize)) {
+        if let Some(grate) = self.precincts.get_mut(p).and_then(|p| p.cells.get_mut(c)).and_then(|c| c.grate.as_mut()) {
+            grate.set_open(graph, true);
         }
     }
 

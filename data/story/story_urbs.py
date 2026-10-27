@@ -28,7 +28,8 @@ the evidence locker (precinct_<n>_locker), a gate (precinct_<n>_gate) through to
 cell block - a firewall - a corridor where the guard keeps (precinct_<n>_guard), and the cells
 along the back (cell_<n>_<c>, each behind a firewall, cell_wall_<n>_<c>, which drops). The first cell's back
 wall has a loose panel (tunnel_panel_<n>, tunnel_<n> before it) onto a stair down into a tunnel
-under the podium, out at the side (tunnel_<n>_exit).
+under the podium, out at the side (tunnel_<n>_exit). And each cell has a drain in its floor, under a
+grate (cell_grate_<n>_<c>, grate_<n>_<c> on it), down into the escape tunnels.
 
 The escape tunnels, out of sight under it all (escape_tunnels): a den at their heart, where a gang keeps
 (den_<k>) and a fence will wipe a record clean (fence), four ways out to a ring, and off the ring
@@ -1090,6 +1091,20 @@ def precinct(m, poly, street_faces):
                m.white, width=0.05)
         spot = a + u * cm + v * ((bars1 + back0) / 2)
         br_town.marker(f"cell_{n}_{c + 1}", spot.x, spot.y, P, facing(-v))
+        # A drain in its floor, past the bunk's foot: a dark pit under a grate lit cyan, which the
+        # game hides once it is pried up, and drops the player through into the escape tunnels.
+        gu, gv, gr = c0 + 2.55, back0 - 0.5, 0.3
+        m.prism(quad(a, u, v, gu - gr, gu + gr, gv - gr, gv + gr), P, P + 0.005, m.facades["slate"])
+        bars = [quad(a, u, v, gu - gr, gu + gr, gv + k - 0.025, gv + k + 0.025) for k in (-gr + 0.025, -0.1, 0.1, gr - 0.025)]
+        bars += [quad(a, u, v, gu + k - 0.025, gu + k + 0.025, gv - gr, gv + gr) for k in (-gr + 0.025, gr - 0.025)]
+        verts, faces = [], []
+        for bar_ in bars:
+            vs, fs = slab(bar_, P, P + 0.03)
+            faces += [tuple(len(verts) + i for i in f) for f in fs]
+            verts += vs
+        Nexus.mesh(m, verts, faces, m.struct, cyan).name = f"cell_grate_{n}_{c + 1}"
+        spot = a + u * gu + v * gv
+        br_town.marker(f"grate_{n}_{c + 1}", spot.x, spot.y, P, facing(-v))
 
 
 

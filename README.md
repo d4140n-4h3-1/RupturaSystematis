@@ -119,6 +119,14 @@ the crate makes.
 
 ### The game
 
+27 October 2026:
+
+- **A drain in every cell.** In the corner past the bunk's foot, under a grate lit cyan: E to
+  pry it up, a little at a time, unseen, then E to drop down the drain into the escape tunnels,
+  where the precinct's hatch comes out. Down there you have got away. And going down any hatch
+  with droids after you, they lose you - though those that saw a crime still go to tell a
+  sentry.
+
 26 October 2026:
 
 - **Escape tunnels under Urbs**, as Skyrim's interiors are behind their doors: hatches in each
@@ -829,7 +837,7 @@ Pages.
 | Right mouse, drawn | Raise the pistol to aim, rather than hold it at the ready   |
 | E                | Talk to the droid close by and in front of you, or use the computer in front of you |
 | H                | In Urbs, with security after you: put your hands up and go quietly, for a shorter sentence |
-| E, held in a cell | At the firewall: pick its lock (with a key card, open it). At a guard facing you: ask its price to look away, then E again to pay. At a guard with its back to you, close by: lift its key card. At a loose panel: pry it, a little at a time |
+| E, held in a cell | At the firewall: pick its lock (with a key card, open it). At a guard facing you: ask its price to look away, then E again to pay. At a guard with its back to you, close by: lift its key card. At a loose panel, or the grate over the drain: pry it, a little at a time. At the drain, its grate up: drop down into the escape tunnels |
 | Lock: W / S      | Pick a ring of the lock, further out or in                    |
 | Lock: A / D (hold) | Turn the picked ring; held, it stops drifting               |
 | Lock: Space      | Latch the ring, once its gap is in the slot at the top - it lights up yellow |
@@ -894,6 +902,7 @@ logs goes to the browser's console there.
 | `MAZE_KNOCKDOWN=<s>`     | That many seconds into a round, shoots down the droid nearest you, to try the ragdolls out. |
 | `MAZE_ARREST=<s>`        | In Urbs, that many seconds into a round, arrests you where you stand, to try jail out; with `MAZE_PICK=1` as well, starts picking your cell's lock. |
 | `MAZE_TUNNELS=<s>`       | In Urbs, that many seconds into a round, takes you down the first hatch into the escape tunnels. |
+| `MAZE_GRATE=<s>`         | With `MAZE_ARREST`, that many seconds after the arrest, pries up your cell's grate and drops you down the drain into the escape tunnels. |
 | `MAZE_HEIST_OPEN=<n>`    | In a heist, the first n doors' computers count as hacked, to try it out. |
 | `MAZE_SHIELD=<s>`        | That many seconds into a round, raises your shield, as the 1 key does. |
 | `MAZE_DRONE_ALARM=<s>`   | That many seconds into a round, sends the drone after you as if the alarm had sounded, to try it out. |

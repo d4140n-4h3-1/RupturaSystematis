@@ -4,7 +4,7 @@
 //! after them gives it up, and they are put in a cell, behind its firewall, for a sentence as long
 //! as they are wanted for (see [`sentence`]).
 //!
-//! There are five ways out:
+//! There are six ways out:
 //! - **Serve the sentence**: it runs down while they are in their cell, and then the firewall and
 //!   the gate drop, and they are free to go.
 //! - **Pick the lock**: E at the firewall, from inside, to pick it (see [`crate::lockpick`]);
@@ -16,10 +16,12 @@
 //!   their sentence.
 //! - **The tunnel**: in a cell with a loose panel in its back wall, E to pry it loose, a little at
 //!   a time, then a stair down to a tunnel out.
+//! - **The drain**: in any cell, E at the grate over it to pry it up, a little at a time, then E
+//!   to drop down into the escape tunnels (see [`crate::escape`]).
 //!
 //! Out of the cell but for being released, they have escaped: a guard that sees them in the
 //! precinct goes after them, and calls the others; caught, they are back in a cell for longer.
-//! Once well clear of the precinct, unseen, they are away. Seen at anything - picking, prying,
+//! Once well clear of the precinct, unseen, or down in the escape tunnels, they are away. Seen at anything - picking, prying,
 //! reaching for a card - adds to the sentence, and stops it.
 
 /// How long a sentence is at least, in seconds, how much each count they are wanted for adds, and
@@ -40,7 +42,7 @@ pub const OFFER_STANDS: f32 = 5.0;
 pub const GUARD_REACH: f32 = 2.6;
 pub const CARD_REACH: f32 = 1.5;
 pub const AT_LOCK: f32 = 1.3;
-/// How long the panel takes to pry loose, in seconds of prying.
+/// How long the panel, or a drain's grate, takes to pry loose, in seconds of prying.
 pub const PRYING: f32 = 10.0;
 /// How long after being put in a cell, in seconds, a player who has dropped through its floor is
 /// put back in it: the physics now and then lets a body just set down there through.

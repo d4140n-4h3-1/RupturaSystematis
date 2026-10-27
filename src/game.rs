@@ -332,6 +332,10 @@ pub struct MazeGame {
     #[visit(skip)]
     #[reflect(hidden)]
     tried_tunnels: bool,
+    /// Whether MAZE_GRATE has sent the player down their cell's drain yet this round.
+    #[visit(skip)]
+    #[reflect(hidden)]
+    tried_grate: bool,
     /// Whether MAZE_ARREST has arrested the player this round yet.
     #[visit(skip)]
     #[reflect(hidden)]
@@ -1131,6 +1135,7 @@ impl MazeGame {
         self.passing = None;
         self.hatch_told = None;
         self.tried_tunnels = false;
+        self.tried_grate = false;
         self.hud.set_fade(ctx.user_interfaces.first(), 0.0);
         self.level.tunnels.reset(&mut ctx.scenes[self.scene].graph);
         self.player.set_confiscated(false);
@@ -3128,6 +3133,25 @@ impl MazeGame {
         false
     }
 
+    /// Drops the player held down their cell's drain, its grate up: into the escape tunnels, where
+    /// the precinct's hatch comes out.
+    fn down_the_drain(&mut self, ctx: &mut PluginContext) {
+        let Some(custody) = self.custody else {
+            return;
+        };
+        let number = self.level.precincts.precincts[custody.precinct].number;
+        let name = format!("precinct_{number}");
+        let Some(hatch) = self.level.tunnels.hatches.iter().find(|hatch| hatch.name == name).cloned() else {
+            self.hud.show_note("The drain is too narrow to get down".to_string());
+            return;
+        };
+        let (to, yaw) = self.level.tunnels.arrival(&hatch, true, self.player.yaw());
+        self.passing = Some(Passing { to, yaw, time: 0.0, moved: false });
+        self.stop_picking(ctx);
+        self.player.release_keys();
+        Log::info(format!("Jail: down the drain, into the escape tunnels at {name}"));
+    }
+
     /// Sees to the escape tunnels for another frame: going through a hatch, the screen dark as the
     /// player is moved; the caches taken; and each hatch told of as the player comes to it.
     fn see_to_tunnels(&mut self, ctx: &mut PluginContext) {
@@ -3150,6 +3174,15 @@ impl MazeGame {
                 passing.moved = true;
                 let graph = &mut ctx.scenes[self.scene].graph;
                 self.player.teleport_feet(graph, passing.to, passing.yaw);
+                // Down out of sight, where no droid can follow: those after them lose them.
+                if self.level.tunnels.holds(passing.to) {
+                    for n in self.inhabitants.lose_player() {
+                        self.inhabitants.set_eyes(n, None);
+                    }
+                    for drone in &mut self.drones {
+                        drone.stand_down();
+                    }
+                }
             }
             self.hud.set_fade(ctx.user_interfaces.first(), passing.dark());
             self.passing = (passing.time < escape::PASSING).then_some(passing);
@@ -3240,7 +3273,7 @@ impl MazeGame {
         let tunnel = self.level.precincts.precincts[p].tunnel.is_some() && c == 0;
         Log::info(format!("Arrested by {by}: precinct {}, cell {}, {:.0} s", p + 1, c + 1, custody.sentence));
         self.hud.show_note(format!(
-            "Arrested by {by}: {} in a cell. E at the firewall to pick it, at a guard to bribe it{}",
+            "Arrested by {by}: {} in a cell. E at the firewall to pick it, at a guard to bribe it, at the drain to pry its grate{}",
             hud::format_time(custody.sentence),
             if tunnel { ", at the loose panel to pry it" } else { "" }
         ));
@@ -3327,6 +3360,11 @@ impl MazeGame {
             .as_ref()
             .filter(|tunnel| custody.cell == 0 && tunnel.pried < 1.0)
             .is_some_and(|tunnel| (tunnel.at - feet).xz().norm() < jail::AT_LOCK);
+        let grate = precinct.cells[custody.cell]
+            .grate
+            .as_ref()
+            .filter(|grate| in_cell && (grate.at - feet).xz().norm() < jail::AT_LOCK)
+            .map(|grate| grate.is_open());
         let guard = self.inhabitants.sentry_near(feet, jail::GUARD_REACH, sentry);
         let done = if let Some((g, price, _)) = custody.offer.filter(|_| in_cell) {
             // Paying what the guard asked.
@@ -3374,11 +3412,19 @@ impl MazeGame {
                 self.player.release_keys();
             }
             true
-        } else if near_panel {
+        } else if grate == Some(true) {
+            // Down the drain, into the escape tunnels.
+            custody.escaped = true;
+            custody.prying = false;
+            self.custody = Some(custody);
+            self.down_the_drain(ctx);
+            return true;
+        } else if near_panel || grate == Some(false) {
+            let what = if grate.is_some() { "grate" } else { "panel" };
             custody.prying = !custody.prying;
             self.hud.show_note(match custody.prying {
-                true => "Prying the panel loose: stay by it, unseen".to_string(),
-                false => "You leave the panel be".to_string(),
+                true => format!("Prying the {what} loose: stay by it, unseen"),
+                false => format!("You leave the {what} be"),
             });
             true
         } else {
@@ -3431,6 +3477,19 @@ impl MazeGame {
                 self.picking = Some((phase, false));
             }
         }
+        // With MAZE_GRATE=<seconds> as well, that long after: their cell's grate pried up, and they
+        // down the drain.
+        let grate_at = platform::var("MAZE_GRATE").and_then(|s| s.trim().parse::<f32>().ok());
+        if let (Some(at), Some(arrested)) = (grate_at, arrest_at) {
+            if self.round_time >= arrested + at && !self.tried_grate && self.custody.is_some() {
+                self.tried_grate = true;
+                if let Some(custody) = self.custody.as_mut() {
+                    custody.escaped = true;
+                    self.level.precincts.open_grate(&mut ctx.scenes[self.scene].graph, (custody.precinct, custody.cell));
+                }
+                self.down_the_drain(ctx);
+            }
+        }
         // The corridor's guards walk on to stand before another cell now and then.
         self.beat_in -= dt;
         if self.beat_in <= 0.0 {
@@ -3455,6 +3514,9 @@ impl MazeGame {
         let Some(mut custody) = self.custody else {
             return;
         };
+        if self.passing.is_some() {
+            return;
+        }
         let graph = &ctx.scenes[self.scene].graph;
         let feet = self.player.feet(graph);
         let p = custody.precinct;
@@ -3523,8 +3585,22 @@ impl MazeGame {
                 screen.draw(ui, lock);
             }
         }
-        // The panel being pried: by it, a little more each moment.
-        if custody.prying {
+        // The grate, or the panel, being pried: by it, a little more each moment.
+        let at_grate = self.level.precincts.precincts[p].cells[custody.cell]
+            .grate
+            .as_ref()
+            .is_some_and(|grate| !grate.is_open() && (grate.at - feet).xz().norm() < jail::AT_LOCK);
+        if custody.prying && at_grate {
+            let cell = &mut self.level.precincts.precincts[p].cells[custody.cell];
+            if let Some(grate) = cell.grate.as_mut() {
+                grate.pried += dt / jail::PRYING;
+                if grate.pried >= 1.0 {
+                    custody.prying = false;
+                    self.level.precincts.open_grate(&mut ctx.scenes[self.scene].graph, (p, custody.cell));
+                    self.hud.show_note("The grate comes up: E to drop down the drain".to_string());
+                }
+            }
+        } else if custody.prying {
             let at_panel = self.level.precincts.precincts[p]
                 .tunnel
                 .as_ref()
@@ -3582,7 +3658,8 @@ impl MazeGame {
         }
         // Away, well clear and unseen.
         let front = self.level.precincts.precincts[p].front;
-        let away = custody.escaped && seen.is_none() && (front - feet).xz().norm() > jail::AWAY && self.inhabitants.alarm().is_none();
+        let clear = seen.is_none() && (front - feet).xz().norm() > jail::AWAY && self.inhabitants.alarm().is_none();
+        let away = custody.escaped && (self.level.tunnels.holds(feet) || clear);
         self.custody = Some(custody);
         if !custody.escaped && custody.sentence <= 0.0 {
             self.release(ctx, "Sentence served");

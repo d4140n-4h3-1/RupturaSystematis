@@ -3567,6 +3567,31 @@ impl Inhabitants {
         calmed
     }
 
+    /// Has everyone after the player, or searching for them, lose them: the player has gone where
+    /// none can follow. Witnesses still go to tell a sentry what they saw. Those that did, as
+    /// indices.
+    pub fn lose_player(&mut self) -> Vec<usize> {
+        let mut lost = Vec::new();
+        for (n, droid) in self.droids.iter_mut().enumerate() {
+            if droid.down || droid.side.is_some() {
+                continue;
+            }
+            droid.threat = 0.0;
+            droid.sees_player = false;
+            if droid.alert.is_some() {
+                droid.alert = None;
+                droid.route.clear();
+                droid.trip = None;
+                droid.resting = REST.0;
+                lost.push(n);
+            }
+        }
+        self.search = None;
+        self.last_sight = None;
+        self.search_from = None;
+        lost
+    }
+
     /// Puts a droid of the `character`th kind down to keep about `post`, on the floor of `grid`
     /// whose corner is at `origin`, facing `heading`: one of a precinct's guards. It keeps to it for
     /// good, never turning up again elsewhere as the crowd does, nor called off to a chase or a

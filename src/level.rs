@@ -43,10 +43,10 @@ const FLAG_MIDDLE: f32 = 2.0;
 /// vault and its terminals, ways out, guards, drones and where its waves come from (see
 /// [`crate::heist`]), or a city's stores and banks, each with a computer keeping its takings (see
 /// [`crate::computer::Kind`]).
-const MARKERS: [&str; 23] = [
+const MARKERS: [&str; 24] = [
     "flag_", "computer_", "post_", "spawn_", "heist_start", "door_", "loot", "extract_", "guard_", "drone_",
     "terminal_", "wave_", "place_", "store_", "bank_", "vault_", "precinct_", "cell_", "tunnel_", "hatch_",
-    "cache_", "den_", "fence",
+    "cache_", "den_", "fence", "grate_",
 ];
 
 /// Somewhere a maze model marks with an empty, by the empty's name, for the game to put
