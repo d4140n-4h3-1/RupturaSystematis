@@ -119,6 +119,16 @@ the crate makes.
 
 ### The game
 
+28 October 2026:
+
+- **Three stations on Urbs' railway**: out in the north, in the middle and out in the south by
+  the canal, each with platforms either side of the beam, climbed by stairs. The train stands at
+  each with its doors open, from the north to the south and back, round the line in a little
+  over three minutes. Step up into it from the platform, ride, and step off at another.
+- **Droids take the train**, a few at a time: one near a station climbs to the platform, waits
+  beside a doorway, gets on when the doors open, stands looking out as it rides, and gets off at
+  another station to go about its business there.
+
 27 October 2026:
 
 - **A loading screen**, from picking a game until it can be played: the map's name and what it

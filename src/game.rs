@@ -1884,8 +1884,9 @@ impl MazeGame {
             };
             self.chase_barks.push((n, name, mood));
         }
-        // The ferries, for the droids to cross on.
+        // The ferries, for the droids to cross on, and the train, for them to ride.
         let crossings = self.level.ferries.crossings(&scene.graph);
+        self.inhabitants.set_train(self.train.as_ref().map(Train::doors));
         self.inhabitants.update(
             &mut scene.graph,
             (grid, *origin),

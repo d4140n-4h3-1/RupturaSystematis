@@ -82,12 +82,14 @@ fn ramp(velocity: Vector3<f32>, target: Vector3<f32>, acceleration: f32, dt: f32
     }
 }
 
-/// Whether `collider` stands still: a floor, a wall or a step, not anyone's body.
+/// Whether `collider` is part of the place, to step onto: a floor, a wall or a step that stands
+/// still, or one that moves by itself - a ferry, or the train, its doorway's sill a step up from
+/// the platform (see [`crate::train`]) - not anyone's body.
 fn fixed(graph: &Graph, collider: Handle<Collider>) -> bool {
     let body = graph[collider.transmute::<Node>()].parent();
-    graph
-        .try_get_of_type::<RigidBody>(body)
-        .is_ok_and(|body| body.body_type() == RigidBodyType::Static)
+    graph.try_get_of_type::<RigidBody>(body).is_ok_and(|body| {
+        matches!(body.body_type(), RigidBodyType::Static | RigidBodyType::KinematicVelocityBased)
+    })
 }
 
 /// How fast `collider` goes, if it is a floor that moves by itself - a ferry (see
