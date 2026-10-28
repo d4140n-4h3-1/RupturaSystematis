@@ -29,6 +29,7 @@ mod credits;
 mod ctf;
 mod culling;
 mod diagnostics;
+mod distant;
 mod dialogue;
 pub mod dismember;
 mod drone;

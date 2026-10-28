@@ -7,6 +7,7 @@
 
 use crate::{
     culling::Culling,
+    distant::{self, Distant},
     ferry::Ferries,
     roads::{RoadPlan, Roads},
     escape::Tunnels,
@@ -92,6 +93,8 @@ pub struct Level {
     pub grid: Option<(WalkGrid, Vector3<f32>)>,
     /// What of a random maze is drawn and lit: only what can be seen from where the player is.
     culling: Option<Culling>,
+    /// What of a city is drawn in full, and what simplified, far off: see [`Distant`].
+    distant: Distant,
     /// What of the level moves: see [`Ferries`].
     pub ferries: Ferries,
     /// The banks' vaults' doors, which open: see [`Vaults`].
@@ -191,6 +194,9 @@ impl Level {
             None => Log::info("Maze: nothing to find in the level, using a marker of our own"),
         }
 
+        // The lamps' glass, while it can still be told by its colour, to go with the full detail
+        // of a city far off.
+        let lamp_glass = if fixed { distant::lamp_glass(&scene.graph, root) } else { Vec::new() };
         // Before the glass is put in, which is the level's own already.
         let mut glow = fixtures::claim_glow(&mut scene.graph, root);
         let panes = fixtures::glaze(&mut scene.graph, root, &mut glow);
@@ -210,6 +216,12 @@ impl Level {
         let tunnels = if fixed { Tunnels::find(&scene.graph, root, &markers) } else { Tunnels::default() };
         let (precincts, precinct_bodies) = if fixed {
             Precincts::claim(&mut scene.graph, root, &markers)
+        } else {
+            Default::default()
+        };
+        // A city's simplified blocks, too, which only stand in for it far off.
+        let (distant, far_root) = if fixed {
+            Distant::claim(&mut scene.graph, root, &lamp_glass)
         } else {
             Default::default()
         };
@@ -234,6 +246,7 @@ impl Level {
         nodes.extend(ferry_bodies);
         nodes.extend(vault_bodies);
         nodes.extend(precinct_bodies);
+        nodes.extend(far_root);
         Self {
             nodes,
             collider,
@@ -249,6 +262,7 @@ impl Level {
             markers,
             grid: None,
             culling: None,
+            distant,
             ferries,
             vaults,
             precincts,
@@ -304,8 +318,9 @@ impl Level {
 
     /// Draws and lights only what can be seen from where the player is, if the level is culled.
     /// Without culling - a model rather than a random maze - the lamps far from the player fade
-    /// out instead (see [`LAMPS_FADE`]).
+    /// out instead (see [`LAMPS_FADE`]); and a city far off is drawn simplified (see [`Distant`]).
     pub fn cull(&mut self, graph: &mut Graph, player: Vector3<f32>) {
+        self.distant.update(graph, player);
         if let Some(culling) = self.culling.as_mut() {
             culling.update(graph, player);
         } else if self.lamps_on {

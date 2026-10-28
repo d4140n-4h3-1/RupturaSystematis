@@ -104,7 +104,15 @@ STATIONS = (
     (-372.0, -332.0, -1, "place_station_south"),
 )
 GATE = (22.0, 6.0, 24.0)      # the gates' bridges: how long and wide, and their pads' size
-TILE = 64.0                   # the meshes are gathered by tiles of this size
+TILE = 128.0                  # the meshes are gathered by tiles of this size: big, as the game pays by the mesh
+FAR_TILE = 256.0              # and again, simplified, by blocks of this size, for the game to show far off
+# Far off, what is too small to make out goes: pieces of a collection smaller than this across,
+# in meters, and these collections and materials altogether.
+FAR_LEAST = {"Structures": 2.0, "Trim": 6.0, "Ground": 0.0}
+FAR_DROPS = ("Marking",)
+# The lit windows, which are the city at night from near and far alike, gathered by block apart
+# from the rest, for the game to show whatever the distance.
+WINDOWS = "Window"
 LIGHT_BELOW = 10.0            # lines of light lower than this light their surroundings in the game
 TRIM = 0.12
 WALL = 0.3                    # a store's or a bank's walls, inside
@@ -163,6 +171,15 @@ def scaled(poly, k):
 Z = Vector((0, 0, 1))
 
 
+def far_off(verts, col, mat):
+    """Whether a piece of `col` in `mat` with its corners at `verts` is still seen far off."""
+    if col not in FAR_LEAST or mat.startswith(FAR_DROPS):
+        return False
+    lo = Vector((min(v[0] for v in verts), min(v[1] for v in verts), min(v[2] for v in verts)))
+    hi = Vector((max(v[0] for v in verts), max(v[1] for v in verts), max(v[2] for v in verts)))
+    return (hi - lo).length >= FAR_LEAST[col]
+
+
 class Urbs(Nexus):
     """The city's materials, and its geometry gathered by tile as it is made."""
 
@@ -193,6 +210,7 @@ class Urbs(Nexus):
         }
         self.marking = glow("Marking", (0.8, 0.82, 0.85), 0.6)
         self.buckets = {}      # (collection, tile) -> [verts, faces, material per face]
+        self.far = {}          # (collection, block) -> the same, of what is seen far off
         self.n_buildings = 0
         # The stores and banks have a stream of chance of their own, so the city is the same with them.
         self.trade = random.Random(0)
@@ -208,17 +226,29 @@ class Urbs(Nexus):
             return super().mesh(verts, faces, col, mat, cover)
         c = sum((Vector(v) for v in verts), Vector()) / len(verts)
         tile = (math.floor(c.x / TILE), math.floor(c.y / TILE))
-        bucket = self.buckets.setdefault((col.name, tile), ([], [], []))
-        base = len(bucket[0])
-        bucket[0].extend(tuple(v) for v in verts)
-        bucket[1].extend(tuple(base + i for i in f) for f in faces)
-        bucket[2].extend([mat] * len(faces))
+        block = (math.floor(c.x / FAR_TILE), math.floor(c.y / FAR_TILE))
+        if mat.name.startswith(WINDOWS):
+            buckets = [self.buckets.setdefault(("Windows", block), ([], [], []))]
+        else:
+            buckets = [self.buckets.setdefault((col.name, tile), ([], [], []))]
+            if far_off(verts, col.name, mat.name):
+                buckets.append(self.far.setdefault((col.name, block), ([], [], [])))
+        for bucket in buckets:
+            base = len(bucket[0])
+            bucket[0].extend(tuple(v) for v in verts)
+            bucket[1].extend(tuple(base + i for i in f) for f in faces)
+            bucket[2].extend([mat] * len(faces))
         return None
 
     def build_buckets(self):
-        """A mesh for each tile of each collection, its pieces' faces turned outward."""
+        """A mesh for each tile of each collection, its pieces' faces turned outward, and for each
+        block of the lit windows; and one for each block of each collection, of what is seen far
+        off, simplified - named Far<collection>_<x>_<y> for the game to show in place of the
+        tiles in the block once it is far enough away."""
         cols = {c.name: c for c in (self.ground, self.struct, self.cover, self.trim)}
-        for (name, (tx, ty)), (verts, faces, mats) in sorted(self.buckets.items()):
+        cols["Windows"] = self.trim
+        far = {(f"Far{name}", block): bucket for (name, block), bucket in self.far.items()}
+        for (name, (tx, ty)), (verts, faces, mats) in sorted(self.buckets.items()) + sorted(far.items()):
             mesh = bpy.data.meshes.new(f"{name}_{tx}_{ty}")
             mesh.from_pydata(verts, [], faces)
             slots = {}
@@ -230,13 +260,18 @@ class Urbs(Nexus):
                 poly.material_index = slots[id(mat)]
             bm = bmesh.new()
             bm.from_mesh(mesh)
+            if name.startswith("Far"):
+                # Decimated: flat faces next to each other made one, so long as they are the same
+                # material.
+                bmesh.ops.dissolve_limit(bm, angle_limit=math.radians(1.0), verts=bm.verts[:], edges=bm.edges[:],
+                                         delimit={'MATERIAL'})
             bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
             bm.to_mesh(mesh)
             bm.free()
             mesh.update()
             o = bpy.data.objects.new(f"{name}_{tx}_{ty}", mesh)
-            cols[name].objects.link(o)
-        print(f"[map] {len(self.buckets)} meshes")
+            cols[name.removeprefix("Far")].objects.link(o)
+        print(f"[map] {len(self.buckets)} meshes, {len(self.far)} far off")
 
     def line(self, p, q, mat, width=TRIM, height=None, across=None, light=True):
         # Only lines near the ground light their surroundings: those up a tower would light

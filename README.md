@@ -128,6 +128,12 @@ the crate makes.
 - **Droids take the train**, a few at a time: one near a station climbs to the platform, waits
   beside a doorway, gets on when the doors open, stands looking out as it rides, and gets off at
   another station to go about its business there.
+- **The cities draw three times as fast**: about 7 ms a frame in Urbs, from about 21. The
+  renderer pays by the mesh, not the triangle, so the cities are gathered into tiles of 128 m
+  rather than 64. Beyond about 220 m each block of 256 m is drawn from a simplified copy of
+  itself, made with the city: the same buildings and lines of light, without the road markings,
+  lamp posts and short trim too small to make out that far off. The lit windows are their own
+  meshes, near and far alike.
 
 27 October 2026:
 
