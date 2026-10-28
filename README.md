@@ -121,6 +121,21 @@ the crate makes.
 
 27 October 2026:
 
+- **A loading screen**, from picking a game until it can be played: the map's name and what it
+  is, a bar through loading its models, building the level and surveying it, and a tip.
+- **Ferrum**, the works city east of Urbs, `data/story/story_ferrum.glb`, built by
+  `data/story/story_ferrum.py`: a model of its own, played along with Urbs, a bridge from Urbs'
+  east gate leading into it. Fourteen by fourteen blocks of heavy industry in amber and red: the
+  Crucible, a blast furnace with its stoves, bustle pipe and skip incline and iron running in
+  channels across its floor; a power station under three chimneys up to 175 m; a rail yard with
+  gantry cranes; rolling-mill halls, tank farms, refinery columns and burning flares,
+  gasholders in their lattice frames, silos and ore heaps; workers' tenements with access decks
+  by the bridge; and quay cranes over Urbs' canal, which carries on through it. Pipe racks cross
+  its streets. Surveying the two together takes about twice as long as Urbs alone.
+- **The train** on Urbs' elevated railway, `data/train.glb` (made in Blender by
+  `~/Documents/blender/train/build_train.py`): three cars floating over the beam, framed in
+  light, that stand at the station with their doors open both sides, then run the line to its
+  far end in the south and back. Step aboard and ride along.
 - **A drain in every cell.** In the corner past the bunk's foot, under a grate lit cyan: E to
   pry it up, a little at a time, unseen, then E to drop down the drain into the escape tunnels,
   where the precinct's hatch comes out. Down there you have got away. And going down any hatch

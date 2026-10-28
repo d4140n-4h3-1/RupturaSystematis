@@ -38,6 +38,7 @@ use crate::{
     roads::RoadPlan,
     hud::{self, Hud, Status},
     loading::{LoadingScreen, Step},
+    train::{Train, TRAIN_MODEL},
     inhabitants::{Alert, Grouping, Inhabitants, Livery, News, Rival, Threat, HOSTILE_MODEL},
     layout::{self, Rng},
     level::Level,
@@ -287,6 +288,18 @@ pub struct MazeGame {
     #[visit(skip)]
     #[reflect(hidden)]
     model: Option<ModelResource>,
+    /// The model played along with it, if its map has one (see [`ctf::Map::alongside`]), with
+    /// where it is from.
+    #[visit(skip)]
+    #[reflect(hidden)]
+    alongside: Option<(String, ModelResource)>,
+    /// The train on Urbs' railway, once its model has loaded and the level is ready for it.
+    #[visit(skip)]
+    #[reflect(hidden)]
+    train_model: Option<ModelResource>,
+    #[visit(skip)]
+    #[reflect(hidden)]
+    train: Option<Train>,
     /// What those in a foot chase have called out since the droids were last moved, to be said.
     #[visit(skip)]
     #[reflect(hidden)]
@@ -837,14 +850,21 @@ impl MazeGame {
         match model {
             Some(path) => {
                 self.model = Some(resources.request::<Model>(&path));
+                let alongside = ctf::map_at(&path).and_then(|map| map.alongside);
+                self.alongside = alongside.map(|other| (other.to_string(), resources.request::<Model>(other)));
+                self.train_model = (path == ctf::URBS.path).then(|| resources.request::<Model>(TRAIN_MODEL));
                 self.sky = ctf::map_at(&path)
                     .filter(|map| map.void || map.night)
                     .map(|_| resources.request::<Texture>(ctf::VOID_SKY));
                 self.firewalls = Firewalls::request(resources);
                 self.doors = Doors::request(resources);
                 // Not on the web, which has never had them.
-                self.glow = if cfg!(target_arch = "wasm32") { None } else { GlowLights::load(&path) };
-                self.road_plan = RoadPlan::load(&path);
+                self.glow = if cfg!(target_arch = "wasm32") {
+                    None
+                } else {
+                    GlowLights::load(&path).map(|glow| glow.with(alongside.and_then(GlowLights::load)))
+                };
+                self.road_plan = RoadPlan::load(&path).map(|plan| plan.with(alongside.and_then(RoadPlan::load)));
                 self.model_path = path;
             }
             None => {
@@ -929,6 +949,11 @@ impl MazeGame {
         self.ring_posts.hide(&mut scene.graph);
         self.level.clear(scene);
         self.model = None;
+        self.alongside = None;
+        self.train_model = None;
+        if let Some(train) = self.train.take() {
+            train.remove(&mut ctx.scenes[self.scene].graph);
+        }
         self.prefabs = None;
         self.model_path.clear();
         self.ctf = None;
@@ -959,7 +984,8 @@ impl MazeGame {
     fn place_level(&mut self, scene: &mut Scene) -> Result<(), String> {
         if let Some(model) = &self.model {
             let fbx = self.model_path.to_ascii_lowercase().ends_with(".fbx");
-            self.level = Level::from_model(model, fbx, scene, &mut self.doubled);
+            let alongside = self.alongside.as_ref().map(|(_, model)| model);
+            self.level = Level::from_model(model, alongside, fbx, scene, &mut self.doubled);
             return Ok(());
         }
         let Some(prefabs) = self.prefabs.clone() else {
@@ -1001,8 +1027,11 @@ impl MazeGame {
         self.barks.clear();
         // Made (and seeded) first: the grid below borrows the game.
         self.rng();
-        // The ferries set off afresh, from where they start.
+        // The ferries set off afresh, from where they start, and the train from the station.
         self.level.ferries.reset(&mut ctx.scenes[self.scene].graph);
+        if let Some(train) = self.train.as_mut() {
+            train.reset(&mut ctx.scenes[self.scene].graph);
+        }
         // The banks' vaults shut, and full again.
         self.level.vaults.reset(&mut ctx.scenes[self.scene].graph);
         // The firewalls first, closed again, so that the floor round them is out of the grid
@@ -1349,6 +1378,7 @@ impl MazeGame {
         match (&self.model, &self.prefabs) {
             (Some(model), _) => {
                 let mut models = vec![(self.model_path.clone(), model.clone())];
+                models.extend(self.alongside.clone());
                 models.extend(self.firewalls.models());
                 models.extend(self.doors.models());
                 models
@@ -4263,6 +4293,22 @@ impl MazeGame {
 
     /// Scatters the hearts in the corridors once their model has loaded and a round is under way,
     /// and keeps them floating.
+    /// Puts the train on the line once its model has loaded, the level being ready: after the
+    /// survey, which it is no part of.
+    fn set_up_train(&mut self, ctx: &mut PluginContext) {
+        if self.train.is_some() || self.level.grid.is_none() {
+            return;
+        }
+        let Some(model) = self.train_model.take_if(|model| !model.is_loading()) else {
+            return;
+        };
+        if model.is_ok() {
+            self.train = Some(Train::spawn(&mut ctx.scenes[self.scene], &model));
+        } else {
+            Log::err(format!("Could not load {TRAIN_MODEL}; Urbs' railway has no train"));
+        }
+    }
+
     fn set_up_shield(&mut self, ctx: &mut PluginContext) {
         if self.shield_model.as_ref().is_some_and(|model| model.is_failed_to_load()) {
             Log::err(format!("Could not load {SHIELD_MODEL}; there is no shield"));
@@ -4637,6 +4683,10 @@ impl Plugin for MazeGame {
         // the player is carried along with where they are going this step.
         if !self.menu.is_open() && matches!(self.phase, Phase::Playing | Phase::Won | Phase::Deleted) {
             self.level.ferries.update(&mut ctx.scenes[self.scene].graph, ctx.dt);
+            self.set_up_train(ctx);
+            if let Some(train) = self.train.as_mut() {
+                train.update(&mut ctx.scenes[self.scene].graph, ctx.dt);
+            }
         }
         match self.phase {
             // While the menu is open nothing happens: no loading, no clock, no player.

@@ -108,6 +108,9 @@ pub fn stamina_count(floor: usize) -> usize {
     (floor / FLOOR_PER_STAMINA).clamp(FEWEST_STAMINA, MOST_STAMINA)
 }
 
+/// How many cells picked at random [`spots`] tries for the next, before going through them all.
+const TRIES: usize = 200;
+
 /// Where `count` hearts go in `grid`, whose player starts at `start`: cells of open floor far
 /// enough from the start - the first no further than [`NEAR_START`], where there is room - as far
 /// apart as there are cells for, picked by `rng`. Fewer if the maze has no room for them all.
@@ -136,16 +139,18 @@ pub fn spots(grid: &WalkGrid, start: (usize, usize), count: usize, rng: &mut Rng
         spots.push(near[rng.below(near.len())]);
     }
     let mut apart = APART;
-    while spots.len() < count {
-        let far: Vec<(usize, usize)> = fits
-            .iter()
-            .copied()
-            .filter(|&(x, z)| {
-                spots.iter().all(|&(sx, sz)| {
-                    (x as f32 - sx as f32).hypot(z as f32 - sz as f32) >= apart
-                })
-            })
-            .collect();
+    while spots.len() < count && !fits.is_empty() {
+        let far_enough = |&(x, z): &(usize, usize), spots: &[(usize, usize)]| {
+            spots.iter().all(|&(sx, sz)| (x as f32 - sx as f32).hypot(z as f32 - sz as f32) >= apart)
+        };
+        // A cell picked at random, tried against those placed: in a city of millions of cells,
+        // going through them all for each would take minutes. Only when the tries all miss is
+        // every cell gone through, to be sure none is left that far apart.
+        if let Some(spot) = (0..TRIES).map(|_| fits[rng.below(fits.len())]).find(|spot| far_enough(spot, &spots)) {
+            spots.push(spot);
+            continue;
+        }
+        let far: Vec<(usize, usize)> = fits.iter().copied().filter(|spot| far_enough(spot, &spots)).collect();
         if far.is_empty() {
             // No room left that far apart: nearer, then, or no more at all.
             if apart < 1.0 {

@@ -55,6 +55,16 @@ impl RoadPlan {
         }
     }
 
+    /// These roads and `other`'s together: those of a model played alongside, which keeps to the
+    /// height this one's road is under.
+    pub fn with(mut self, other: Option<Self>) -> Self {
+        if let Some(other) = other {
+            self.roads.extend(other.roads);
+            self.crossings.extend(other.crossings);
+        }
+        self
+    }
+
     /// Which cells of `grid`, whose corner is at `origin`, are road to keep off.
     pub fn on(&self, grid: &WalkGrid, origin: Vector3<f32>) -> Roads {
         let mut road = vec![false; grid.width * grid.rows()];

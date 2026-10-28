@@ -63,4 +63,5 @@ mod roads;
 mod royale;
 mod survey;
 mod tiles;
+mod train;
 mod vault;

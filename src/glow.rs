@@ -84,6 +84,14 @@ impl GlowLights {
         }
     }
 
+    /// These lines of light and `other`'s together: those of a model played alongside.
+    pub fn with(mut self, other: Option<Self>) -> Self {
+        if let Some(other) = other {
+            self.pieces.extend(other.pieces);
+        }
+        self
+    }
+
     fn from_pieces(file: File) -> Self {
         let v = |v: [f32; 3]| Vector3::new(v[0], v[1], v[2]);
         let pieces = file
