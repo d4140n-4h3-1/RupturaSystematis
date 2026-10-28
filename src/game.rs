@@ -288,11 +288,11 @@ pub struct MazeGame {
     #[visit(skip)]
     #[reflect(hidden)]
     model: Option<ModelResource>,
-    /// The model played along with it, if its map has one (see [`ctf::Map::alongside`]), with
-    /// where it is from.
+    /// The models played along with it, if its map has any (see [`ctf::Map::alongside`]), with
+    /// where each is from.
     #[visit(skip)]
     #[reflect(hidden)]
-    alongside: Option<(String, ModelResource)>,
+    alongside: Vec<(String, ModelResource)>,
     /// The train on Urbs' railway, once its model has loaded and the level is ready for it.
     #[visit(skip)]
     #[reflect(hidden)]
@@ -850,8 +850,8 @@ impl MazeGame {
         match model {
             Some(path) => {
                 self.model = Some(resources.request::<Model>(&path));
-                let alongside = ctf::map_at(&path).and_then(|map| map.alongside);
-                self.alongside = alongside.map(|other| (other.to_string(), resources.request::<Model>(other)));
+                let alongside = ctf::map_at(&path).map_or(&[][..], |map| map.alongside);
+                self.alongside = alongside.iter().map(|&other| (other.to_string(), resources.request::<Model>(other))).collect();
                 self.train_model = (path == ctf::URBS.path).then(|| resources.request::<Model>(TRAIN_MODEL));
                 self.sky = ctf::map_at(&path)
                     .filter(|map| map.void || map.night)
@@ -862,9 +862,9 @@ impl MazeGame {
                 self.glow = if cfg!(target_arch = "wasm32") {
                     None
                 } else {
-                    GlowLights::load(&path).map(|glow| glow.with(alongside.and_then(GlowLights::load)))
+                    GlowLights::load(&path).map(|glow| alongside.iter().fold(glow, |glow, other| glow.with(GlowLights::load(other))))
                 };
-                self.road_plan = RoadPlan::load(&path).map(|plan| plan.with(alongside.and_then(RoadPlan::load)));
+                self.road_plan = RoadPlan::load(&path).map(|plan| alongside.iter().fold(plan, |plan, other| plan.with(RoadPlan::load(other))));
                 self.model_path = path;
             }
             None => {
@@ -949,7 +949,7 @@ impl MazeGame {
         self.ring_posts.hide(&mut scene.graph);
         self.level.clear(scene);
         self.model = None;
-        self.alongside = None;
+        self.alongside.clear();
         self.train_model = None;
         if let Some(train) = self.train.take() {
             train.remove(&mut ctx.scenes[self.scene].graph);
@@ -984,8 +984,8 @@ impl MazeGame {
     fn place_level(&mut self, scene: &mut Scene) -> Result<(), String> {
         if let Some(model) = &self.model {
             let fbx = self.model_path.to_ascii_lowercase().ends_with(".fbx");
-            let alongside = self.alongside.as_ref().map(|(_, model)| model);
-            self.level = Level::from_model(model, alongside, fbx, scene, &mut self.doubled);
+            let alongside: Vec<&ModelResource> = self.alongside.iter().map(|(_, model)| model).collect();
+            self.level = Level::from_model(model, &alongside, fbx, scene, &mut self.doubled);
             return Ok(());
         }
         let Some(prefabs) = self.prefabs.clone() else {
@@ -1378,7 +1378,7 @@ impl MazeGame {
         match (&self.model, &self.prefabs) {
             (Some(model), _) => {
                 let mut models = vec![(self.model_path.clone(), model.clone())];
-                models.extend(self.alongside.clone());
+                models.extend(self.alongside.iter().cloned());
                 models.extend(self.firewalls.models());
                 models.extend(self.doors.models());
                 models

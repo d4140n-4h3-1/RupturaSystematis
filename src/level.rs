@@ -131,17 +131,17 @@ impl Level {
         Ok(level)
     }
 
-    /// Puts a fixed maze model into the scene, and `alongside` it another, where that stands: one
-    /// level of the two, as one.
+    /// Puts a fixed maze model into the scene, and `alongside` it others, where they stand: one
+    /// level of them all, as one.
     pub fn from_model(
         model: &ModelResource,
-        alongside: Option<&ModelResource>,
+        alongside: &[&ModelResource],
         fbx: bool,
         scene: &mut Scene,
         doubled: &mut FxHashSet<u64>,
     ) -> Self {
         let root = model.instantiate(scene);
-        if let Some(other) = alongside {
+        for other in alongside {
             let other = other.instantiate(scene);
             scene.graph.link_nodes(other, root);
         }

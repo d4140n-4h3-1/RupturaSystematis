@@ -28,9 +28,9 @@ pub struct Map {
     /// Whether voices echo there, off the buildings of a city in the open (see
     /// [`crate::formants::CITY_ECHO`]).
     pub echoes: bool,
-    /// A model of its own played along with it, where it stands beside it - another city, joined
-    /// to this one by road - its lines of light and roads with it.
-    pub alongside: Option<&'static str>,
+    /// Models of their own played along with it, where they stand beside it - other cities,
+    /// joined to this one by road - their lines of light and roads with them.
+    pub alongside: &'static [&'static str],
 }
 
 /// The Grid: a city traced in light on a platform in the void.
@@ -42,7 +42,7 @@ pub const GRID: Map = Map {
     open_sky: true,
     night: true,
     echoes: true,
-    alongside: None,
+    alongside: &[],
 };
 
 /// Nexus: a futuristic city traced in light, round a soaring spire, in the void.
@@ -54,7 +54,7 @@ pub const NEXUS: Map = Map {
     open_sky: true,
     night: true,
     echoes: true,
-    alongside: None,
+    alongside: &[],
 };
 
 /// The maps battle royale is played on, picked from in the main menu.
@@ -69,7 +69,7 @@ pub const AURUM: Map = Map {
     open_sky: true,
     night: true,
     echoes: true,
-    alongside: None,
+    alongside: &[],
 };
 
 /// Cortex: a data quarter, its data core behind three firewall doors, guard towers round it.
@@ -81,7 +81,7 @@ pub const CORTEX: Map = Map {
     open_sky: true,
     night: true,
     echoes: true,
-    alongside: None,
+    alongside: &[],
 };
 
 /// Helix: a gene lab's campus, its vault up on a gallery behind three firewall doors.
@@ -93,7 +93,7 @@ pub const HELIX: Map = Map {
     open_sky: true,
     night: true,
     echoes: true,
-    alongside: None,
+    alongside: &[],
 };
 
 /// The districts heists are played in, picked from in the main menu (see [`crate::heist`]).
@@ -103,6 +103,10 @@ pub const HEIST_MAPS: [Map; 3] = [AURUM, CORTEX, HELIX];
 /// played along with it: a bridge from Urbs' east gate leads into it.
 pub const FERRUM: &str = "data/story/story_ferrum.glb";
 
+/// Caelum: the spaceport south of Urbs, a model of its own (see `data/story/story_caelum.py`),
+/// played along with it: Urbs' middle avenue goes on over a bridge into it.
+pub const CAELUM: &str = "data/story/story_caelum.glb";
+
 /// Urbs: a whole city in the void, for a story to be told in. As yet it is played as a maze,
 /// with `MAZE_MODEL=data/story/story_urbs.glb`: the round is to find the way across it, robbing its
 /// stores and banks on the way (see [`crate::computer::Kind`] and [`crate::vault`]).
@@ -110,12 +114,12 @@ pub const URBS: Map = Map {
     name: "Urbs",
     path: "data/story/story_urbs.glb",
     about: "A whole city: towers downtown, homes and shops round them, the docks over the canal; \
-            east over a bridge, Ferrum and its works.",
+            east over a bridge, Ferrum and its works; south, Caelum and its spaceport.",
     void: true,
     open_sky: true,
     night: true,
     echoes: true,
-    alongside: Some(FERRUM),
+    alongside: &[FERRUM, CAELUM],
 };
 
 /// The places a story could be told in.
@@ -143,7 +147,7 @@ pub const MAPS: [Map; 4] = [
         open_sky: false,
         night: false,
         echoes: false,
-        alongside: None,
+        alongside: &[],
     },
     Map {
         name: "Balconies",
@@ -153,7 +157,7 @@ pub const MAPS: [Map; 4] = [
         open_sky: false,
         night: false,
         echoes: false,
-        alongside: None,
+        alongside: &[],
     },
     Map {
         name: "Hybrid",
@@ -163,7 +167,7 @@ pub const MAPS: [Map; 4] = [
         open_sky: false,
         night: false,
         echoes: false,
-        alongside: None,
+        alongside: &[],
     },
     Map {
         name: "Void",
@@ -173,7 +177,7 @@ pub const MAPS: [Map; 4] = [
         open_sky: true,
         night: false,
         echoes: false,
-        alongside: None,
+        alongside: &[],
     },
 ];
 
@@ -267,7 +271,7 @@ mod tests {
         }
         for map in ROYALE_MAPS.iter().chain(&HEIST_MAPS).chain(&STORY_MAPS) {
             assert!(dir.join(map.path).is_file(), "{} has no model at {}", map.name, map.path);
-            if let Some(alongside) = map.alongside {
+            for alongside in map.alongside {
                 assert!(dir.join(alongside).is_file(), "{} has nothing alongside at {alongside}", map.name);
             }
         }

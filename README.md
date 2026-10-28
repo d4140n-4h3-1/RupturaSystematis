@@ -121,6 +121,15 @@ the crate makes.
 
 28 October 2026:
 
+- **Caelum**, the spaceport south of Urbs, `data/story/story_caelum.glb`, built by
+  `data/story/story_caelum.py`: a model of its own, played along with Urbs and Ferrum, Urbs'
+  middle avenue going on over a bridge under an arch of light into it. Fourteen by fourteen
+  blocks in white and cyan: the campus by the bridge, its labs under solar panels, its domes and
+  the Spire, a tower turning as it rises; the terminal under a roof like a wave; the control tower
+  over the field, operations round it, landing fields with spaceplanes parked; the antenna array
+  in the west, hangars and cryogenic fuel in the east; and six launch pads along the south, a
+  rocket standing on each beside its service tower. Surveying all three cities takes about half
+  as long again as Urbs and Ferrum.
 - **Three stations on Urbs' railway**: out in the north, in the middle and out in the south by
   the canal, each with platforms either side of the beam, climbed by stairs. The train stands at
   each with its doors open, from the north to the south and back, round the line in a little

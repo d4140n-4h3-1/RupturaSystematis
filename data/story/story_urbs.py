@@ -21,7 +21,8 @@ And places of their own: the central plaza with its monument, six parks, the mar
 hall under a dome behind its colonnade, the arena, and the elevated railway down the middle
 avenue, with three stations on it - out in the north, in the middle and out in the south by the
 canal - each climbed by stairs. Bridges cross the canal at every street, steps go
-down to its water, and gates lead out over the void east and west, to pads with an obelisk each.
+down to its water, and gates lead out over the void east and west, to pads with an obelisk each; in the south the middle
+avenue goes on over a bridge to Caelum.
 
 Precincts, where security takes those it arrests: three blocks have one on a corner (precinct_<n>),
 up on a podium climbed by a flight from the street - a hall with the desk (precinct_<n>_desk) and
@@ -1591,7 +1592,8 @@ def ground(m):
                 top = -RISE * (i + 1)
                 ya = y + way * i * RUN
                 m.box(WORLD, gap_lo + 0.2, gap_hi - 0.2, ya, ya + way * RUN, -cd, top, m.ground, m.steps)
-    # The edge of the platform: a parapet round it, but for the gates east and west.
+    # The edge of the platform: a parapet round it, but for the gates east and west, and the middle
+    # avenue in the south, which goes on over the bridge to Caelum (data/story/story_caelum.py).
     corners = rect(-HALF, HALF, -HALF, HALF)
     for i in range(4):
         a, b = corners[i], corners[(i + 1) % 4]
@@ -1599,6 +1601,9 @@ def ground(m):
         gaps = []
         if i in (1, 3):    # east and west
             g = GATE[1] / 2 / (b - a).length
+            gaps = [(0.5 - g, 0.5 + g)]
+        if i == 0:         # south
+            g = STREET / 2 / (b - a).length
             gaps = [(0.5 - g, 0.5 + g)]
         # The canal crosses the east and west edges too.
         if i in (1, 3):
