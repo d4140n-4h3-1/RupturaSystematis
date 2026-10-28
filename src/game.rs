@@ -37,6 +37,7 @@ use crate::{
     lockpick::{self, LockScreen, Picking, PhaseLock},
     roads::RoadPlan,
     hud::{self, Hud, Status},
+    loading::{LoadingScreen, Step},
     inhabitants::{Alert, Grouping, Inhabitants, Livery, News, Rival, Threat, HOSTILE_MODEL},
     layout::{self, Rng},
     level::Level,
@@ -180,6 +181,9 @@ enum Phase {
     Title,
     /// Waiting for the maze model.
     Loading,
+    /// The models are in; the level is put together on the next frame, once the loading screen
+    /// says so.
+    Building,
     /// The model is in the scene; its colliders exist from the next physics step on.
     Settling(u8),
     Playing,
@@ -462,6 +466,10 @@ pub struct MazeGame {
     #[visit(skip)]
     #[reflect(hidden)]
     hud: Hud,
+    /// Over everything but the menus while a level loads.
+    #[visit(skip)]
+    #[reflect(hidden)]
+    loading: LoadingScreen,
     /// The pause menu. While it is open the world stands still.
     #[visit(skip)]
     #[reflect(hidden)]
@@ -1335,9 +1343,51 @@ impl MazeGame {
         self.hud.set_banner(ctx.user_interfaces.first(), text);
     }
 
+    /// The models the level is made from: the fixed model and what goes in it, or the maze's
+    /// tiles.
+    fn level_models(&self) -> Vec<(String, ModelResource)> {
+        match (&self.model, &self.prefabs) {
+            (Some(model), _) => {
+                let mut models = vec![(self.model_path.clone(), model.clone())];
+                models.extend(self.firewalls.models());
+                models.extend(self.doors.models());
+                models
+            }
+            (None, Some(prefabs)) => prefabs
+                .all()
+                .into_iter()
+                .map(|(path, model)| (path.to_string(), model.clone()))
+                .collect(),
+            (None, None) => Vec::new(),
+        }
+    }
+
+    /// Shows the loading screen while the level loads, with how far it has got, and takes it
+    /// down once it can be played or could not be.
+    fn update_loading(&mut self, ctx: &mut PluginContext) {
+        let step = match self.phase {
+            Phase::Loading => {
+                // The sky counts as one more, where there is one to wait for.
+                let models = self.level_models();
+                let sky = self.sky.iter().map(|sky| !sky.is_loading());
+                let loaded = models.iter().map(|(_, m)| m.is_ok()).chain(sky.clone());
+                Some(Step::Models { loaded: loaded.filter(|&ok| ok).count(), total: models.len() + sky.count() })
+            }
+            Phase::Building => Some(Step::Building),
+            Phase::Settling(_) => Some(Step::Settling),
+            _ => None,
+        };
+        let (name, about) = match ctf::map_at(&self.model_path) {
+            Some(map) => (map.name, map.about),
+            None => ("Maze", "Find the way out."),
+        };
+        let ui = ctx.user_interfaces.first();
+        self.loading.update(ui, ctx.dt, step.map(|step| (step, name, about)));
+    }
+
     fn update_hud(&mut self, ctx: &mut PluginContext) {
         let status = match self.phase {
-            Phase::Loading | Phase::Settling(_) => Status::Loading,
+            Phase::Loading | Phase::Building | Phase::Settling(_) => Status::Loading,
             Phase::Title | Phase::Broken => Status::Blank,
             Phase::Playing | Phase::Won | Phase::Deleted => Status::Round {
                 time: self.round_time,
@@ -4513,6 +4563,8 @@ impl Plugin for MazeGame {
         // Under the menu, which is built after it.
         self.dialogue = DialogueScreen::build(ctx.user_interfaces.first_mut());
         self.terminal = Terminal::build(ctx.user_interfaces.first_mut());
+        // Under the pause menu, which can be opened while a level loads.
+        self.loading = LoadingScreen::build(ctx.user_interfaces.first_mut());
         self.use_script(&ctx.resource_manager, SCRIPT);
         self.notes = Notes::load(NOTES)
             .inspect_err(|error| Log::err(format!("Maze: the computers hold no notes: {error}")))
@@ -4540,6 +4592,7 @@ impl Plugin for MazeGame {
     fn before_rendering(&mut self, _ctx: PluginContext) -> GameResult {
         // The computer's screen counts the frames drawn into its terminal's picture.
         self.screen_terminal.rendering();
+        self.loading.rendering();
         Ok(())
     }
 
@@ -4590,20 +4643,7 @@ impl Plugin for MazeGame {
             _ if self.menu.is_open() => (),
             Phase::Title => (),
             Phase::Loading => {
-                let models: Vec<(String, ModelResource)> = match (&self.model, &self.prefabs) {
-                    (Some(model), _) => {
-                        let mut models = vec![(self.model_path.clone(), model.clone())];
-                        models.extend(self.firewalls.models());
-                        models.extend(self.doors.models());
-                        models
-                    }
-                    (None, Some(prefabs)) => prefabs
-                        .all()
-                        .into_iter()
-                        .map(|(path, model)| (path.to_string(), model.clone()))
-                        .collect(),
-                    (None, None) => Vec::new(),
-                };
+                let models = self.level_models();
                 if let Some((path, _)) = models.iter().find(|(_, m)| m.is_failed_to_load()) {
                     let text = format!("Could not load {path}");
                     Log::err(&text);
@@ -4613,22 +4653,27 @@ impl Plugin for MazeGame {
                     && models.iter().all(|(_, m)| m.is_ok())
                     && self.sky.as_ref().is_none_or(|sky| !sky.is_loading())
                 {
-                    self.set_surroundings(&mut ctx.scenes[self.scene]);
-                    match self.place_level(&mut ctx.scenes[self.scene]) {
-                        Ok(()) => self.phase = Phase::Settling(2),
-                        Err(error) => {
-                            let text = format!("Could not build a maze from the tiles: {error}");
-                            Log::err(&text);
-                            self.set_banner(ctx, &text);
-                            self.phase = Phase::Broken;
-                        }
+                    self.phase = Phase::Building;
+                }
+            }
+            // Not until the loading screen says so: this holds up the game.
+            Phase::Building if !self.loading.drawn() => (),
+            Phase::Building => {
+                self.set_surroundings(&mut ctx.scenes[self.scene]);
+                match self.place_level(&mut ctx.scenes[self.scene]) {
+                    Ok(()) => self.phase = Phase::Settling(2),
+                    Err(error) => {
+                        let text = format!("Could not build a maze from the tiles: {error}");
+                        Log::err(&text);
+                        self.set_banner(ctx, &text);
+                        self.phase = Phase::Broken;
                     }
                 }
             }
             Phase::Settling(frames) => {
                 if frames > 0 {
                     self.phase = Phase::Settling(frames - 1);
-                } else {
+                } else if self.loading.drawn() {
                     let graph = &mut ctx.scenes[self.scene].graph;
                     let exit_mesh = self.exit_mesh(graph);
                     self.level.finish(graph, exit_mesh, self.open_sky(), self.road_plan.as_ref());
@@ -4853,6 +4898,7 @@ impl Plugin for MazeGame {
         }
         self.look_for_someone(ctx);
         self.update_hud(ctx);
+        self.update_loading(ctx);
         self.stats.update(ctx);
         Ok(())
     }

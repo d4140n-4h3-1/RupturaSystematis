@@ -51,6 +51,7 @@ mod jail;
 mod latency;
 mod layout;
 mod level;
+mod loading;
 mod lockpick;
 mod menu;
 mod notes;
