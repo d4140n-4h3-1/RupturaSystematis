@@ -705,6 +705,8 @@ pub struct Inhabitants {
     droids: Vec<Inhabitant>,
     /// What each kind of droid looks like, by its index into the conversations' characters.
     liveries: Vec<Livery>,
+    /// How each kind walks about, alone, in pairs or in groups, by the same index.
+    groupings: Vec<Grouping>,
     /// The phases changed since the last update, as [`News::alerts`] has them, and those that
     /// heard the player.
     alerts: Vec<(usize, Option<Alert>)>,
@@ -1390,6 +1392,7 @@ impl Inhabitants {
         if characters == 0 {
             return;
         }
+        self.groupings = (0..characters).map(&grouping).collect();
         ragdoll::prepare(&mut scene.graph);
         let count = crate::platform::var("MAZE_INHABITANTS")
             .and_then(|n| n.trim().parse().ok())
@@ -1482,7 +1485,7 @@ impl Inhabitants {
             // Those walking about with it, about it, if it is one of a pair or a group.
             let Grouping { in_pairs, groups_of, turf, .. } = grouping(character);
             let size = if groups_of >= 2 {
-                2 + rng.below(groups_of - 1)
+                self.group_size(character, rng)
             } else if (rng.below(1000) as f32) < in_pairs * 1000.0 {
                 2
             } else {
@@ -1853,6 +1856,11 @@ impl Inhabitants {
                 droid.resting = between(rng, REST);
             }
         }
+        // The gang left standing goes on together, as one group.
+        let calm: Vec<usize> = gang.iter().copied().filter(|&n| self.droids[n].alert.is_none()).collect();
+        if let Some((&leader, rest)) = calm.split_first() {
+            self.join_group(leader, rest);
+        }
         news.ended.extend(guards.into_iter().chain(gang));
         // The danger past, those that took cover come out again.
         for (n, droid) in self.droids.iter_mut().enumerate() {
@@ -1893,6 +1901,44 @@ impl Inhabitants {
         self.droids[n].leads = false;
         self.droids[n].slot = 0;
         self.droids[n].turf = None;
+    }
+
+    /// How many a group of the `character`th kind is to be: from two up to as many as its
+    /// grouping says, and no more than can keep about the one leading it (see [`ABOUT_LEADER`]);
+    /// one, for a kind that does not walk about in groups.
+    fn group_size(&self, character: usize, rng: &mut Rng) -> usize {
+        let most = self.groupings.get(character).map_or(0, |g| g.groups_of).min(ABOUT_LEADER.len() + 1);
+        match most >= 2 {
+            true => 2 + rng.below(most - 1),
+            false => 1,
+        }
+    }
+
+    /// Has each of `joining`, walking about by itself, keep about the `leader` - in the places
+    /// about it not already kept, as many as there are - and to its turf, if it has one.
+    fn join_group(&mut self, leader: usize, joining: &[usize]) {
+        let mut kept: Vec<usize> = self
+            .group_of(leader)
+            .into_iter()
+            .skip(1)
+            .filter(|&m| !self.droids[m].down)
+            .map(|m| self.droids[m].slot)
+            .collect();
+        let turf = self.droids[leader].turf;
+        for &m in joining {
+            let Some(slot) = (0..ABOUT_LEADER.len()).find(|s| !kept.contains(s)) else {
+                break;
+            };
+            kept.push(slot);
+            let droid = &mut self.droids[m];
+            droid.partner = Some(leader);
+            droid.leads = false;
+            droid.slot = slot;
+            droid.turf = turf;
+            let leader = &mut self.droids[leader];
+            leader.partner = leader.partner.or(Some(m));
+            leader.leads = true;
+        }
     }
 
     /// Those of `said` near enough the `player`'s feet to be heard (see [`CHASE_HEARD`]).
@@ -2033,6 +2079,44 @@ impl Inhabitants {
             if !members.iter().all(|&m| gone(&self.droids[m])) {
                 continue;
             }
+            if members.len() == 1 && self.droids[n].partner.is_some() {
+                self.droids[n].partner = None;
+                self.droids[n].leads = false;
+            }
+            // One of a kind that walks about in groups, left by itself - the others of its group
+            // down, or itself gone off from them - makes a group afresh with others of its kind
+            // gone off by themselves; and if none can join it, waits, out of the way, for some
+            // that can.
+            let kind = self.droids[n].character;
+            let mut members = members;
+            let size = self.group_size(kind, rng);
+            if members.len() == 1 && size >= 2 {
+                let joining: Vec<usize> = (0..self.droids.len())
+                    .filter(|&m| {
+                        let droid = &self.droids[m];
+                        !members.contains(&m)
+                            && droid.character == kind
+                            && droid.partner.is_none()
+                            && !droid.leads
+                            && gone(droid)
+                    })
+                    .take(size - members.len())
+                    .collect();
+                self.join_group(n, &joining);
+                // Some of a group made afresh keep to turf of their own.
+                let turf = self.groupings.get(kind).and_then(|g| g.turf);
+                if let Some((share, reach)) = turf.filter(|_| !joining.is_empty() && self.droids[n].turf.is_none()) {
+                    if (rng.below(1000) as f32) < share * 1000.0 {
+                        for &m in std::iter::once(&n).chain(&joining) {
+                            self.droids[m].turf = Some((self.droids[n].feet, reach));
+                        }
+                    }
+                }
+                members.extend(joining);
+            }
+            if size >= 2 && members.len() < 2 {
+                continue;
+            }
             let Some(crowd) = self.crowd.as_ref() else {
                 return;
             };
@@ -2051,10 +2135,6 @@ impl Inhabitants {
             self.droids[n].put_down(graph, feet, heading, resting, rng);
             for (&m, at) in members.iter().skip(1).zip(about) {
                 self.droids[m].put_down(graph, at, heading, resting, rng);
-            }
-            if members.len() == 1 && self.droids[n].partner.is_some() {
-                self.droids[n].partner = None;
-                self.droids[n].leads = false;
             }
             moved += 1;
         }
@@ -2080,10 +2160,17 @@ impl Inhabitants {
                 return;
             };
             let graph = &scene.graph;
-            let Some((feet, heading, _)) = crowd.spot((grid, origin), player, &[], rng, |at| hidden(graph, at)) else {
+            let character = self.droids[n].character;
+            // One of a kind that walks about in groups turns up where it went down, out of the
+            // way, to make a group afresh with others of its kind there (see above), rather than
+            // nearer by by itself.
+            let grouped = self.groupings.get(character).is_some_and(|g| g.groups_of >= 2);
+            let there = survey::cell_at(grid, origin, droid.feet)
+                .filter(|&(x, z)| grouped && grid.is_walkable(x, z))
+                .map(|cell| (grid.on_floor(origin, cell), between(rng, (-std::f32::consts::PI, std::f32::consts::PI)), Vec::new()));
+            let Some((feet, heading, _)) = there.or_else(|| crowd.spot((grid, origin), player, &[], rng, |at| hidden(graph, at))) else {
                 continue;
             };
-            let character = self.droids[n].character;
             if !self.spawn_one(scene, feet, heading, between(rng, CROWD_REST), character, rng) {
                 continue;
             }
