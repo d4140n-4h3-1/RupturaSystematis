@@ -1092,9 +1092,9 @@ impl Ride {
 }
 
 /// A ride on one of `trains` for a droid at `feet`, over `grid` whose corner is at `origin`: on the
-/// train that stands nearest it, from that station, if it is near enough to think of, to another of
-/// its stations, by a doorway no one is taking it by - those `taken`, as (train, doorway): the way
-/// up to the platform beside the doorway, and the ride.
+/// train with a station nearest it, near enough to think of, that has room - fewer than [`RIDERS`]
+/// and a doorway no one is taking it by, those `taken` as (train, doorway) - from that station to
+/// another of its stations: the way up to the platform beside the doorway, and the ride.
 fn take_train(
     (grid, origin): (&WalkGrid, Vector3<f32>),
     feet: Vector3<f32>,
@@ -1103,17 +1103,23 @@ fn take_train(
     rng: &mut Rng,
 ) -> Option<(Vec<Vector3<f32>>, Ride)> {
     let away = |train: &Doors, n: usize| flat(train.station(n) - feet).norm();
-    let (which, from) = trains
-        .iter()
-        .enumerate()
-        .flat_map(|(k, train)| (0..train.stations()).map(move |n| (k, n)))
-        .min_by(|&(a, m), &(b, n)| away(&trains[a], m).total_cmp(&away(&trains[b], n)))?;
+    let room = |k: usize| {
+        let riding = taken.iter().filter(|&&(t, _)| t == k).count();
+        riding < RIDERS && (0..trains[k].doorways.len()).any(|n| !taken.contains(&(k, n))) && trains[k].stations() >= 2
+    };
+    // Each train's station nearest it, nearest first; the first of those with room.
+    let mut near: Vec<(usize, usize, f32)> = (0..trains.len())
+        .filter_map(|k| {
+            let train = &trains[k];
+            let n = (0..train.stations()).min_by(|&a, &b| away(train, a).total_cmp(&away(train, b)))?;
+            Some((k, n, away(train, n)))
+        })
+        .filter(|&(_, _, d)| d <= TRAIN_REACH)
+        .collect();
+    near.sort_by(|a, b| a.2.total_cmp(&b.2));
+    let (which, from, _) = near.into_iter().find(|&(k, _, _)| room(k))?;
     let train = &trains[which];
-    let riding = taken.iter().filter(|&&(k, _)| k == which).count();
     let free: Vec<usize> = (0..train.doorways.len()).filter(|&n| !taken.contains(&(which, n))).collect();
-    if riding >= RIDERS || free.is_empty() || away(train, from) > TRAIN_REACH || train.stations() < 2 {
-        return None;
-    }
     let to = (from + 1 + rng.below(train.stations() - 1)) % train.stations();
     let doorway = free[rng.below(free.len())];
     let wait = trip::floor_near(grid, origin, train.platform(from, doorway, PLATFORM_OUT))?;
@@ -3071,15 +3077,13 @@ impl Inhabitants {
                                     None,
                                 ),
                                 // Now and then, near the station, taking the train.
-                                None => match Some(&self.trains[..])
-                                    .filter(|trains| {
-                                        !trains.is_empty()
-                                            && droid.partner.is_none()
-                                            && droid.side.is_none()
-                                            && !droid.sentry
-                                            && rng.below(TRAIN_CHANCE) == 0
-                                    })
-                                    .and_then(|trains| take_train((grid, origin), droid.feet, trains, &taken, rng))
+                                None => match (!self.trains.is_empty()
+                                    && droid.partner.is_none()
+                                    && droid.side.is_none()
+                                    && !droid.sentry
+                                    && rng.below(TRAIN_CHANCE) == 0)
+                                    .then(|| take_train((grid, origin), droid.feet, &self.trains, &taken, rng))
+                                    .flatten()
                                 {
                                     Some((route, ride)) => {
                                         taken.push((ride.train, ride.doorway));

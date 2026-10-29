@@ -1,10 +1,10 @@
 //! The trains on Urbs' elevated railway: three cars each, floating over the beam down the middle
 //! avenue, which goes on over the bridges north into Curia and south into Caelum. The line is one
 //! track, so it is run as two that never meet ([`LINES`]): the north train from Curia's station
-//! through Urbs' north one to the north end of its middle one and back, the south train from the
-//! south end of the middle one through Urbs' south one to Caelum's and back, over and over. The
-//! middle station is long enough for both, and there riders change trains. At each station a train
-//! stops with its doors open, both sides, for a while.
+//! through Urbs' north one to the middle one just north of the middle crossing and back, the south
+//! train from the middle one just south of it through Urbs' south one to Caelum's and back, over
+//! and over. Riders change trains by crossing the street between the two middle stations. At each
+//! station a train stops with its doors open, both sides, for a while.
 //!
 //! Its model, [`TRAIN_MODEL`], is made in Blender (`~/Documents/blender/train/build_train.py`):
 //! `train`, its cars `car_1` to `car_3`, and under each its door leaves,
@@ -41,10 +41,17 @@ pub const TRAIN_MODEL: &str = "data/train.glb";
 const BEAM_TOP: f32 = 9.5;
 /// Where along the line, in the world's z, a train stands at each of its stations, from the north
 /// end of its line to the south: the north train at Curia's (600 m north of Urbs' middle), Urbs'
-/// north one (352 m north) and the north end of Urbs' middle one; the south train at the south end
-/// of the middle one, Urbs' south one (352 m south) and Caelum's (600 m south). North is -z here.
-/// Each goes from the first of its stations to the last and back.
-pub const LINES: [&[f32]; 2] = [&[-600.0, -352.0, -31.5], &[11.5, 352.0, 600.0]];
+/// north one (352 m north) and the middle one north of the middle crossing (32 m north); the south
+/// train at the middle one south of it (32 m south), Urbs' south one (352 m south) and Caelum's
+/// (600 m south). North is -z here. Each goes from the first of its stations to the last and back.
+/// (The stations are made in `data/story/story_urbs.py`, `story_curia.py` and `story_caelum.py`.)
+pub const LINES: [&[f32]; 2] = [&[-600.0, -352.0, -32.0], &[32.0, 352.0, 600.0]];
+/// Where the line ends, in the world's z, at the faces of the buffers in Curia and Caelum.
+#[cfg(test)]
+const BUFFERS: [f32; 2] = [-622.8, 622.8];
+/// Half a train's length, end to end, in meters.
+#[cfg(test)]
+const TRAIN_HALF_LENGTH: f32 = 19.4;
 /// How fast it goes at its fastest, half way between stations, in meters per second.
 const TOP_SPEED: f32 = 18.0;
 /// How long it stands at each station, in seconds; how long after it stops its doors start to
@@ -306,17 +313,22 @@ fn crossing(from: f32, to: f32) -> f32 {
     1.5 * (to - from).abs() / TOP_SPEED
 }
 
-/// The stations a train on `stations` stands at in its round, in order: from the first to the
-/// last and back.
-fn stops(stations: &[f32]) -> Vec<usize> {
+/// How many stops a train on `stations` makes in its round: at each from the first to the last and
+/// back, the ends once.
+fn stop_count(stations: &[f32]) -> usize {
+    (2 * stations.len()).saturating_sub(2).max(1)
+}
+
+/// Which station the `k`th stop of a train's round on `stations` is at.
+fn stop(stations: &[f32], k: usize) -> usize {
     let n = stations.len();
-    (0..n).chain((1..n.saturating_sub(1)).rev()).collect()
+    if k < n { k } else { 2 * n - 2 - k }
 }
 
 /// Each station the train stands at in its round, and the one it goes on to from it.
-fn legs(stations: &[f32]) -> impl Iterator<Item = (usize, usize)> {
-    let stops = stops(stations);
-    (0..stops.len()).map(move |k| (stops[k], stops[(k + 1) % stops.len()]))
+fn legs(stations: &[f32]) -> impl Iterator<Item = (usize, usize)> + '_ {
+    let count = stop_count(stations);
+    (0..count).map(move |k| (stop(stations, k), stop(stations, (k + 1) % count)))
 }
 
 /// How long its round takes, in seconds.
@@ -386,8 +398,9 @@ mod tests {
                 }
                 t += 0.1;
             }
-            assert_eq!(stood, stops(stations));
-            assert_eq!(stops(stations), vec![0, 1, 2, 1]);
+            let stops: Vec<usize> = (0..stop_count(stations)).map(|k| stop(stations, k)).collect();
+            assert_eq!(stood, stops);
+            assert_eq!(stops, vec![0, 1, 2, 1]);
             assert_eq!(along_line(stations, 0.0), stations[0]);
             assert!((along_line(stations, round(stations) - 0.01) - stations[0]).abs() < 0.01, "back where it began");
             assert_eq!(along_line(stations, round(stations) + 1.0), stations[0]);
@@ -399,14 +412,21 @@ mod tests {
         // The line is one track: each train keeps to its own stretch of it, the two meeting only
         // at the middle station, where they stand at either end of it with room between them.
         let [north, south] = LINES;
-        let north_reach = north.iter().copied().fold(f32::MIN, f32::max) + HALF_LENGTH;
-        let south_reach = south.iter().copied().fold(f32::MAX, f32::min) - HALF_LENGTH;
+        let north_reach = north.iter().copied().fold(f32::MIN, f32::max) + TRAIN_HALF_LENGTH;
+        let south_reach = south.iter().copied().fold(f32::MAX, f32::min) - TRAIN_HALF_LENGTH;
         assert!(north_reach + 2.0 < south_reach, "{north_reach} against {south_reach}");
         let mut t = 0.0;
         while t < 2.0 * round(north).max(round(south)) {
-            assert!(along_line(north, t) + HALF_LENGTH < along_line(south, t) - HALF_LENGTH, "at {t}");
+            assert!(along_line(north, t) + TRAIN_HALF_LENGTH < along_line(south, t) - TRAIN_HALF_LENGTH, "at {t}");
             t += 0.25;
         }
+    }
+
+    #[test]
+    fn neither_runs_into_the_buffers_at_the_ends_of_the_line() {
+        let [north, south] = LINES;
+        assert!(north[0] - TRAIN_HALF_LENGTH > BUFFERS[0] + 1.0, "Curia's");
+        assert!(south[south.len() - 1] + TRAIN_HALF_LENGTH < BUFFERS[1] - 1.0, "Caelum's");
     }
 
     #[test]
@@ -454,7 +474,8 @@ mod tests {
                 }
                 t += 0.1;
             }
-            assert_eq!(at, stops(stations), "open at every station");
+            let stops: Vec<usize> = (0..stop_count(stations)).map(|k| stop(stations, k)).collect();
+            assert_eq!(at, stops, "open at every station");
             assert!(wide_open(stations, AT_STATION + 1.0).is_none(), "gone");
         }
     }

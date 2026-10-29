@@ -727,7 +727,7 @@ def main():
     for i in range(BLOCKS):
         for j in range(BLOCKS):
             block(m, rng, i, j)
-    urbs.railway(m, 328.0, HALF + 20.0, stations=((332.0, 372.0, -1, "place_station_caelum"),), canal=None,
+    urbs.railway(m, 328.0, HALF + 20.0, stations=((332.0, 372.0, -1, "place_station_caelum"),), canal=None, bridges=False,
                  ends=(328.0,))
     places()
     m.build_buckets()

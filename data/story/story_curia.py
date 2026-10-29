@@ -745,7 +745,7 @@ def main():
             block(m, rng, i, j)
     parliament(m, rng)
     tower(m, rng)
-    urbs.railway(m, -(HALF + 20.0), -328.0, stations=((-372.0, -332.0, 1, "place_station_curia"),), canal=None,
+    urbs.railway(m, -(HALF + 20.0), -328.0, stations=((-372.0, -332.0, 1, "place_station_curia"),), canal=None, bridges=False,
                  ends=(-328.0,))
     places()
     m.build_buckets()

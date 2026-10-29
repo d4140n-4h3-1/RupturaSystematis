@@ -108,7 +108,8 @@ STATION = (332.0, 372.0, 8.0)  # the north station: from and to (y), and its pla
 TRAIN_HALF = 2.85   # how far out from the middle the train's cars reach, with room to spare
 STATIONS = (
     (STATION[0], STATION[1], 1, "place_station"),
-    (-32.0, 52.0, 1, "place_station_middle"),     # long enough for both trains, one at either end
+    (12.0, 52.0, 1, "place_station_middle"),          # the north train's end, north of the middle crossing
+    (-52.0, -12.0, -1, "place_station_middle_south"), # and the south train's, south of it
     (-372.0, -332.0, -1, "place_station_south"),
 )
 GATE = (22.0, 6.0, 24.0)      # the gates' bridges: how long and wide, and their pads' size
@@ -2275,11 +2276,12 @@ def docks_place(m, rng, cx, cy, inner):
 SPECIAL = {}
 
 
-def railway(m, y0=-(HALF + 20.0), y1=HALF + 20.0, stations=STATIONS, canal=CANAL, ends=()):
+def railway(m, y0=-(HALF + 20.0), y1=HALF + 20.0, stations=STATIONS, canal=CANAL, ends=(), bridges=True):
     """The elevated railway down the middle avenue, from `y0` to `y1`: a beam on pillars, and
     `stations` over the avenue along it with platforms either side, climbed by stairs. Urbs' runs
     off both ends over the bridges, where Caelum's and Curia's take it on; theirs end in a buffer
-    at the `ends` they name (`y0`, `y1` or both)."""
+    at the `ends` they name (`y0`, `y1` or both). Urbs' holds the beam up over the middle of each
+    bridge too (`bridges`), where its and the other city's meet."""
     top, w, d = RAIL
     plat = STATION[2]
     m.box(WORLD, -w / 2, w / 2, y0, y1, top - d, top, m.struct, m.facades["slate"])
@@ -2288,18 +2290,30 @@ def railway(m, y0=-(HALF + 20.0), y1=HALF + 20.0, stations=STATIONS, canal=CANAL
     for end in ends:
         way = 1 if end == y1 else -1
         m.box(WORLD, -w / 2 - 0.3, w / 2 + 0.3, end - way * 1.2, end, top, top + 1.4, m.struct, m.facades["slate"])
-        m.line(Vector((-w / 2 - 0.3, end + way * 0.03, top + 0.7)), Vector((w / 2 + 0.3, end + way * 0.03, top + 0.7)),
+        face = end - way * 1.23                      # toward the track, and the train coming in
+        m.line(Vector((-w / 2 - 0.3, face, top + 0.7)), Vector((w / 2 + 0.3, face, top + 0.7)),
                m.lines["red"], width=0.4, height=0.03, across=Vector((0, 0, 1)), light=False)
+    pillars = []
     y = -HALF + 32.0
     while y < HALF:
         if (y0 < y < y1 and not any(s0 - 2 < y < s1 + 2 for s0, s1, _, _ in stations)
                 and (canal is None or abs(y - canal[0]) > canal[1] / 2 + 1)):
-            m.box(WORLD, -0.7, 0.7, y - 0.7, y + 0.7, 0.0, top - d, m.struct, m.facades["concrete"])
-            m.line(Vector((0.72, y, 0.0)), Vector((0.72, y, top - d)), m.lines["cyan"], width=0.08,
-                   across=Vector((0, 1, 0)))
+            pillars.append(y)
         y += PITCH
+    if bridges:
+        pillars += [b for b in (-(HALF + 20.0), HALF + 20.0) if y0 <= b <= y1]
+    for y in pillars:
+        m.box(WORLD, -0.7, 0.7, y - 0.7, y + 0.7, -1.2 if abs(y) > HALF else 0.0, top - d, m.struct,
+              m.facades["concrete"])
+        m.line(Vector((0.72, y, 0.0)), Vector((0.72, y, top - d)), m.lines["cyan"], width=0.08, across=Vector((0, 1, 0)))
     for s0, s1, way, marker in stations:
         station(m, s0, s1, plat, way, marker)
+
+
+def clear_of_crossings(y):
+    """Whether something standing at `y` on the avenue is clear of the cross streets and the
+    crossings over the avenue beside them."""
+    return min(abs(y - c * PITCH) for c in range(-BLOCKS // 2, BLOCKS // 2 + 1)) > STREET / 2 + 3.5
 
 
 def station(m, s0, s1, plat, way, marker):
@@ -2323,7 +2337,8 @@ def station(m, s0, s1, plat, way, marker):
         lo_x, hi_x = sorted((sx * (STREET / 2 - 1.2), sx * (STREET / 2 - 2.8)))
         m.parapet(Vector((ea, stairs - way * 0.15, 0)), Vector((eb, stairs - way * 0.15, 0)), plat, m.lines["cyan"],
                   [((lo_x - ea) / (eb - ea), (hi_x - ea) / (eb - ea))])
-        for y in (s0 + 2.0, (s0 + s1) / 2, s1 - 6.0) if way > 0 else (s1 - 2.0, (s0 + s1) / 2, s0 + 6.0):
+        posts = (s0 + 2.0, (s0 + s1) / 2, s1 - 6.0) if way > 0 else (s1 - 2.0, (s0 + s1) / 2, s0 + 6.0)
+        for y in [y for y in posts if clear_of_crossings(y)]:
             m.box(WORLD, outer_x - sx * 0.6 - 0.15, outer_x - sx * 0.6 + 0.15, y - 0.15, y + 0.15, 0.0, plat - DECK,
                   m.struct, m.facades["concrete"])
             m.box(WORLD, outer_x - sx * 0.6 - 0.12, outer_x - sx * 0.6 + 0.12, y - 0.12, y + 0.12, plat, plat + 3.4,
@@ -2343,7 +2358,7 @@ def station(m, s0, s1, plat, way, marker):
     # Pillars under the platforms, at their ends and no more than 24 m apart, but not in a cross street.
     k = math.ceil((s1 - s0 - 2.0) / 24.0)
     under = [s0 + 1.0 + (s1 - s0 - 2.0) * i / k for i in range(k + 1)]
-    under = [y for y in under if min(abs(y - c * PITCH) for c in range(-BLOCKS // 2, BLOCKS // 2 + 1)) > STREET / 2 + 0.5]
+    under = [y for y in under if clear_of_crossings(y)]
     for sx in (-1, 1):
         for y in under:
             x = sx * (STREET / 2 - 3.0)
