@@ -38,7 +38,7 @@ use crate::{
     roads::RoadPlan,
     hud::{self, Hud, Status},
     loading::{LoadingScreen, Step},
-    train::{Train, TRAIN_MODEL},
+    train::{Train, LINES, TRAIN_MODEL},
     inhabitants::{Alert, Grouping, Inhabitants, Livery, News, Rival, Threat, HOSTILE_MODEL},
     layout::{self, Rng},
     level::Level,
@@ -293,13 +293,14 @@ pub struct MazeGame {
     #[visit(skip)]
     #[reflect(hidden)]
     alongside: Vec<(String, ModelResource)>,
-    /// The train on Urbs' railway, once its model has loaded and the level is ready for it.
+    /// The trains on Urbs' railway, one for each of its [`LINES`], once their model has loaded and
+    /// the level is ready for them.
     #[visit(skip)]
     #[reflect(hidden)]
     train_model: Option<ModelResource>,
     #[visit(skip)]
     #[reflect(hidden)]
-    train: Option<Train>,
+    trains: Vec<Train>,
     /// What those in a foot chase have called out since the droids were last moved, to be said.
     #[visit(skip)]
     #[reflect(hidden)]
@@ -951,7 +952,7 @@ impl MazeGame {
         self.model = None;
         self.alongside.clear();
         self.train_model = None;
-        if let Some(train) = self.train.take() {
+        for train in self.trains.drain(..) {
             train.remove(&mut ctx.scenes[self.scene].graph);
         }
         self.prefabs = None;
@@ -1027,10 +1028,10 @@ impl MazeGame {
         self.barks.clear();
         // Made (and seeded) first: the grid below borrows the game.
         self.rng();
-        // The ferries set off afresh, from where they start, and the train from the station.
+        // The ferries set off afresh, from where they start, and the trains from their stations.
         self.level.ferries.reset(&mut ctx.scenes[self.scene].graph);
         self.level.lifts.reset(&mut ctx.scenes[self.scene].graph);
-        if let Some(train) = self.train.as_mut() {
+        for train in &mut self.trains {
             train.reset(&mut ctx.scenes[self.scene].graph);
         }
         // The banks' vaults shut, and full again.
@@ -1885,9 +1886,9 @@ impl MazeGame {
             };
             self.chase_barks.push((n, name, mood));
         }
-        // The ferries, for the droids to cross on, and the train, for them to ride.
+        // The ferries, for the droids to cross on, and the trains, for them to ride.
         let crossings = self.level.ferries.crossings(&scene.graph);
-        self.inhabitants.set_train(self.train.as_ref().map(Train::doors));
+        self.inhabitants.set_trains(self.trains.iter().map(Train::doors).collect());
         self.inhabitants.update(
             &mut scene.graph,
             (grid, *origin),
@@ -4295,17 +4296,17 @@ impl MazeGame {
 
     /// Scatters the hearts in the corridors once their model has loaded and a round is under way,
     /// and keeps them floating.
-    /// Puts the train on the line once its model has loaded, the level being ready: after the
-    /// survey, which it is no part of.
+    /// Puts the trains on the line once their model has loaded, the level being ready: after the
+    /// survey, which they are no part of.
     fn set_up_train(&mut self, ctx: &mut PluginContext) {
-        if self.train.is_some() || self.level.grid.is_none() {
+        if !self.trains.is_empty() || self.level.grid.is_none() {
             return;
         }
         let Some(model) = self.train_model.take_if(|model| !model.is_loading()) else {
             return;
         };
         if model.is_ok() {
-            self.train = Some(Train::spawn(&mut ctx.scenes[self.scene], &model));
+            self.trains = LINES.iter().map(|&stations| Train::spawn(&mut ctx.scenes[self.scene], &model, stations)).collect();
         } else {
             Log::err(format!("Could not load {TRAIN_MODEL}; Urbs' railway has no train"));
         }
@@ -4689,7 +4690,7 @@ impl Plugin for MazeGame {
             let feet = self.player.feet(graph);
             self.level.lifts.update(graph, ctx.dt, feet);
             self.set_up_train(ctx);
-            if let Some(train) = self.train.as_mut() {
+            for train in &mut self.trains {
                 train.update(&mut ctx.scenes[self.scene].graph, ctx.dt);
             }
         }

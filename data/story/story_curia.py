@@ -22,6 +22,8 @@ middle avenue its axis:
 - The Supreme Court (place_court) west of the Parliament, a temple on a stepped base, and the State
   Archive (place_archive) east of it, a rotunda behind its colonnade.
 - The Plazas of Nations (place_nations_west, place_nations_east): circles of flags round an obelisk.
+- Urbs' railway, come on over the bridge and through the Gate up the avenue to a station by the
+  first plazas (place_station_curia), where the north train ends its line.
 - The ministries all round them, colonnaded along their streets, flags on their roofs; the embassies
   in the west (place_embassies), pavilions in gardens; the residences in the east
   (place_residences), terraced, their gardens on their roofs.
@@ -743,6 +745,8 @@ def main():
             block(m, rng, i, j)
     parliament(m, rng)
     tower(m, rng)
+    urbs.railway(m, -(HALF + 20.0), -328.0, stations=((-372.0, -332.0, 1, "place_station_curia"),), canal=None,
+                 ends=(-328.0,))
     places()
     m.build_buckets()
     for piece in m.pieces:

@@ -23,6 +23,8 @@ and cyan light:
 - The landing fields through the middle: circles ringed in light, spaceplanes parked round them.
 - The launch pads along the south (place_launch_1 to place_launch_6): each a step up from the
   apron, a rocket standing on it beside its service tower, its engines aglow.
+- Urbs' railway, come on over the bridge down the middle street to a station by the terminal
+  (place_station_caelum), where the south train ends its line.
 
 Every coloured line of light near the ground glows and is written to story_caelum.glow.json for the
 game to light with, and where the roads and their crossings are to story_caelum.roads.json, as
@@ -725,6 +727,8 @@ def main():
     for i in range(BLOCKS):
         for j in range(BLOCKS):
             block(m, rng, i, j)
+    urbs.railway(m, 328.0, HALF + 20.0, stations=((332.0, 372.0, -1, "place_station_caelum"),), canal=None,
+                 ends=(328.0,))
     places()
     m.build_buckets()
     for piece in m.pieces:

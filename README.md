@@ -121,6 +121,12 @@ the crate makes.
 
 29 October 2026:
 
+- **Two trains, and the railway on into Curia and Caelum**: the beam goes on over both bridges, to
+  a station in Curia past the Gate of Nations and one in Caelum by the terminal, each ending in a
+  buffer. The line is one track, so it runs as two that never meet: the north train from Curia
+  through Urbs' north station to the middle one, the south train from the middle one through
+  Urbs' south station to Caelum. The middle station is now long enough for both, one at either
+  end, and riders, droids too, change there.
 - **Curia**, the capital north of Urbs, `data/story/story_curia.glb`, built by
   `data/story/story_curia.py`: a model of its own, played along with Urbs, Ferrum and Caelum,
   Urbs' middle avenue going on over a bridge into it through the Gate of Nations, a triumphal arch.

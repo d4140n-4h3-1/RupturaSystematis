@@ -108,7 +108,7 @@ STATION = (332.0, 372.0, 8.0)  # the north station: from and to (y), and its pla
 TRAIN_HALF = 2.85   # how far out from the middle the train's cars reach, with room to spare
 STATIONS = (
     (STATION[0], STATION[1], 1, "place_station"),
-    (12.0, 52.0, 1, "place_station_middle"),
+    (-32.0, 52.0, 1, "place_station_middle"),     # long enough for both trains, one at either end
     (-372.0, -332.0, -1, "place_station_south"),
 )
 GATE = (22.0, 6.0, 24.0)      # the gates' bridges: how long and wide, and their pads' size
@@ -2275,23 +2275,30 @@ def docks_place(m, rng, cx, cy, inner):
 SPECIAL = {}
 
 
-def railway(m):
-    """The elevated railway down the middle avenue: a beam on pillars, off both ends into the
-    void, and stations over the avenue along it with platforms either side, climbed by stairs."""
+def railway(m, y0=-(HALF + 20.0), y1=HALF + 20.0, stations=STATIONS, canal=CANAL, ends=()):
+    """The elevated railway down the middle avenue, from `y0` to `y1`: a beam on pillars, and
+    `stations` over the avenue along it with platforms either side, climbed by stairs. Urbs' runs
+    off both ends over the bridges, where Caelum's and Curia's take it on; theirs end in a buffer
+    at the `ends` they name (`y0`, `y1` or both)."""
     top, w, d = RAIL
-    far = HALF + 25.0
     plat = STATION[2]
-    m.box(WORLD, -w / 2, w / 2, -far, far, top - d, top, m.struct, m.facades["slate"])
+    m.box(WORLD, -w / 2, w / 2, y0, y1, top - d, top, m.struct, m.facades["slate"])
     for x in (-w / 2 - 0.02, w / 2 + 0.02):
-        m.line(Vector((x, -far, top - 0.2)), Vector((x, far, top - 0.2)), m.lines["cyan"], across=Vector((0, 0, 1)))
+        m.line(Vector((x, y0, top - 0.2)), Vector((x, y1, top - 0.2)), m.lines["cyan"], across=Vector((0, 0, 1)))
+    for end in ends:
+        way = 1 if end == y1 else -1
+        m.box(WORLD, -w / 2 - 0.3, w / 2 + 0.3, end - way * 1.2, end, top, top + 1.4, m.struct, m.facades["slate"])
+        m.line(Vector((-w / 2 - 0.3, end + way * 0.03, top + 0.7)), Vector((w / 2 + 0.3, end + way * 0.03, top + 0.7)),
+               m.lines["red"], width=0.4, height=0.03, across=Vector((0, 0, 1)), light=False)
     y = -HALF + 32.0
     while y < HALF:
-        if not any(s0 - 2 < y < s1 + 2 for s0, s1, _, _ in STATIONS) and abs(y - CANAL[0]) > CANAL[1] / 2 + 1:
+        if (y0 < y < y1 and not any(s0 - 2 < y < s1 + 2 for s0, s1, _, _ in stations)
+                and (canal is None or abs(y - canal[0]) > canal[1] / 2 + 1)):
             m.box(WORLD, -0.7, 0.7, y - 0.7, y + 0.7, 0.0, top - d, m.struct, m.facades["concrete"])
             m.line(Vector((0.72, y, 0.0)), Vector((0.72, y, top - d)), m.lines["cyan"], width=0.08,
                    across=Vector((0, 1, 0)))
         y += PITCH
-    for s0, s1, way, marker in STATIONS:
+    for s0, s1, way, marker in stations:
         station(m, s0, s1, plat, way, marker)
 
 
@@ -2333,13 +2340,16 @@ def station(m, s0, s1, plat, way, marker):
         else:
             g = Frame(0.0, 0.0, -math.pi / 2)   # local +x south, local y is +x
             m.flight(g, -s0 + n * RUN, lo_x, hi_x, 0.0, plat, -1, "yellow")
-    # Pillars under the platforms.
+    # Pillars under the platforms, at their ends and no more than 24 m apart, but not in a cross street.
+    k = math.ceil((s1 - s0 - 2.0) / 24.0)
+    under = [s0 + 1.0 + (s1 - s0 - 2.0) * i / k for i in range(k + 1)]
+    under = [y for y in under if min(abs(y - c * PITCH) for c in range(-BLOCKS // 2, BLOCKS // 2 + 1)) > STREET / 2 + 0.5]
     for sx in (-1, 1):
-        for y in (s0 + 1.0, s1 - 1.0):
+        for y in under:
             x = sx * (STREET / 2 - 3.0)
             m.box(WORLD, x - 0.4, x + 0.4, y - 0.4, y + 0.4, 0.0, plat - DECK, m.struct, m.facades["concrete"])
     foot = stairs + way * (n * RUN + 2.0)
-    br_town.marker(marker, 0.0, foot, 0.0, -math.pi / 2 if way > 0 else math.pi / 2)
+    m.mark(marker, Vector((0.0, foot, 0.0)), -math.pi / 2 if way > 0 else math.pi / 2)
 
 
 def gates(m):
