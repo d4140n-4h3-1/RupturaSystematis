@@ -23,7 +23,14 @@
 //! orange if not.
 //!
 //! A line can have the droid turn on the player once the conversation is over (see
-//! [`Conversation::attacks`]): a sentry that sees through the player goes after them. A kind of
+//! [`Conversation::attacks`]): a sentry that sees through the player goes after them.
+//!
+//! A droid on its way to tell security of a shooting it saw (see
+//! [`crate::inhabitants::Inhabitants::witnesses`]) can be stopped and questioned: its
+//! conversation opens at [`WITNESS_SAW`] if it saw who did it, or [`WITNESS_UNSURE`] if it saw
+//! only the one shot, and a line can have it keep quiet about it once it is over
+//! ([`Conversation::silences`]), or know the player for who did it after all
+//! ([`Conversation::identifies`]). A kind of
 //! droid can also have [`Bark`]s, said out loud with nobody talking to it, as it hunts the
 //! player: when it spots them, when it loses them, when it hears them, and when it gives up
 //! looking.
@@ -56,6 +63,10 @@ pub const HEIST_SCRIPT: &str = "data/dialogue/heist.json";
 /// What the droids of a city say, in the story: about the city, its robberies, and the way to
 /// Summa. There are many more of them, and some of its security droids walk about in pairs.
 pub const URBS_SCRIPT: &str = "data/dialogue/urbs.json";
+
+/// Where a witness's conversation opens: one that saw who did it, and one that did not.
+pub const WITNESS_SAW: &str = "witness_saw";
+pub const WITNESS_UNSURE: &str = "witness_unsure";
 
 /// A skill check on a reply: which skill, and the chance it succeeds, in percent.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -139,6 +150,14 @@ pub struct Line {
     /// Whether the droid goes after the player once the conversation is over.
     #[serde(default)]
     pub attacks: bool,
+    /// For a witness: whether it keeps quiet about what it saw once the conversation is over,
+    /// telling no one.
+    #[serde(default)]
+    pub silenced: bool,
+    /// For a witness that did not see who did it: whether it knows the player for who did after
+    /// all, once the conversation is over.
+    #[serde(default)]
+    pub identifies: bool,
 }
 
 /// Something a droid says out loud by itself, with nobody talking to it.
@@ -395,12 +414,14 @@ pub struct Conversation {
 }
 
 impl Conversation {
-    /// A conversation with a droid that is `character` of `script`, from its opening line.
-    pub fn new(script: &Script, character: usize) -> Option<Self> {
-        let start = script.characters.get(character)?.start.clone();
+    /// A conversation with a droid that is `character` of `script`, from its line `start` if it
+    /// has it - a witness's (see [`WITNESS_SAW`]) - or else its opening line.
+    pub fn from(script: &Script, character: usize, start: Option<&str>) -> Option<Self> {
+        let kind = script.characters.get(character)?;
+        let line = start.filter(|start| kind.lines.contains_key(*start)).unwrap_or(&kind.start).to_string();
         Some(Self {
             character,
-            line: start,
+            line,
             said: HashSet::new(),
             note: None,
         })
@@ -492,6 +513,18 @@ impl Conversation {
     /// over.
     pub fn attacks(&self, script: &Script) -> bool {
         self.line(script).is_some_and(|line| line.attacks)
+    }
+
+    /// Whether the line the conversation is at has a witness keep quiet about what it saw once it
+    /// is over.
+    pub fn silences(&self, script: &Script) -> bool {
+        self.line(script).is_some_and(|line| line.silenced)
+    }
+
+    /// Whether the line the conversation is at has a witness know the player for who did it once
+    /// it is over.
+    pub fn identifies(&self, script: &Script) -> bool {
+        self.line(script).is_some_and(|line| line.identifies)
     }
 
     /// What the `choice`th of the replies on offer costs, if it is a bribe.
@@ -595,7 +628,7 @@ mod tests {
     #[test]
     fn it_opens_with_the_first_line_and_fills_in_what_is_known() {
         let script = script();
-        let view = Conversation::new(&script, 0)
+        let view = Conversation::from(&script, 0, None)
             .unwrap()
             .view(&script, &facts(), Credits::default());
         assert_eq!(view.says, "Explorator codex quattuor septem.");
@@ -614,7 +647,7 @@ mod tests {
     #[test]
     fn a_check_goes_one_way_or_the_other_and_is_tried_only_once() {
         let script = script();
-        let mut talk = Conversation::new(&script, 0).unwrap();
+        let mut talk = Conversation::from(&script, 0, None).unwrap();
         assert!(
             talk.choose(&script, 0, 50, &mut Credits::default()),
             "a roll of 50 fails a 50% check"
@@ -627,7 +660,7 @@ mod tests {
         assert_eq!(view.note, None);
         assert_eq!(view.choices.len(), 2, "the check is gone");
 
-        let mut talk = Conversation::new(&script, 0).unwrap();
+        let mut talk = Conversation::from(&script, 0, None).unwrap();
         assert!(talk.choose(&script, 0, 49, &mut Credits::default()));
         assert_eq!(talk.view(&script, &facts(), Credits::default()).says, "Progreda ad sinistrum.");
     }
@@ -635,7 +668,7 @@ mod tests {
     #[test]
     fn a_line_has_its_own_mood_or_the_one_its_check_gives_it() {
         let script = script();
-        let mut talk = Conversation::new(&script, 0).unwrap();
+        let mut talk = Conversation::from(&script, 0, None).unwrap();
         assert_eq!(talk.view(&script, &facts(), Credits::default()).mood, Mood::Normal);
         talk.choose(&script, 0, 99, &mut Credits::default());
         assert_eq!(talk.view(&script, &facts(), Credits::default()).mood, Mood::Agitated, "failed");
@@ -645,7 +678,7 @@ mod tests {
             Mood::Normal,
             "no check this time"
         );
-        let mut talk = Conversation::new(&script, 0).unwrap();
+        let mut talk = Conversation::from(&script, 0, None).unwrap();
         talk.choose(&script, 0, 0, &mut Credits::default());
         assert_eq!(
             talk.view(&script, &facts(), Credits::default()).mood,
@@ -659,7 +692,7 @@ mod tests {
     #[test]
     fn only_a_line_that_says_so_ends_in_an_attack() {
         let script = script();
-        let mut talk = Conversation::new(&script, 0).unwrap();
+        let mut talk = Conversation::from(&script, 0, None).unwrap();
         assert!(!talk.attacks(&script));
         talk.line = "cross".into();
         assert!(talk.attacks(&script));
@@ -668,7 +701,7 @@ mod tests {
     #[test]
     fn what_has_been_said_is_dimmed() {
         let script = script();
-        let mut talk = Conversation::new(&script, 0).unwrap();
+        let mut talk = Conversation::from(&script, 0, None).unwrap();
         talk.choose(&script, 1, 0, &mut Credits::default());
         let view = talk.view(&script, &facts(), Credits::default());
         assert!(view.choices[1].said && !view.choices[2].said);
@@ -677,9 +710,9 @@ mod tests {
     #[test]
     fn goodbye_and_a_line_with_no_replies_end_it() {
         let script = script();
-        let mut talk = Conversation::new(&script, 0).unwrap();
+        let mut talk = Conversation::from(&script, 0, None).unwrap();
         assert!(!talk.choose(&script, 2, 0, &mut Credits::default()), "goodbye");
-        let mut talk = Conversation::new(&script, 0).unwrap();
+        let mut talk = Conversation::from(&script, 0, None).unwrap();
         talk.choose(&script, 0, 0, &mut Credits::default());
         let view = talk.view(&script, &facts(), Credits::default());
         assert_eq!(view.choices, [leave()]);
@@ -691,6 +724,67 @@ mod tests {
         let mut script = script();
         script.characters[0].lines.get_mut("no").unwrap().replies[0].to = Some("gone".into());
         assert_eq!(script.problems().len(), 1);
+    }
+
+    #[test]
+    fn a_witness_is_questioned_from_its_own_line_and_can_be_silenced_or_identify_the_player() {
+        let s: Script = serde_json::from_str(
+            r#"{ "characters": [ { "name": "Explorator", "start": "hello", "lines": {
+                "hello": { "says": "Salve.", "means": "Hello." },
+                "witness_saw": { "says": "Tu.", "means": "You!", "replies": [
+                    { "say": "Forget it.", "check": { "skill": "Intimidate", "chance": 40 },
+                      "to": "silenced", "fail": "defiant" } ] },
+                "silenced": { "says": "Silentium.", "means": "Quiet.", "silenced": true },
+                "defiant": { "says": "Negativum.", "means": "No." },
+                "witness_unsure": { "says": "Quis?", "means": "Who?", "replies": [
+                    { "say": "It was me.", "to": "confessed" } ] },
+                "confessed": { "says": "Tu.", "means": "You!", "identifies": true } } } ] }"#,
+        )
+        .unwrap();
+        assert!(s.problems().is_empty(), "{:?}", s.problems());
+        let mut credits = Credits::default();
+        let mut saw = Conversation::from(&s, 0, Some(WITNESS_SAW)).unwrap();
+        assert_eq!(saw.view(&s, &Facts::default(), credits).means, "You!");
+        assert!(!saw.silences(&s), "not yet");
+        saw.choose(&s, 0, 0, &mut credits);
+        assert!(saw.silences(&s) && !saw.identifies(&s), "intimidated into keeping quiet");
+        let mut defiant = Conversation::from(&s, 0, Some(WITNESS_SAW)).unwrap();
+        defiant.choose(&s, 0, 99, &mut credits);
+        assert!(!defiant.silences(&s), "not frightened");
+        let mut unsure = Conversation::from(&s, 0, Some(WITNESS_UNSURE)).unwrap();
+        unsure.choose(&s, 0, 0, &mut credits);
+        assert!(unsure.identifies(&s) && !unsure.silences(&s), "told who did it");
+        let other = Conversation::from(&s, 0, Some("nowhere")).unwrap();
+        assert_eq!(other.view(&s, &Facts::default(), credits).means, "Hello.", "its opening line, without");
+    }
+
+    #[test]
+    fn urbs_witnesses_can_be_questioned_by_the_player_and_by_security() {
+        let script = Script::load(URBS_SCRIPT).unwrap();
+        let mut witnesses = 0;
+        for character in &script.characters {
+            match character.threatened.map(|t| t.then) {
+                Some(Provoked::Alarm) => {
+                    witnesses += 1;
+                    for line in [WITNESS_SAW, WITNESS_UNSURE] {
+                        assert!(character.lines.contains_key(line), "{} opens at {line}", character.name);
+                    }
+                    let lines = || character.lines.values();
+                    assert!(lines().any(|line| line.silenced), "{} can be silenced", character.name);
+                    assert!(lines().any(|line| line.identifies), "{} can know who did it after all", character.name);
+                    for bark in ["saw_who", "saw_none"] {
+                        assert!(character.barks.contains_key(bark), "{} answers {bark}", character.name);
+                    }
+                }
+                Some(Provoked::Attacks) if !character.gang => {
+                    for bark in ["question", "identified", "unidentified", "heard"] {
+                        assert!(character.barks.contains_key(bark), "{} says {bark}", character.name);
+                    }
+                }
+                _ => (),
+            }
+        }
+        assert!(witnesses >= 2, "kinds that run to tell security");
     }
 
     #[test]
@@ -840,7 +934,7 @@ mod tests {
     #[test]
     fn a_bribe_is_offered_under_its_check_and_dimmed_without_the_credits() {
         let script = bribable();
-        let talk = Conversation::new(&script, 0).unwrap();
+        let talk = Conversation::from(&script, 0, None).unwrap();
         let view = talk.view(&script, &facts(), Credits::new(39, 99));
         let labels: Vec<_> = view.choices.iter().map(|c| c.label.as_str()).collect();
         assert_eq!(
@@ -861,7 +955,7 @@ mod tests {
     fn a_bribe_is_a_likelier_check_paid_for_either_way_and_tried_only_once() {
         let script = bribable();
         // Too poor: nothing happens, and nothing is paid.
-        let mut talk = Conversation::new(&script, 0).unwrap();
+        let mut talk = Conversation::from(&script, 0, None).unwrap();
         let mut poor = Credits::new(10, 0);
         assert!(talk.choose(&script, 1, 0, &mut poor));
         assert_eq!(poor, Credits::new(10, 0));
@@ -874,7 +968,7 @@ mod tests {
         assert_eq!(view.says, "Progreda.");
         assert_eq!(view.note.as_deref(), Some("[Speech 75%] Succeeded, 40.00 CR paid"));
         // Failing, it is paid all the same; and the check and its bribe are both gone after.
-        let mut talk = Conversation::new(&script, 0).unwrap();
+        let mut talk = Conversation::from(&script, 0, None).unwrap();
         let mut wallet = Credits::new(40, 0);
         assert!(talk.choose(&script, 1, 75, &mut wallet));
         assert_eq!(wallet, Credits::default());

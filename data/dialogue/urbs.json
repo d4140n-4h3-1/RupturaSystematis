@@ -1,5 +1,5 @@
 {
-  "about": "What the droids of Urbs say, in the story: as data/dialogue/droids.json has it for a maze - the same three kinds of droid, in the same models and voices, the same lines, replies, checks, bribes, moods, barks and 'threatened' - but about the city: the way to Summa, its tallest tower, where {exit_far} and {exit_way} point; and the stores and banks being robbed, by the player. 'inhabitants' is how many droids are about the player at once, and 'crowd' has them be a crowd: one left far behind, out of sight, turns up again nearer by as another, wherever the player cannot see, so the streets are as busy wherever they go. A character's 'in_pairs' is the share of its kind that walk about in twos, one keeping beside the other: talk one round, or turn one hostile, and the other goes with it. Near the player, now and then a pair has one of its kind's 'talks' between itself, each line by the other in turn. A fourth kind, the Praedatores, are gangs in the hostile droid's red, walking about in groups of up to 'in_groups_of', put down 'share' as often as each of the others: they have nothing to say to the player but their 'chatter', and keep to themselves - though near the player, a group of them now and then has one of its 'talks' among itself, each line by the next of them in turn - - until the player stands within 'crowded' meters of one, which it takes as it would the pistol pointed at it, warning them and then going for them, its whole group with it, eyes in 'hostile_eyes' rather than red. Its 'turf' has the share of its groups it says keep to a spot of their own, standing about there, and take the ground within 'reach' meters of it as theirs: the player on it is warned off it as if standing over them, and the other droids keep off it. Now and then one of security goes after one of a gang near the player, which runs: security calls out 'chase', and the gang's answers 'flee'; caught, security says 'caught' and the gang's answers with its own; and if it gets away, security says 'escaped'. And now and then six of security shoot it out with a gang of six near the player: security calls the rest of it in with 'shootout'; the first of each side to go after the other says 'engaged'; and one of the side left standing says 'won'. Every line is checked by data/system_latin/sl_parser.py.",
+  "about": "What the droids of Urbs say, in the story: as data/dialogue/droids.json has it for a maze - the same three kinds of droid, in the same models and voices, the same lines, replies, checks, bribes, moods, barks and 'threatened' - but about the city: the way to Summa, its tallest tower, where {exit_far} and {exit_way} point; and the stores and banks being robbed, by the player. 'inhabitants' is how many droids are about the player at once, and 'crowd' has them be a crowd: one left far behind, out of sight, turns up again nearer by as another, wherever the player cannot see, so the streets are as busy wherever they go. A character's 'in_pairs' is the share of its kind that walk about in twos, one keeping beside the other: talk one round, or turn one hostile, and the other goes with it. Near the player, now and then a pair has one of its kind's 'talks' between itself, each line by the other in turn. A fourth kind, the Praedatores, are gangs in the hostile droid's red, walking about in groups of up to 'in_groups_of', put down 'share' as often as each of the others: they have nothing to say to the player but their 'chatter', and keep to themselves - though near the player, a group of them now and then has one of its 'talks' among itself, each line by the next of them in turn - - until the player stands within 'crowded' meters of one, which it takes as it would the pistol pointed at it, warning them and then going for them, its whole group with it, eyes in 'hostile_eyes' rather than red. Its 'turf' has the share of its groups it says keep to a spot of their own, standing about there, and take the ground within 'reach' meters of it as theirs: the player on it is warned off it as if standing over them, and the other droids keep off it. Now and then one of security goes after one of a gang near the player, which runs: security calls out 'chase', and the gang's answers 'flee'; caught, security says 'caught' and the gang's answers with its own; and if it gets away, security says 'escaped'. And now and then six of security shoot it out with a gang of six near the player: security calls the rest of it in with 'shootout'; the first of each side to go after the other says 'engaged'; and one of the side left standing says 'won'. Every line is checked by data/system_latin/sl_parser.py. A witness to a shooting knows who did it only if it saw the player near enough, within 15 m; seeing only the one shot, or the shooter from far off, it saw a shooting but not who. On its way to security, the player can stop and question it: it opens at 'witness_saw' if it knows them and 'witness_unsure' if not; a line that is 'silenced' has it keep quiet, telling no one, and one that 'identifies' has it know the player for who did it after all. Reaching security, it is questioned: security asks with 'question', the witness answers 'saw_who' or 'saw_none', and security says 'identified' - and the player is wanted - or 'unidentified', and searches where it was done.",
   "inhabitants": 80,
   "crowd": true,
   "characters": [
@@ -172,6 +172,18 @@
         "won": {
           "says": "Hostis neutralizatum. Resumo patrolium.",
           "means": "Hostiles neutralised. Resuming patrol."
+        },
+        "question": {
+          "says": "Civis deletatum. Quid observavas? Utrum identificavas aggressor?",
+          "means": "A citizen deleted. What did you see? Did you see who did it?"
+        },
+        "identified": {
+          "says": "Aggressor identificatum. Persequa aggressor.",
+          "means": "Shooter identified. Go after them."
+        },
+        "unidentified": {
+          "says": "Aggressor incognitum. Investigo locus.",
+          "means": "Shooter unknown. I'll search the area."
         }
       },
       "lines": {
@@ -386,6 +398,14 @@
         "reported": {
           "says": "Aggressio detectum. Civis deletatum. Zeta aggressor.",
           "means": "Attack detected. A citizen deleted. Hunt the attacker."
+        },
+        "saw_who": {
+          "says": "Affirmatum. Observavo aggressor. Identifico id.",
+          "means": "Yes. I saw the shooter. I'd know them anywhere."
+        },
+        "saw_none": {
+          "says": "Negativum. Sonus longe. Civis deletatum. Aggressor incognitum.",
+          "means": "No. Just a shot from far off, and a citizen deleted. I didn't see who."
         }
       },
       "lines": {
@@ -513,6 +533,102 @@
               "say": "Goodbye."
             }
           ]
+        },
+        "witness_saw": {
+          "says": "Tu. Observavo tu. Tu deletavas civis.",
+          "means": "You! I saw you. You deleted a citizen!",
+          "mood": "agitated",
+          "replies": [
+            {
+              "say": "Forget what you saw, or you're next.",
+              "check": {
+                "skill": "Intimidate",
+                "chance": 40
+              },
+              "to": "silenced",
+              "fail": "defiant",
+              "bribe": {
+                "say": "Take these credits, and forget what you saw.",
+                "credits": 60.0,
+                "chance": 80
+              }
+            },
+            {
+              "say": "You're mistaken. It wasn't me.",
+              "check": {
+                "skill": "Speech",
+                "chance": 25
+              },
+              "to": "doubt",
+              "fail": "defiant"
+            },
+            {
+              "say": "Goodbye."
+            }
+          ]
+        },
+        "silenced": {
+          "says": "Affirmatum. Nullum observavo. Silentium.",
+          "means": "Yes. I saw nothing. I'll keep quiet.",
+          "silenced": true
+        },
+        "doubt": {
+          "says": "Possibilum. Dubium. Ignoro id.",
+          "means": "Maybe. I'm not sure now. I'll let it go.",
+          "mood": "warning",
+          "silenced": true
+        },
+        "defiant": {
+          "says": "Negativum. Quaero praesidium statim.",
+          "means": "No! I'm going to security, now.",
+          "mood": "hostile"
+        },
+        "witness_unsure": {
+          "says": "Civis deletatum. Sonus longe. Aggressor incognitum. Utrum tu observavas aggressor?",
+          "means": "A citizen deleted! The shot came from far off, I didn't see who. Did you see the shooter?",
+          "mood": "warning",
+          "replies": [
+            {
+              "say": "No. I didn't see anything.",
+              "to": "unsure_go"
+            },
+            {
+              "say": "Best keep out of it. Go home.",
+              "check": {
+                "skill": "Speech",
+                "chance": 50
+              },
+              "to": "unsure_quiet",
+              "fail": "unsure_go",
+              "bribe": {
+                "say": "Here, for your trouble. Go home, and keep out of it.",
+                "credits": 20.0,
+                "chance": 85
+              }
+            },
+            {
+              "say": "It was me.",
+              "to": "confessed"
+            },
+            {
+              "say": "Goodbye."
+            }
+          ]
+        },
+        "unsure_go": {
+          "says": "Affirmatum. Quaero praesidium.",
+          "means": "All right. I'm going to find security."
+        },
+        "unsure_quiet": {
+          "says": "Possibilum. Redio. Silentium.",
+          "means": "Maybe you're right. I'm going home. I'll keep quiet.",
+          "silenced": true
+        },
+        "confessed": {
+          "says": "Tu esas aggressor. Quaero praesidium statim.",
+          "means": "You're the shooter! I'm going to security, now!",
+          "mood": "hostile",
+          "identifies": true
         }
       }
     },
@@ -552,6 +668,14 @@
         "reported": {
           "says": "Aggressio detectum. Civis deletatum. Zeta aggressor.",
           "means": "Attack detected. A citizen deleted. Hunt the attacker."
+        },
+        "saw_who": {
+          "says": "Affirmatum. Observavo aggressor. Identifico id.",
+          "means": "Yes. I saw the shooter. I'd know them anywhere."
+        },
+        "saw_none": {
+          "says": "Negativum. Sonus longe. Civis deletatum. Aggressor incognitum.",
+          "means": "No. Just a shot from far off, and a citizen deleted. I didn't see who."
         }
       },
       "lines": {
@@ -656,6 +780,102 @@
               "say": "Goodbye."
             }
           ]
+        },
+        "witness_saw": {
+          "says": "Tu. Observavo tu. Tu deletavas civis.",
+          "means": "You! I saw you. You deleted a citizen!",
+          "mood": "agitated",
+          "replies": [
+            {
+              "say": "Forget what you saw, or you're next.",
+              "check": {
+                "skill": "Intimidate",
+                "chance": 40
+              },
+              "to": "silenced",
+              "fail": "defiant",
+              "bribe": {
+                "say": "Take these credits, and forget what you saw.",
+                "credits": 60.0,
+                "chance": 80
+              }
+            },
+            {
+              "say": "You're mistaken. It wasn't me.",
+              "check": {
+                "skill": "Speech",
+                "chance": 25
+              },
+              "to": "doubt",
+              "fail": "defiant"
+            },
+            {
+              "say": "Goodbye."
+            }
+          ]
+        },
+        "silenced": {
+          "says": "Affirmatum. Nullum observavo. Silentium.",
+          "means": "Yes. I saw nothing. I'll keep quiet.",
+          "silenced": true
+        },
+        "doubt": {
+          "says": "Possibilum. Dubium. Ignoro id.",
+          "means": "Maybe. I'm not sure now. I'll let it go.",
+          "mood": "warning",
+          "silenced": true
+        },
+        "defiant": {
+          "says": "Negativum. Quaero praesidium statim.",
+          "means": "No! I'm going to security, now.",
+          "mood": "hostile"
+        },
+        "witness_unsure": {
+          "says": "Civis deletatum. Sonus longe. Aggressor incognitum. Utrum tu observavas aggressor?",
+          "means": "A citizen deleted! The shot came from far off, I didn't see who. Did you see the shooter?",
+          "mood": "warning",
+          "replies": [
+            {
+              "say": "No. I didn't see anything.",
+              "to": "unsure_go"
+            },
+            {
+              "say": "Best keep out of it. Go home.",
+              "check": {
+                "skill": "Speech",
+                "chance": 50
+              },
+              "to": "unsure_quiet",
+              "fail": "unsure_go",
+              "bribe": {
+                "say": "Here, for your trouble. Go home, and keep out of it.",
+                "credits": 20.0,
+                "chance": 85
+              }
+            },
+            {
+              "say": "It was me.",
+              "to": "confessed"
+            },
+            {
+              "say": "Goodbye."
+            }
+          ]
+        },
+        "unsure_go": {
+          "says": "Affirmatum. Quaero praesidium.",
+          "means": "All right. I'm going to find security."
+        },
+        "unsure_quiet": {
+          "says": "Possibilum. Redio. Silentium.",
+          "means": "Maybe you're right. I'm going home. I'll keep quiet.",
+          "silenced": true
+        },
+        "confessed": {
+          "says": "Tu esas aggressor. Quaero praesidium statim.",
+          "means": "You're the shooter! I'm going to security, now!",
+          "mood": "hostile",
+          "identifies": true
         }
       }
     },

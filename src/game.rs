@@ -133,6 +133,24 @@ struct Talk {
     next_in: f32,
 }
 
+/// A witness being questioned by a sentry it has come to (see [`MazeGame::question`]): where the
+/// shooting was, whether it knows who did it, how far the questioning has got - the sentry asking,
+/// the witness answering, the sentry saying what it makes of it - and how long till the next
+/// line, in seconds.
+#[derive(Debug, Clone, PartialEq)]
+struct Questioning {
+    witness: usize,
+    sentry: usize,
+    at: Vector3<f32>,
+    knows: bool,
+    step: usize,
+    next_in: f32,
+}
+
+/// How near the player has to be to a witness being questioned, or the sentry questioning it, to
+/// hear it, in meters.
+const QUESTIONING_HEARD: f32 = 40.0;
+
 /// In battle royale, how far from the player a droid can be and still be heard calling out, in
 /// meters.
 const ROYALE_HEARD_WITHIN: f32 = 30.0;
@@ -476,6 +494,10 @@ pub struct MazeGame {
     #[visit(skip)]
     #[reflect(hidden)]
     credits: Credits,
+    /// The witnesses being questioned by security (see [`MazeGame::question`]).
+    #[visit(skip)]
+    #[reflect(hidden)]
+    questioning: Vec<Questioning>,
     /// How long ago the player was deleted, in seconds.
     #[visit(skip)]
     #[reflect(hidden)]
@@ -2030,9 +2052,11 @@ impl MazeGame {
     }
 
     /// The player has shot the `n`th droid: those that saw it do what their kind does about it.
-    /// A sentry, or one of the gang the one shot was of, goes after them; one that would sound
-    /// the alarm runs to tell a sentry - unless it is shot down before it gets there (see
-    /// [`Inhabitants::report`]).
+    /// A sentry, or one of the gang the one shot was of, goes after them if it saw who did it,
+    /// and searches where it was done if not; one that would sound the alarm runs to tell a
+    /// sentry - unless it is shot down before it gets there (see [`Inhabitants::report`]), or the
+    /// player stops it and talks it out of it. Only a witness that knows who did it makes them
+    /// wanted, once it has told.
     fn witnessed(&mut self, ctx: &mut PluginContext, n: usize) {
         let Some(script) = self.script.as_ref() else {
             return;
@@ -2047,29 +2071,45 @@ impl MazeGame {
             in_the_dark,
             |seer, shot| minds(script, seer, shot),
         );
+        // Where it was done, as each saw it: where the player stood, if it saw them, or else
+        // where the one shot fell.
+        let fell = self.inhabitants.feet(n).unwrap_or(player);
+        let sentries: Vec<bool> = (0..script.characters.len()).map(|c| is_sentry(script, c)).collect();
         let mut running = Vec::new();
-        for m in witnesses {
+        for (m, knows) in witnesses {
             match self.threatened(m).map(|threatened| threatened.then) {
-                Some(Provoked::Attacks) => self.on_threat(ctx, m, Threat::Provoked),
+                Some(Provoked::Attacks) if knows => self.on_threat(ctx, m, Threat::Provoked),
+                Some(Provoked::Attacks) => {
+                    // A shot from far off: it does not know who, and looks.
+                    self.inhabitants.search_at(m, fell);
+                    if sentries.get(self.inhabitants.who(m).map_or(usize::MAX, |(c, _)| c)).copied().unwrap_or(false) {
+                        self.inhabitants.raise_alarm(m, fell, |c| sentries.get(c).copied().unwrap_or(false));
+                    }
+                    self.bark(m, "heard", Mood::Warning);
+                }
                 Some(Provoked::Alarm) => {
-                    self.inhabitants.witness(m, player);
+                    self.inhabitants.witness(m, if knows { player } else { fell }, knows);
                     self.inhabitants.set_eyes(m, screen::eyes(Mood::Agitated));
                     self.bark(m, "witnessed", Mood::Agitated);
-                    running.push(m);
+                    running.push((m, knows));
                 }
                 None => (),
             }
         }
-        if !running.is_empty() {
-            self.wanted += 1;
-        }
+        let knew = running.iter().filter(|&&(_, knows)| knows).count();
         match running[..] {
             [] => (),
-            [m] => {
+            [(m, knows)] => {
                 let name = self.name_of(m).unwrap_or_else(|| "A droid".into());
-                self.hud.show_note(format!("{name} saw that, and runs for security"));
+                self.hud.show_note(match knows {
+                    true => format!("{name} saw you do that, and runs for security"),
+                    false => format!("{name} saw that, but not who did it, and runs for security"),
+                });
             }
-            _ => self.hud.show_note(format!("{} droids saw that, and run for security", running.len())),
+            _ => self.hud.show_note(format!(
+                "{} droids saw that, {knew} of them who did it, and run for security",
+                running.len()
+            )),
         }
     }
 
@@ -2096,29 +2136,107 @@ impl MazeGame {
                     self.inhabitants.raise_alarm(m, at, sentry);
                 }
                 Some(Provoked::Alarm) => {
-                    self.inhabitants.witness(m, at);
+                    self.inhabitants.witness(m, at, false);
                     self.inhabitants.set_eyes(m, screen::eyes(Mood::Agitated));
                     self.bark(m, "body", Mood::Agitated);
                 }
                 None => continue,
             }
-            self.wanted += 1;
+            // Who did it, it does not know: the player is wanted for nothing more by it.
             let name = self.name_of(m).unwrap_or_else(|| "A droid".into());
             self.hud.show_note(format!("{name} found one you shot down"));
         }
-        for (m, s, at) in reports.told {
-            self.wanted += 1;
+        // Each witness come to a sentry stands to be questioned by it.
+        for (m, s, at, knows) in reports.told {
             self.inhabitants.set_eyes(m, None);
-            self.bark(m, "reported", Mood::Agitated);
-            self.inhabitants.search_at(s, at);
-            self.inhabitants.raise_alarm(s, at, sentry);
-            self.alert_drone(at);
-            let name = self.name_of(m).unwrap_or_else(|| "A witness".into());
-            self.hud.show_note(format!("{name} told security"));
+            self.inhabitants.talk_with(m, s);
+            self.questioning.push(Questioning { witness: m, sentry: s, at, knows, step: 0, next_in: 0.0 });
+            Log::info(format!("Witness: droid {m} questioned by sentry {s}, who did it {}", if knows { "known" } else { "unknown" }));
         }
         for m in reports.gave_up {
             self.inhabitants.set_eyes(m, None);
         }
+        self.question(ctx);
+    }
+
+    /// Sees each witness's questioning by a sentry on: the sentry asks what it saw, the witness
+    /// says who did it, or that it did not see, and the sentry says what it makes of it - each line
+    /// heard if the player is near enough. Then the sentry, and those near it, search where it
+    /// was done, and the drones are called to it; and if the witness knew who did it, the player
+    /// is wanted for it. A witness shot down before it answers tells nothing; a sentry gone after
+    /// the player, or shot down, asks no more, and the witness goes on to find another.
+    fn question(&mut self, ctx: &mut PluginContext) {
+        if self.questioning.is_empty() {
+            return;
+        }
+        let Some(script) = self.script.as_ref() else {
+            return;
+        };
+        let sentries: Vec<bool> = (0..script.characters.len()).map(|c| is_sentry(script, c)).collect();
+        let sentry = |c: usize| sentries.get(c).copied().unwrap_or(false);
+        let player = self.player.feet(&ctx.scenes[self.scene].graph);
+        let mut questioning = std::mem::take(&mut self.questioning);
+        questioning.retain_mut(|q| {
+            let (Some(witness), Some(by)) = (self.inhabitants.feet(q.witness), self.inhabitants.feet(q.sentry)) else {
+                return false;
+            };
+            let answered = q.step >= 2;
+            if self.inhabitants.is_down(q.sentry) || self.inhabitants.is_hostile(q.sentry) {
+                self.inhabitants.set_talking(q.sentry, false);
+                self.inhabitants.set_talking(q.witness, false);
+                if !self.inhabitants.is_down(q.witness) {
+                    self.inhabitants.witness(q.witness, q.at, q.knows);
+                    self.inhabitants.set_eyes(q.witness, screen::eyes(Mood::Agitated));
+                }
+                return false;
+            }
+            if self.inhabitants.is_down(q.witness) && !answered {
+                self.inhabitants.set_talking(q.sentry, false);
+                return false;
+            }
+            q.next_in -= ctx.dt;
+            if q.next_in > 0.0 {
+                return true;
+            }
+            let heard = (witness - player).norm().min((by - player).norm()) <= QUESTIONING_HEARD;
+            let (speaker, bark, mood) = match q.step {
+                0 => (q.sentry, "question", Mood::Warning),
+                1 if q.knows => (q.witness, "saw_who", Mood::Agitated),
+                1 => (q.witness, "saw_none", Mood::Warning),
+                2 if q.knows => (q.sentry, "identified", Mood::Hostile),
+                2 => (q.sentry, "unidentified", Mood::Warning),
+                _ => {
+                    // Done: the sentry searches, and calls the others in.
+                    self.inhabitants.set_talking(q.sentry, false);
+                    self.inhabitants.set_talking(q.witness, false);
+                    self.inhabitants.search_at(q.sentry, q.at);
+                    self.inhabitants.raise_alarm(q.sentry, q.at, sentry);
+                    self.alert_drone(q.at);
+                    let name = self.name_of(q.witness).unwrap_or_else(|| "A witness".into());
+                    Log::info(format!("Witness: droid {} questioned, who did it {}", q.witness, if q.knows { "told" } else { "not known" }));
+                    if q.knows {
+                        self.wanted += 1;
+                        self.hud.show_note(format!("{name} told security who did it: you are wanted"));
+                    } else {
+                        self.hud.show_note(format!("{name} told security of a shooting, but not who did it"));
+                    }
+                    return false;
+                }
+            };
+            let line = self.inhabitants.who(speaker).and_then(|(character, _)| {
+                self.script.as_ref()?.characters.get(character)?.barks.get(bark).cloned()
+            });
+            if heard {
+                if let Some(line) = &line {
+                    self.say_bark(speaker, line, mood);
+                }
+            }
+            let length = line.map_or(0, |line| line.says.len());
+            q.next_in = TALK_PAUSE + length as f32 * TALK_PER_LETTER;
+            q.step += 1;
+            true
+        });
+        self.questioning.extend(questioning);
     }
 
     /// A bolt from `side`'s droid, or drone, has struck something: the player, one of the other
@@ -3007,7 +3125,12 @@ impl MazeGame {
         ) else {
             return;
         };
-        let Some(conversation) = Conversation::new(script, character) else {
+        // A witness, on its way to tell security, is questioned about what it saw.
+        let start = self.inhabitants.witness_knows(droid).map(|knows| match knows {
+            true => crate::dialogue::WITNESS_SAW,
+            false => crate::dialogue::WITNESS_UNSURE,
+        });
+        let Some(conversation) = Conversation::from(script, character, start) else {
             return;
         };
         let ui = ctx.user_interfaces.first();
@@ -3165,6 +3288,21 @@ impl MazeGame {
         };
         self.inhabitants.set_talking(talking.droid, false);
         self.inhabitants.set_eyes(talking.droid, None);
+        // A witness questioned: talked into keeping quiet, or knowing the player for who did it
+        // now, or neither, on its way to security again.
+        if let Some(script) = self.script.as_ref().filter(|_| self.inhabitants.witness_knows(talking.droid).is_some()) {
+            let name = self.name_of(talking.droid).unwrap_or_else(|| "The witness".into());
+            if talking.conversation.silences(script) {
+                self.inhabitants.silence(talking.droid);
+                self.hud.show_note(format!("{name} will keep quiet"));
+            } else {
+                if talking.conversation.identifies(script) {
+                    self.inhabitants.identify(talking.droid);
+                    self.hud.show_note(format!("{name} knows it was you, and runs for security"));
+                }
+                self.inhabitants.set_eyes(talking.droid, screen::eyes(Mood::Agitated));
+            }
+        }
         // However it ended, a conversation that got as far as a threat is carried out.
         if self
             .script
