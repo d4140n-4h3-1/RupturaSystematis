@@ -502,11 +502,7 @@ fn claim_crosshair(graph: &mut Graph, screen: Handle<Node>) -> Option<Crosshair>
             let state = original.state();
             let material = state.data_ref()?;
             let glow = glow_strength(material)?;
-            // Black in the model, glowing only by its emission - which the engine scales by the
-            // colour, so the colour has to be the green it glows.
-            let mut material = material.clone();
-            material.set_property(DIFFUSE_COLOR, GLASS_GREEN);
-            let copy = MaterialResource::new_embedded(material);
+            let copy = MaterialResource::new_embedded(material.clone());
             Some((
                 original.key(),
                 Crosshair {
