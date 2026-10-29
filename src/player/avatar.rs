@@ -402,7 +402,8 @@ const SPIN: Vector3<f32> = Vector3::new(1.3, 2.1, 0.8);
 const FLASH_FADE: f32 = 8.0;
 const FLASH_BRIGHTER: f32 = 2.0;
 /// The glass of the screen and of the shell: green, and see-through, glowing a little by itself.
-const GLASS_GREEN: Color = Color::opaque(40, 255, 60);
+/// The pistol's green, `hud_screen` in `cyber_pistol.blend`: (0.02, 1.0, 0.05) in linear light.
+const GLASS_GREEN: Color = Color::opaque(39, 255, 63);
 const SCREEN_TINT: f32 = 0.6;
 const SCREEN_GLOW: f32 = 1.5;
 const SHELL_TINT: f32 = 0.4;

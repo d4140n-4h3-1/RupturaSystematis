@@ -536,8 +536,12 @@ impl Player {
             .avatar
             .as_ref()
             .is_some_and(|avatar| avatar.shot().is_some());
-        self.hold_pistol(graph, fired, dt);
+        // The shot leaves the muzzle as it is held, and only then does the pistol kick.
+        self.hold_pistol(graph, dt);
         self.shoot(graph, dt);
+        if fired {
+            self.kick_pistol(graph);
+        }
     }
 
     /// Whether the droid strafes: with the right mouse button held, or the pistol out.

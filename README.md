@@ -121,6 +121,16 @@ the crate makes.
 
 28 October 2026:
 
+- **The cyber pistol is a pistol**, built by `~/Documents/blender/weapons/build_cyber_pistol.py`
+  in place of the claw and crystal: a raked grip with charge cells down it, a frame with a rail
+  and a trigger guard, a slide with serrations and lines of light, the energy core tumbling in a
+  window in it, a compensator at the muzzle and a reflex sight at the back, its reticle the sight
+  in first person. Every glow on it the green of the bolts, as `cyber_pistol.blend` has it. The
+  droids hold it as before, the grip found again for the new shape.
+- **A bolt leaves the muzzle**: the pistol held in first person turns its barrel onto whatever
+  the middle of the view is on, and a shot leaves the muzzle from where it is that frame, along
+  the barrel, before the pistol kicks; drawn out of the muzzle on its first frame, rather than
+  half a meter on with a gap between.
 - **Caelum**, the spaceport south of Urbs, `data/story/story_caelum.glb`, built by
   `data/story/story_caelum.py`: a model of its own, played along with Urbs and Ferrum, Urbs'
   middle avenue going on over a bridge under an arch of light into it. Fourteen by fourteen

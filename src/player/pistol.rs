@@ -57,8 +57,12 @@ const BOLT_RANGE: f32 = 100.0;
 /// How long a bolt is, from end to end, and how thick, in meters.
 const BOLT_LENGTH: f32 = 0.5;
 const BOLT_WIDTH: f32 = 0.05;
-/// The bolt's colour - the green of the ball at the muzzle - and how brightly it glows by itself.
-const BOLT_COLOR: Color = Color::opaque(40, 255, 60);
+/// The bolt's colour - the green of the pistol's glow, `bolt_emission` in
+/// `cyber_pistol.blend`: (0.02, 1.0, 0.05) there, as Blender keeps colours, in linear light -
+/// as a colour, and as the glow, which is in linear light too; and how brightly it glows by
+/// itself.
+const BOLT_COLOR: Color = Color::opaque(39, 255, 63);
+const BOLT_GREEN: Vector3<f32> = Vector3::new(0.02, 1.0, 0.05);
 /// The glow of the ball at the muzzle, lighting what is round it while the pistol is out: how
 /// bright it is, and how far it reaches, in meters.
 const MUZZLE_BRIGHTNESS: f32 = 0.6;
@@ -110,6 +114,9 @@ struct Bolt {
     lands: bool,
     /// How much longer it glows where it hit something, in seconds, once it has.
     landed: Option<f32>,
+    /// Whether it has been drawn in flight yet: the first time, it is drawn all the way back to
+    /// where it was fired from, having flown a whole frame's way out of the muzzle already.
+    out: bool,
 }
 
 /// The pistol's bolts: a few meshes, shown while they fly. Anyone with a pistol can have them -
@@ -154,11 +161,7 @@ impl Bolts {
         .map(TextureResource::new_embedded);
         let mut material = Material::standard();
         material.set_property("diffuseColor", BOLT_COLOR);
-        material.set_property(
-            "emissionStrength",
-            Vector3::new(BOLT_COLOR.r, BOLT_COLOR.g, BOLT_COLOR.b).cast::<f32>() / 255.0
-                * BOLT_GLOW,
-        );
+        material.set_property("emissionStrength", BOLT_GREEN * BOLT_GLOW);
         material.bind("emissionTexture", white);
         let material = MaterialResource::new_embedded(material);
         let sounds = Sounds::load(PISTOL_SOUNDS)
@@ -267,12 +270,15 @@ impl Bolts {
             range: range.min(BOLT_RANGE),
             lands,
             landed: None,
+            out: false,
         });
         let node = &mut graph[*mesh];
         node.local_transform_mut()
-            .set_position(from)
             .set_rotation(UnitQuaternion::face_towards(&direction, &Vector3::y()));
         node.set_visibility(true);
+        if let Some(bolt) = bolt {
+            show(graph, *mesh, bolt);
+        }
         self.hum(graph, index, true);
         // The shot sounds where it leaves, once, and is gone.
         if let Some((buffer, reach)) = &self.shot {
@@ -348,9 +354,8 @@ impl Bolts {
                 flying.position += flying.direction * (reach - 0.5 * BOLT_LENGTH).max(0.0);
                 flying.range = 0.0;
                 flying.landed = Some(IMPACT);
-                graph[*mesh]
-                    .local_transform_mut()
-                    .set_position(flying.position);
+                show(graph, *mesh, flying);
+                flying.out = true;
                 self.hum(graph, index, false);
                 continue;
             }
@@ -359,9 +364,8 @@ impl Bolts {
                 flying.position += flying.direction * (reach - 0.5 * BOLT_LENGTH).max(0.0);
                 flying.range = 0.0;
                 flying.landed = Some(IMPACT);
-                graph[*mesh]
-                    .local_transform_mut()
-                    .set_position(flying.position);
+                show(graph, *mesh, flying);
+                flying.out = true;
                 self.hum(graph, index, false);
                 continue;
             }
@@ -373,9 +377,8 @@ impl Bolts {
             }
             flying.position += flying.direction * reach;
             flying.range -= reach;
-            graph[*mesh]
-                .local_transform_mut()
-                .set_position(flying.position);
+            show(graph, *mesh, flying);
+            flying.out = true;
         }
         struck
     }
@@ -414,12 +417,40 @@ pub(super) fn muzzle_lamp(graph: &mut Graph) -> Handle<Node> {
     .to_base()
 }
 
+/// Where a bolt is drawn: from its tail to its tip, but never back past where it was fired from,
+/// so that it does not stick back through the pistol; and the first time, from where it was
+/// fired, a streak out of the muzzle, rather than standing out ahead of it with a gap between.
+fn drawn(bolt: &Bolt) -> (Vector3<f32>, f32) {
+    let tip = bolt.position + bolt.direction * (0.5 * BOLT_LENGTH);
+    let flown = (tip - bolt.fired_at).dot(&bolt.direction).max(0.0);
+    let length = if bolt.out {
+        flown.min(BOLT_LENGTH)
+    } else {
+        flown
+    };
+    (tip - bolt.direction * (0.5 * length), length)
+}
+
+/// Puts a bolt's mesh where it is [`drawn`].
+fn show(graph: &mut Graph, mesh: Handle<Node>, bolt: &Bolt) {
+    let (middle, length) = drawn(bolt);
+    graph[mesh]
+        .local_transform_mut()
+        .set_position(middle)
+        .set_scale(Vector3::new(1.0, 1.0, (length / BOLT_LENGTH).max(1.0e-3)));
+}
+
 impl Player {
     /// Fires a bolt from the muzzle the way the gun pointed, if the droid let a shot go this
     /// frame; and flies every bolt in the air on for another `dt`.
     pub(super) fn shoot(&mut self, graph: &mut Graph, dt: f32) {
         // In first person, from the pistol held in view, for the middle of the view.
         let shot = self.avatar.as_ref().and_then(|avatar| avatar.shot());
+        if shot.is_some() {
+            // The view and the pistol in it have moved this frame - the head, the aim, the kick -
+            // and the muzzle is where they put it, not where it was as the last frame was drawn.
+            graph.update_hierarchical_data_for_descendants(self.camera);
+        }
         let shot = shot.map(|shot| self.aim_from_view(graph).unwrap_or(shot));
         if let Some((muzzle, direction)) = shot {
             self.bolts.fire(graph, muzzle, direction);
@@ -555,7 +586,11 @@ mod tests {
         assert!((passed[0].end.z - (1.0 + BOLT_SPEED * 0.02)).abs() < 1.0e-4);
         assert!(bolts.passed().is_empty(), "each once");
         bolts.fly(&mut graph, 0.02, |_, _, _, _| None);
-        assert_eq!(bolts.passed()[0].fired_at, Vector3::new(1.0, 1.0, 1.0), "still from where it was fired");
+        assert_eq!(
+            bolts.passed()[0].fired_at,
+            Vector3::new(1.0, 1.0, 1.0),
+            "still from where it was fired"
+        );
     }
 
     #[test]
@@ -563,7 +598,13 @@ mod tests {
         let mut graph = Graph::new();
         let mut bolts = Bolts::new(&mut graph);
         let ahead = Vector3::z();
-        let flying = |bolts: &Bolts| bolts.bolts.iter().filter_map(|(_, b)| *b).collect::<Vec<_>>();
+        let flying = |bolts: &Bolts| {
+            bolts
+                .bolts
+                .iter()
+                .filter_map(|(_, b)| *b)
+                .collect::<Vec<_>>()
+        };
         // Nothing in the way: on it goes, at its speed.
         bolts.fire(&mut graph, Vector3::zeros(), ahead);
         assert!(bolts.fly(&mut graph, 0.1, |_, _, _, _| None).is_empty());

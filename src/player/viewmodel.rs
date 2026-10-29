@@ -29,8 +29,8 @@ const SIZE: f32 = 0.1;
 /// the view: the screen sits this far above the pistol's middle line and this far back from its
 /// middle, in the model's own terms.
 const HIP: Vector3<f32> = Vector3::new(-0.13, -0.17, 0.3);
-const SCREEN_ABOVE: f32 = 1.73;
-const SCREEN_BEHIND: f32 = 0.52;
+const SCREEN_ABOVE: f32 = 1.05;
+const SCREEN_BEHIND: f32 = 0.95;
 const SIGHT_DISTANCE: f32 = 0.28;
 /// How far off the pistol at the hip points to cross the middle of the view, in meters.
 const CONVERGE: f32 = 8.0;
@@ -56,6 +56,10 @@ const TUCK_OVER: f32 = 0.25;
 const TUCK_EASING: f32 = 10.0;
 /// How far out from its middle line it is, for the graphics effects, in meters.
 const RADIUS: f32 = 0.1;
+/// How quickly its barrel comes round onto whatever the middle of the view is on, like a rate;
+/// and how far off that is taken to be with nothing there, in meters.
+const ONTO_EASING: f32 = 15.0;
+pub(super) const SIGHTED: f32 = 100.0;
 
 /// The pistol held in first person.
 #[derive(Debug, Clone, PartialEq)]
@@ -75,8 +79,39 @@ pub(super) struct Viewmodel {
     aim: f32,
     kick: f32,
     tuck: f32,
+    /// Where its muzzle is in the grip, and the turn, about its sight, that brings the barrel
+    /// round onto whatever the middle of the view is on, as far as it has come.
+    muzzle_at: Vector3<f32>,
+    onto: UnitQuaternion<f32>,
     /// Where its middle was, across the world, the last time the graphics effects were told.
     last_seen: Option<Vector3<f32>>,
+}
+
+/// The pistol's own turn in the grip: its barrel, along its +x, turned to the camera's ahead.
+fn quarter_turn() -> UnitQuaternion<f32> {
+    UnitQuaternion::from_axis_angle(&Vector3::y_axis(), -std::f32::consts::FRAC_PI_2)
+}
+
+/// Where the middle of its screen is in the grip, held `at` and turned by `turn`.
+fn sight(at: Vector3<f32>, turn: UnitQuaternion<f32>) -> Vector3<f32> {
+    at + turn * quarter_turn() * Vector3::new(-SCREEN_BEHIND, SCREEN_ABOVE, 0.0).scale(SIZE)
+}
+
+/// The turn, about its sight, that brings the barrel of the pistol held `aim` of the way in, its
+/// muzzle `muzzle_at` in the grip, round onto what the middle of the view is on, `sighted` ahead.
+fn onto(aim: f32, muzzle_at: Vector3<f32>, sighted: f32) -> UnitQuaternion<f32> {
+    let (at, turn) = held(aim);
+    let (sight, target) = (sight(at, turn), Vector3::z() * sighted);
+    // Turning it about the sight moves the muzzle a little too: a few goes settle it to within
+    // a small part of a degree.
+    let mut onto = UnitQuaternion::identity();
+    for _ in 0..8 {
+        let muzzle = sight + onto * (at + turn * muzzle_at - sight);
+        let barrel = onto * turn * Vector3::z();
+        onto = UnitQuaternion::rotation_between(&barrel, &(target - muzzle)).unwrap_or_default()
+            * onto;
+    }
+    onto
 }
 
 /// Where the pistol is held, and how it is turned, `aim` of the way in from the hip to aiming.
@@ -127,11 +162,9 @@ impl Viewmodel {
         node.set_visibility(true);
         node.local_transform_mut()
             .set_position(Vector3::zeros())
-            .set_rotation(UnitQuaternion::from_axis_angle(
-                &Vector3::y_axis(),
-                -std::f32::consts::FRAC_PI_2,
-            ))
+            .set_rotation(quarter_turn())
             .set_scale(Vector3::repeat(SIZE));
+        let muzzle_at = quarter_turn() * graph[muzzle].local_transform().position().scale(SIZE);
         Some(Self {
             grip,
             pistol,
@@ -141,6 +174,8 @@ impl Viewmodel {
             aim: 0.0,
             kick: 0.0,
             tuck: 0.0,
+            muzzle_at,
+            onto: UnitQuaternion::identity(),
             last_seen: None,
         })
     }
@@ -151,29 +186,25 @@ impl Viewmodel {
     }
 
     /// Holds it for another `dt`: `seen` while the view is from the droid's own eyes, up while
-    /// the droid's pistol is `out`, `raised` to aim or at the hip, kicked by a shot `fired` this
-    /// frame, and tucked out of the way of a wall `room` meters ahead.
-    #[allow(clippy::too_many_arguments)]
+    /// the droid's pistol is `out`, `raised` to aim or at the hip, its barrel coming round onto
+    /// what the middle of the view is on, `sighted` meters ahead, and tucked out of the way of a
+    /// wall if that is near.
     fn hold(
         &mut self,
         graph: &mut Graph,
         seen: bool,
         out: bool,
         raised: bool,
-        fired: bool,
-        room: f32,
+        sighted: f32,
         dt: f32,
     ) {
+        let room = sighted.min(TUCK_FROM);
         let step = dt / RAISE_TIME;
         self.up = (self.up + if out { step } else { -step }).clamp(0.0, 1.0);
         let ease = |rate: f32| 1.0 - (-rate * dt).exp();
         let aim = if raised && out { 1.0 } else { 0.0 };
         self.aim += (aim - self.aim) * ease(AIM_EASING);
-        self.kick = if fired {
-            1.0
-        } else {
-            self.kick * (-KICK_SETTLE * dt).exp()
-        };
+        self.kick *= (-KICK_SETTLE * dt).exp();
         let tuck = ((TUCK_FROM - room) / TUCK_OVER).clamp(0.0, 1.0);
         self.tuck += (tuck - self.tuck) * ease(TUCK_EASING);
 
@@ -185,17 +216,12 @@ impl Viewmodel {
             self.last_seen = None;
             return;
         }
-        let (at, turn) = held(self.aim);
-        // Put away, or tucked down out of a wall's way: lower, nearer, and dipped. Smoothed at
-        // both ends, so it eases up and down.
-        let away = 1.0 - self.up.min(1.0 - self.tuck);
-        let away = away * away * (3.0 - 2.0 * away);
-        let dip = UnitQuaternion::from_axis_angle(&Vector3::x_axis(), PUT_AWAY_DIP * away);
-        let kick = UnitQuaternion::from_axis_angle(&Vector3::x_axis(), -KICK_UP * self.kick);
-        let transform = graph[self.grip].local_transform_mut();
-        transform
-            .set_position(at + PUT_AWAY * away + Vector3::new(0.0, 0.0, -KICK_BACK * self.kick))
-            .set_rotation(turn * dip * kick);
+        // Its barrel onto what the middle of the view is on, turned about its sight, which stays
+        // where it is: from the muzzle to there.
+        self.onto = self
+            .onto
+            .slerp(&onto(self.aim, self.muzzle_at, sighted), ease(ONTO_EASING));
+        self.place(graph);
         // Every part of it as the droid's own: the ball at the muzzle tumbling, and the screen
         // lit.
         for &(part, copy) in &self.parts {
@@ -210,6 +236,31 @@ impl Viewmodel {
             }
         }
     }
+
+    /// Kicks it back and up, for a shot that has just left it.
+    fn kick(&mut self, graph: &mut Graph) {
+        self.kick = 1.0;
+        if self.shown(graph) {
+            self.place(graph);
+        }
+    }
+
+    /// Puts it where it is held, as far up, in, tucked and kicked as it is.
+    fn place(&self, graph: &mut Graph) {
+        let (at, turn) = held(self.aim);
+        let sight = sight(at, turn);
+        let (at, turn) = (sight + self.onto * (at - sight), self.onto * turn);
+        // Put away, or tucked down out of a wall's way: lower, nearer, and dipped. Smoothed at
+        // both ends, so it eases up and down.
+        let away = 1.0 - self.up.min(1.0 - self.tuck);
+        let away = away * away * (3.0 - 2.0 * away);
+        let dip = UnitQuaternion::from_axis_angle(&Vector3::x_axis(), PUT_AWAY_DIP * away);
+        let kick = UnitQuaternion::from_axis_angle(&Vector3::x_axis(), -KICK_UP * self.kick);
+        let transform = graph[self.grip].local_transform_mut();
+        transform
+            .set_position(at + PUT_AWAY * away + Vector3::new(0.0, 0.0, -KICK_BACK * self.kick))
+            .set_rotation(turn * dip * kick);
+    }
 }
 
 impl Player {
@@ -221,19 +272,25 @@ impl Player {
             .and_then(|avatar| Viewmodel::new(graph, avatar, self.camera.transmute()));
     }
 
-    /// Holds the pistol in first person for another `dt`, for a shot that left this frame if
-    /// one did.
-    pub(super) fn hold_pistol(&mut self, graph: &mut Graph, fired: bool, dt: f32) {
+    /// Holds the pistol in first person for another `dt`.
+    pub(super) fn hold_pistol(&mut self, graph: &mut Graph, dt: f32) {
         let Some(avatar) = self.avatar.as_ref() else {
             return;
         };
         let out = avatar.pistol_out(graph);
         let camera = &graph[self.camera];
         let (eye, ahead) = (camera.global_position(), camera.look_vector());
-        let room = self.distance_to_hit(graph, eye, ahead.normalize(), TUCK_FROM);
+        let sighted = self.distance_to_hit(graph, eye, ahead.normalize(), SIGHTED);
         let (seen, raised) = (self.in_own_eyes, self.keys.strafe);
         if let Some(viewmodel) = self.viewmodel.as_mut() {
-            viewmodel.hold(graph, seen, out, raised, fired, room, dt);
+            viewmodel.hold(graph, seen, out, raised, sighted, dt);
+        }
+    }
+
+    /// Kicks the pistol held in first person, for a shot that has just left it.
+    pub(super) fn kick_pistol(&mut self, graph: &mut Graph) {
+        if let Some(viewmodel) = self.viewmodel.as_mut() {
+            viewmodel.kick(graph);
         }
     }
 
@@ -244,8 +301,7 @@ impl Player {
         let viewmodel = self.viewmodel.as_ref().filter(|v| v.shown(graph))?;
         let camera = &graph[self.camera];
         let (eye, ahead) = (camera.global_position(), camera.look_vector().normalize());
-        const FAR: f32 = 100.0;
-        let target = eye + ahead * self.distance_to_hit(graph, eye, ahead, FAR);
+        let target = eye + ahead * self.distance_to_hit(graph, eye, ahead, SIGHTED);
         let muzzle = graph[viewmodel.muzzle].global_position();
         let way = (target - muzzle).try_normalize(1.0e-4).unwrap_or(ahead);
         Some((muzzle, way))
@@ -307,5 +363,29 @@ mod tests {
         let screen = at + turn * to_screen;
         assert!(screen.xy().norm() < 1.0e-4, "{screen:?}");
         assert!((screen.z - SIGHT_DISTANCE).abs() < 1.0e-4);
+    }
+
+    #[test]
+    fn its_barrel_comes_round_onto_what_the_middle_of_the_view_is_on() {
+        // The model's muzzle: ahead of the grip and above it.
+        let muzzle_at = quarter_turn() * Vector3::new(0.96, 0.64, 0.0).scale(SIZE);
+        for aim in [0.0, 0.5, 1.0] {
+            for sighted in [1.0, 3.0, SIGHTED] {
+                let (at, turn) = held(aim);
+                let sight = sight(at, turn);
+                let onto = onto(aim, muzzle_at, sighted);
+                let (at, turn) = (sight + onto * (at - sight), onto * turn);
+                let muzzle = at + turn * muzzle_at;
+                let to = (Vector3::z() * sighted - muzzle).normalize();
+                assert!(
+                    (turn * Vector3::z() - to).norm() < 1.0e-3,
+                    "aim {aim}, {sighted} m"
+                );
+                assert!(
+                    (self::sight(at, turn) - sight).norm() < 1.0e-5,
+                    "the sight stays put"
+                );
+            }
+        }
     }
 }
