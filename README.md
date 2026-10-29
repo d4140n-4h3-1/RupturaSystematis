@@ -119,6 +119,15 @@ the crate makes.
 
 ### The game
 
+29 October 2026:
+
+- **The droids' hand wraps the grip**: the right hand set on the pistol with its knuckles down the
+  front of the grip and the wrist cocked down off the forearm, each finger closing until it rests
+  on the pistol, the middle, ring and little fingers round the grip, the index on the trigger, the
+  thumb round the back. The trigger guard and trigger moved back to meet the grip, as on a pistol,
+  where the finger reaches them. The support hand on the right wrist found again for it, pressing
+  in no more than before. The crosshair on the sight glows green in `cyber_pistol.blend` itself.
+
 28 October 2026:
 
 - **Office towers to go up**, fifteen in Urbs' midtown and downtown, seven in Ferrum's workers'
