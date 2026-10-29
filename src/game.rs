@@ -1029,6 +1029,7 @@ impl MazeGame {
         self.rng();
         // The ferries set off afresh, from where they start, and the train from the station.
         self.level.ferries.reset(&mut ctx.scenes[self.scene].graph);
+        self.level.lifts.reset(&mut ctx.scenes[self.scene].graph);
         if let Some(train) = self.train.as_mut() {
             train.reset(&mut ctx.scenes[self.scene].graph);
         }
@@ -4680,10 +4681,13 @@ impl Plugin for MazeGame {
         self.update_heist(ctx);
         self.debug_corpses(ctx);
 
-        // The ferries go on whatever the player does, until the menu stops the world. First, so
-        // the player is carried along with where they are going this step.
+        // The ferries and the lifts go on whatever the player does, until the menu stops the world.
+        // First, so the player is carried along with where they are going this step.
         if !self.menu.is_open() && matches!(self.phase, Phase::Playing | Phase::Won | Phase::Deleted) {
             self.level.ferries.update(&mut ctx.scenes[self.scene].graph, ctx.dt);
+            let graph = &mut ctx.scenes[self.scene].graph;
+            let feet = self.player.feet(graph);
+            self.level.lifts.update(graph, ctx.dt, feet);
             self.set_up_train(ctx);
             if let Some(train) = self.train.as_mut() {
                 train.update(&mut ctx.scenes[self.scene].graph, ctx.dt);

@@ -47,6 +47,13 @@ which opens the vault, and bank_<n>_2 to _4) and at the back the vault: a strong
 a door that swings open (vault_door_<n>, with vault_<n> in the middle of the strongroom). They have
 a stream of chance of their own.
 
+Office towers to go up: some of the towers are open to walk into (see `office_tower`), a lobby
+off the street and open floors over it, their windows open to the city over sills too high to jump,
+and a lift up the back to every floor and the roof (lift_<n>, its car; lift_<n>_<k> where it stops
+at floor k; lift_<n>_gate_<k> the gate before the shaft at each floor, open while the car stands
+there). They have a stream of chance of their own, and each is built where a tower would have
+stood, which is built out of sight, so the rest of the city is as it was.
+
 Windows are lit or dark at random, warm in homes and cool in offices. Streets have dashed lines,
 crossings at every junction, lamps, trees and parked light cycles. Every building with corners has
 them lit, in its own colour (a bank's in gold). Every coloured line of light
@@ -138,6 +145,21 @@ CELL = 3.0                    # a cell, along the block
 UNDER = -120.0                # the escape tunnels' floor, hung in the void well under the city
 MANHOLES = ((3, 3), (10, 10), (11, 2))   # the blocks with a manhole down to them, on their pavement
 PRECINCT_LANDING = 2.0        # the landing before its door, out from it, up at the podium's height
+OFFICE_CHANCE = 0.5           # the chance a tower in midtown or downtown is one to go up
+OFFICE_SIZE = (14.0, 26.0)    # the least a lot needs to be across for one, and the most it is across
+OFFICE_FLOORS = (6, 12)       # how many floors it has, the lobby one of them; its roof is a stop too
+OFFICE_FLOOR = 4.0            # from one floor to the next
+OFFICE_SLAB = 0.3             # a floor's thickness
+OFFICE_SILL = 1.15            # its windows' sills, over the floor: higher than a jump
+OFFICE_HEAD = 3.2             # and their heads
+OFFICE_PIER = 0.8             # the piers between its windows
+OFFICE_BAY = 4.6              # a window and a pier, about
+OFFICE_DOOR = (2.4, 2.9)      # its doorway off the street
+SHAFT = 2.8                   # the lift's shaft, inside, either way
+SHAFT_DOOR = (1.6, 2.6)       # the doorway into it at each floor
+CAR = 2.7                     # the car, either way, and how high its walls are
+CAR_HIGH = 2.5
+ROOF_HOUSE = 3.2              # how high the shaft stands over the roof, for the lift's last stop
 
 
 def rect(x0, x1, y0, y1):
@@ -219,10 +241,22 @@ class Urbs(Nexus):
         self.bank_here = False
         self.precinct_here = False
         self.n_precincts = 0
+        # The office towers to go up have a stream of chance of their own, and so do their lifts'
+        # names, each city's of its own, as the cities are played together.
+        self.lifts = random.Random(1)
+        self.n_lifts = 0
+        self.city = "u"
+        # Where this city's own coordinates are in the world (Ferrum's and Caelum's are moved off).
+        self.offset = Vector((0, 0, 0))
+        # While a piece of its own is being made, its geometry, rather than gathered by tile.
+        self.apart = None
 
     # The geometry, gathered by tile.
 
     def mesh(self, verts, faces, col, mat, cover="none"):
+        if self.apart is not None:
+            self.apart.append((verts, faces, mat))
+            return None
         if col is self.lights:
             return super().mesh(verts, faces, col, mat, cover)
         c = sum((Vector(v) for v in verts), Vector()) / len(verts)
@@ -282,6 +316,52 @@ class Urbs(Nexus):
         super().line(p, q, mat, width, height, across, light)
         # Of a line up a tower, only the pieces near the ground. (The game's y is up.)
         self.pieces[before:] = [piece for piece in self.pieces[before:] if piece["corner"][1] < LIGHT_BELOW]
+
+    def piece(self, name, origin, build):
+        """Whatever `build` makes, as an object of its own named `name`, its origin at `origin`:
+        for the game to move, or to take out of the level's shape."""
+        self.apart = []
+        build()
+        parts, self.apart = self.apart, None
+        o = origin + self.offset
+        verts, faces, mats = [], [], []
+        for vs, fs, mat in parts:
+            base = len(verts)
+            verts.extend(tuple(Vector(v) - o) for v in vs)
+            faces.extend(tuple(base + i for i in f) for f in fs)
+            mats.extend([mat] * len(fs))
+        mesh = bpy.data.meshes.new(name)
+        mesh.from_pydata(verts, [], faces)
+        slots = {}
+        for mat in mats:
+            if id(mat) not in slots:
+                slots[id(mat)] = len(slots)
+                mesh.materials.append(mat)
+        for poly, mat in zip(mesh.polygons, mats):
+            poly.material_index = slots[id(mat)]
+        bm = bmesh.new()
+        bm.from_mesh(mesh)
+        bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+        bm.to_mesh(mesh)
+        bm.free()
+        mesh.update()
+        obj = bpy.data.objects.new(name, mesh)
+        obj.location = o
+        self.struct.objects.link(obj)
+        return obj
+
+    def unseen(self, build):
+        """Runs `build` for its draws of chance only: what it makes is thrown away."""
+        pieces, lights = len(self.pieces), self.n_lights
+        self.apart = []
+        build()
+        self.apart = None
+        del self.pieces[pieces:]
+        self.n_lights = lights
+
+    def mark(self, name, at, facing=0.0):
+        """An empty for the game, at `at` in this city's own coordinates."""
+        br_town.marker(name, at.x + self.offset.x, at.y + self.offset.y, at.z, facing)
 
     def parapet(self, a, b, z, mat, gaps=()):
         # A gap all but at an end goes to the end, leaving no stub of parapet.
@@ -846,6 +926,210 @@ def store(m, a, u, v, w, depth, h, mat, shade):
     spot = a + u * (w / 2) + v * (depth - WALL - 0.45)
     br_town.marker(f"store_{m.n_stores + 1}", spot.x, spot.y, KERB, facing(-v))
     m.n_stores += 1
+
+
+# Office towers to go up.
+
+# The segments of a seven-segment figure lit for each sign, as (from, to) corners of a figure one
+# wide and two high: a the top, then clockwise, g the middle.
+SEGMENT_ENDS = {"a": ((0, 2), (1, 2)), "b": ((1, 2), (1, 1)), "c": ((1, 1), (1, 0)), "d": ((0, 0), (1, 0)),
+                "e": ((0, 0), (0, 1)), "f": ((0, 1), (0, 2)), "g": ((0, 1), (1, 1))}
+SEGMENTS = {"0": "abcdef", "1": "bc", "2": "abged", "3": "abgcd", "4": "fgbc", "5": "afgcd", "6": "afgedc",
+            "7": "abc", "8": "abcdefg", "9": "abcdfg", "L": "fed", "R": "eg"}
+
+
+def figures(m, text, at, along, size, mat):
+    """`text` in seven-segment figures `size` m high, from `at` along `along`, upright, its face out
+    the way `along` turned a quarter clockwise looks from above - lit lines on a wall."""
+    up = Vector((0, 0, 1))
+    w = size / 2
+    for i, sign in enumerate(text):
+        corner = at + along * (i * w * 1.6)
+        for seg in SEGMENTS[sign]:
+            (x0, y0), (x1, y1) = SEGMENT_ENDS[seg]
+            p = corner + along * (x0 * w) + up * (y0 * w)
+            q = corner + along * (x1 * w) + up * (y1 * w)
+            m.line(p, q, mat, width=0.05, light=False)
+
+
+def unpainted_shade(m):
+    """A colour as the city would pick one, without taking a draw from its stream of colours."""
+    state = m.paint.getstate()
+    shade = m.shade()
+    m.paint.setstate(state)
+    return shade
+
+
+def office_tower(m, rng, poly, street, mat, shade):
+    """An office tower to go up: a lobby off the street, through a doorway in the middle of its
+    face on `street`, and open floors over it, their windows open to the city over sills too high to
+    jump; and up the back, a lift to every floor and the roof - its car (lift_<n>, its origin the
+    middle of its deck as it stands at the lobby), where it stops (lift_<n>_<k>, at floor k), and a
+    gate before its shaft at each floor (lift_<n>_gate_<k>, standing open while the car is there),
+    which the game moves and opens. Desks on the floors, a counter in the lobby, the floor's number
+    by the lift, and lights along every ceiling."""
+    x0, x1 = min(p.x for p in poly), max(p.x for p in poly)
+    y0, y1 = min(p.y for p in poly), max(p.y for p in poly)
+    side = street[0]
+    # Local u along the street face, v in from it, as the shops have them.
+    if side == 0:
+        start, u, v, length, depth = Vector((x0, y0, 0)), Vector((1, 0, 0)), Vector((0, 1, 0)), x1 - x0, y1 - y0
+    elif side == 2:
+        start, u, v, length, depth = Vector((x1, y1, 0)), Vector((-1, 0, 0)), Vector((0, -1, 0)), x1 - x0, y1 - y0
+    elif side == 1:
+        start, u, v, length, depth = Vector((x1, y0, 0)), Vector((0, 1, 0)), Vector((-1, 0, 0)), y1 - y0, x1 - x0
+    else:
+        start, u, v, length, depth = Vector((x0, y1, 0)), Vector((0, -1, 0)), Vector((1, 0, 0)), y1 - y0, x1 - x0
+    w, d = min(length, OFFICE_SIZE[1]), min(depth, OFFICE_SIZE[1])
+    a = start + u * ((length - w) / 2)
+    up = Vector((0, 0, 1))
+    t = WALL
+    floors = rng.randint(*OFFICE_FLOORS)
+    z = lambda k: KERB + k * OFFICE_FLOOR       # floor k's top; the roof is floor `floors`
+    roof = z(floors)
+    lines = m.lines[shade]
+    m.n_lifts += 1
+    name = f"lift_{m.city}{m.n_lifts}"
+    # The shaft: up the back, in the middle; its inside from c - SHAFT/2 to c + SHAFT/2 along u,
+    # and from s0 to the back wall along v; its own walls round it, the front one with a doorway
+    # at every floor.
+    c = w / 2
+    h = SHAFT / 2
+    s1 = d - t
+    s0 = s1 - SHAFT
+    # The outside walls: a sill and a head along each face at every floor, piers between the
+    # windows, and the doorway off the street in the middle of the front.
+    faces = (  # (along from, along to, as a quad: u0, u1, v0, v1 for a span s0..s1)
+        ("front", w, lambda p, q: quad(a, u, v, p, q, 0.0, t)),
+        ("back", w, lambda p, q: quad(a, u, v, p, q, d - t, d)),
+        ("left", d, lambda p, q: quad(a, u, v, 0.0, t, p, q)),
+        ("right", d, lambda p, q: quad(a, u, v, w - t, w, p, q)),
+    )
+    for face, span, at in faces:
+        bays = max(1, round(span / OFFICE_BAY))
+        if face == "front" and bays % 2 == 0:
+            bays += 1            # a window in the middle, for the door
+        bay = span / bays
+        # The piers the whole way up, and between one floor's windows and the next's, one band of
+        # wall: from a window's head to the sill over it.
+        for i in range(bays + 1):
+            p0, p1 = max(0.0, i * bay - OFFICE_PIER / 2), min(span, i * bay + OFFICE_PIER / 2)
+            m.prism(at(p0, p1), 0.0, roof, mat)
+        if face == "front":
+            g0, g1 = (span - OFFICE_DOOR[0]) / 2, (span + OFFICE_DOOR[0]) / 2
+            m.prism(at(0.0, g0), 0.0, z(0) + OFFICE_SILL, mat)
+            m.prism(at(g1, span), 0.0, z(0) + OFFICE_SILL, mat)
+        else:
+            m.prism(at(0.0, span), 0.0, z(0) + OFFICE_SILL, mat)
+        for k in range(floors):
+            m.prism(at(0.0, span), z(k) + OFFICE_HEAD, min(z(k + 1) + OFFICE_SILL, roof), mat)
+        if face == "back":
+            # Behind the shaft, solid.
+            m.prism(at(c - h - t, c + h + t), 0.0, roof, mat)
+    # The floors, and the roof: all but the shaft.
+    for k in range(1, floors + 1):
+        for q in (quad(a, u, v, 0.0, w, 0.0, s0), quad(a, u, v, 0.0, c - h, s0, d), quad(a, u, v, c + h, w, s0, d),
+                  quad(a, u, v, c - h, c + h, s1, d)):
+            m.prism(q, z(k) - OFFICE_SLAB, z(k), mat)
+    # A parapet round the roof, chest high.
+    for q in (quad(a, u, v, 0.0, w, 0.0, 0.25), quad(a, u, v, 0.0, w, d - 0.25, d),
+              quad(a, u, v, 0.0, 0.25, 0.25, d - 0.25), quad(a, u, v, w - 0.25, w, 0.25, d - 0.25)):
+        m.prism(q, roof, roof + 1.2, mat)
+    outline = quad(a, u, v, 0.0, w, 0.0, d)
+    m.ring(outline, roof + 1.2, lines)
+    m.fins(outline, outline, 0.0, roof + 1.2, lines)
+    for k in range(1, floors + 1):
+        m.ring(outline, z(k) - OFFICE_SLAB / 2, lines, width=0.08)
+    # The shaft's walls, up to its house on the roof, and its roof.
+    top = roof + ROOF_HOUSE
+    for q in (quad(a, u, v, c - h - t, c - h, s0 - t, d), quad(a, u, v, c + h, c + h + t, s0 - t, d)):
+        m.prism(q, 0.0, top, m.facades["slate"])
+    m.prism(quad(a, u, v, c - h, c + h, d - t, d), roof, top, mat)
+    m.prism(quad(a, u, v, c - h - t, c + h + t, s0 - t, d), top, top + 0.3, mat)
+    m.ring(quad(a, u, v, c - h - t, c + h + t, s0 - t, d), top + 0.3, lines)
+    dw, dh = SHAFT_DOOR
+    for k in range(floors + 1):
+        low = 0.0 if k == 0 else z(k)
+        high = z(k + 1) - OFFICE_SLAB if k < floors else top
+        for q in (quad(a, u, v, c - h - t, c - dw / 2, s0 - t, s0), quad(a, u, v, c + dw / 2, c + h + t, s0 - t, s0)):
+            m.prism(q, low, z(k) + dh, m.facades["slate"])
+        m.prism(quad(a, u, v, c - dw / 2, c + dw / 2, s0 - t, s0), z(k) + dh, max(high, z(k) + dh + 0.3),
+                m.facades["slate"])
+        # Its doorway lit round, and the floor's number beside it.
+        front = s0 - t - 0.02
+        for e in (c - dw / 2 - 0.05, c + dw / 2 + 0.05):
+            m.line(a + u * e + v * front + up * z(k), a + u * e + v * front + up * (z(k) + dh + 0.05), lines,
+                   width=0.06, light=False)
+        m.line(a + u * (c - dw / 2 - 0.05) + v * front + up * (z(k) + dh + 0.05),
+               a + u * (c + dw / 2 + 0.05) + v * front + up * (z(k) + dh + 0.05), lines, width=0.06, light=False)
+        sign = "L" if k == 0 else "R" if k == floors else str(k)
+        figures(m, sign, a + u * (c - h + 0.05) + v * front + up * (z(k) + 1.6), u, 0.36, m.white)
+    # Inside each floor: lights along the ceiling, a line round the floor, and desks.
+    for k in range(floors):
+        ceiling = z(k + 1) - OFFICE_SLAB - 0.04
+        for share in (0.25, 0.5, 0.75):
+            m.line(a + u * (w * share) + v * 1.0 + up * ceiling, a + u * (w * share) + v * (s0 - t - 1.0) + up * ceiling,
+                   m.white, width=0.25, height=0.04, across=u)
+        m.ring(quad(a, u, v, t + 0.03, w - t - 0.03, t + 0.03, d - t - 0.03), z(k) + 0.04, lines, out=0.0,
+               width=0.05, light=False)
+        if k == 0:
+            # The lobby's counter, to one side.
+            m.prism(quad(a, u, v, 1.6, 4.6, 4.0, 4.8), z(0), z(0) + 1.1, m.rail, col=m.cover)
+            m.line(a + u * 1.6 + v * 3.98 + up * (z(0) + 1.1), a + u * 4.6 + v * 3.98 + up * (z(0) + 1.1), lines,
+                   width=0.05)
+            continue
+        for row in range(int((s0 - t - 4.0) / 3.6)):
+            dv = 2.5 + row * 3.6
+            for col in range(int((w - 2 * t - 3.0) / 2.4)):
+                if rng.random() < 0.6:
+                    continue
+                du = 1.8 + col * 2.4
+                m.prism(quad(a, u, v, du, du + 1.6, dv, dv + 0.8), z(k), z(k) + 0.75, m.rail, col=m.cover)
+                m.line(a + u * du + v * (dv - 0.01) + up * (z(k) + 0.75), a + u * (du + 1.6) + v * (dv - 0.01)
+                       + up * (z(k) + 0.75), m.white, width=0.03, light=False)
+    # The doorway off the street, lit round, and its name over it.
+    g0, g1 = (w - OFFICE_DOOR[0]) / 2, (w + OFFICE_DOOR[0]) / 2
+    for e in (g0, g1):
+        m.line(a + u * e - v * 0.06 + up * KERB, a + u * e - v * 0.06 + up * OFFICE_DOOR[1], lines, width=0.08)
+    m.line(a + u * g0 - v * 0.06 + up * OFFICE_DOOR[1], a + u * g1 - v * 0.06 + up * OFFICE_DOOR[1], lines, width=0.08)
+    m.line(a + u * (g0 - 1.0) - v * 0.08 + up * (OFFICE_HEAD + 0.3), a + u * (g1 + 1.0) - v * 0.08 + up * (OFFICE_HEAD + 0.3),
+           lines, width=0.5, height=0.08, across=Z)
+
+    # The lift: its car, at the lobby, a piece of its own; where it stops; and its gates.
+    deck = a + u * c + v * (s0 + h)
+    deck.z = z(0)
+    glass = m.white
+
+    def car():
+        lo, hi = -CAR / 2, CAR / 2
+        m.prism(quad(deck, u, v, lo, hi, lo, hi), z(0) - 0.2, z(0), m.rail)
+        for q in (quad(deck, u, v, lo, hi, hi - 0.08, hi), quad(deck, u, v, lo, lo + 0.08, lo, hi - 0.08),
+                  quad(deck, u, v, hi - 0.08, hi, lo, hi - 0.08)):
+            m.prism(q, z(0), z(0) + CAR_HIGH, m.facades["slate"])
+        m.prism(quad(deck, u, v, lo, hi, lo, hi), z(0) + CAR_HIGH, z(0) + CAR_HIGH + 0.1, m.rail)
+        # Its light, its rail and the edge of its deck lit.
+        m.prism(quad(deck, u, v, lo + 0.4, hi - 0.4, lo + 0.4, hi - 0.4), z(0) + CAR_HIGH - 0.03, z(0) + CAR_HIGH, glass)
+        for q in (quad(deck, u, v, lo + 0.08, hi - 0.08, hi - 0.12, hi - 0.08), quad(deck, u, v, lo + 0.08, lo + 0.12, lo, hi - 0.12),
+                  quad(deck, u, v, hi - 0.12, hi - 0.08, lo, hi - 0.12)):
+            m.prism(q, z(0) + 0.95, z(0) + 1.0, lines)
+        m.prism(quad(deck, u, v, lo, hi, lo, lo + 0.04), z(0) - 0.02, z(0) + 0.01, lines)
+
+    m.piece(name, deck, car)
+    for k in range(1, floors + 1):
+        m.mark(f"{name}_{k}", deck + up * (z(k) - z(0)))
+    for k in range(floors + 1):
+        middle_ = a + u * c + v * (s0 - t / 2) + up * z(k)
+
+        def gate(k=k, middle_=middle_):
+            mid = s0 - t / 2
+            for i in range(9):
+                e = -dw / 2 + 0.05 + i * (dw - 0.1) / 8
+                m.prism(quad(a, u, v, c + e - 0.02, c + e + 0.02, mid - 0.02, mid + 0.02), z(k), z(k) + dh, lines)
+            for hgt in (0.1, 1.2, dh - 0.06):
+                m.prism(quad(a, u, v, c - dw / 2, c + dw / 2, mid - 0.025, mid + 0.025), z(k) + hgt - 0.03, z(k) + hgt + 0.03,
+                        lines)
+
+        m.piece(f"{name}_gate_{k}", middle_, gate)
 
 
 def bank(m, poly, street_faces):
@@ -1542,6 +1826,15 @@ def build_lot(m, rng, district, lot, block):
         bank(m, poly, street)
         m.n_buildings += 1
         return
+    towers = (setback_tower, round_tower, twist_tower, tapered_tower, wedge_tower, podium_tower, stilts)
+    if (build in towers and street and small >= OFFICE_SIZE[0] and district in ("downtown", "midtown")
+            and m.lifts.random() < OFFICE_CHANCE):
+        # A tower to go up in its place: the one it stands for built out of sight, for its draws of
+        # chance, so that the rest of the city is as it was.
+        m.unseen(lambda: build(m, rng, poly, district))
+        office_tower(m, m.lifts, poly, street, facade(m, m.lifts, district), unpainted_shade(m))
+        m.n_buildings += 1
+        return
     if build in (apartments, courtyard, shops, townhouses, terraces):
         build(m, rng, poly, district, street)
     else:
@@ -2133,7 +2426,7 @@ def main():
         os.path.join(os.path.dirname(os.path.abspath(__file__)), "story_urbs.blend")
     os.makedirs(os.path.dirname(out), exist_ok=True)
     bpy.ops.wm.save_as_mainfile(filepath=out)
-    print(f"[map] seed={seed} {HALF * 2:.0f} m across, buildings={m.n_buildings} lights={m.n_lights} "
+    print(f"[map] seed={seed} {HALF * 2:.0f} m across, buildings={m.n_buildings} lifts={m.n_lifts} lights={m.n_lights} "
           f"cover={m.n_cover} stores={m.n_stores} banks={m.n_banks} precincts={m.n_precincts} pieces of light={len(m.pieces)} -> {out}")
     if glb:
         glow_path = os.path.splitext(os.path.abspath(glb))[0] + ".glow.json"

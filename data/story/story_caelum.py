@@ -73,6 +73,7 @@ class Caelum(urbs.Urbs):
     def __init__(self, paint):
         super().__init__(paint)
         f = self.facades
+        self.city, self.offset = "c", Vector((0, OY, 0))
         f["hull"] = material("HullWhite", (0.62, 0.64, 0.68), roughness=0.35, metallic=0.2)
         f["ceramic"] = material("HeatTile", (0.025, 0.027, 0.03), roughness=0.8, metallic=0.1)
         f["solar"] = material("SolarPanel", (0.02, 0.04, 0.12), roughness=0.15, metallic=0.8)
@@ -584,6 +585,9 @@ OPTIONS = {
 }
 
 
+OFFICE_CHANCE = 0.25     # the chance a lot for one of these is an office tower to go up instead
+MOST_OFFICES = 10       # and the most of them
+
 def build_lot(m, rng, district, lot, block):
     x0, x1, y0, y1 = lot
     street = urbs.faces_on_street(lot, block)
@@ -594,6 +598,14 @@ def build_lot(m, rng, district, lot, block):
     build = rng.choice(OPTIONS[district])
     if small < 14 and build in (hangar, dishes, research_dome, cryo):
         build = lab if district in ("campus", "array") else operations
+    if (build in (lab, operations) and street and small >= urbs.OFFICE_SIZE[0]
+            and m.n_lifts < MOST_OFFICES and m.lifts.random() < OFFICE_CHANCE):
+        # An office tower to go up in its place (see urbs.office_tower): the one it stands for built
+        # out of sight, for its draws of chance, so that the rest of the city is as it was.
+        m.unseen(lambda: build(m, rng, poly, district, street))
+        urbs.office_tower(m, m.lifts, poly, street, m.facades["hull"], urbs.unpainted_shade(m))
+        m.n_buildings += 1
+        return
     build(m, rng, poly, district, street)
     m.n_buildings += 1
 
@@ -729,7 +741,7 @@ def main():
     out = os.path.abspath(os.path.expanduser(out)) if out else os.path.join(HERE, "story_caelum.blend")
     os.makedirs(os.path.dirname(out), exist_ok=True)
     bpy.ops.wm.save_as_mainfile(filepath=out)
-    print(f"[map] seed={seed} Caelum, {HALF * 2:.0f} m across at y={OY:.0f}, buildings={m.n_buildings} "
+    print(f"[map] seed={seed} Caelum, {HALF * 2:.0f} m across at y={OY:.0f}, buildings={m.n_buildings} lifts={m.n_lifts} "
           f"lights={m.n_lights} pieces of light={len(m.pieces)} -> {out}")
     if glb:
         base = os.path.splitext(os.path.abspath(glb))[0]

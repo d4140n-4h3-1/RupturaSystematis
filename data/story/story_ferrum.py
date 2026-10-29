@@ -74,6 +74,7 @@ class Ferrum(urbs.Urbs):
     def __init__(self, paint):
         super().__init__(paint)
         f = self.facades
+        self.city, self.offset = "f", Vector((OX, 0, 0))
         f["steel"] = material("Steel", (0.08, 0.085, 0.09), roughness=0.45, metallic=0.8)
         f["soot"] = material("Soot", (0.035, 0.033, 0.032), roughness=0.9, metallic=0.1)
         f["oxide"] = material("Oxide", (0.26, 0.07, 0.035), roughness=0.7, metallic=0.4)
@@ -676,6 +677,9 @@ OPTIONS = {
 }
 
 
+OFFICE_CHANCE = 0.25     # the chance a lot for one of these is an office tower to go up instead
+MOST_OFFICES = 8       # and the most of them
+
 def build_lot(m, rng, district, lot, block):
     x0, x1, y0, y1 = lot
     street = faces_on_street(lot, block)
@@ -686,6 +690,14 @@ def build_lot(m, rng, district, lot, block):
     build = rng.choice(OPTIONS[district])
     if small < 14 and build in (gasholder, tank_farm, refinery, steel_hall):
         build = works
+    if (build in (tenement,) and street and small >= urbs.OFFICE_SIZE[0]
+            and m.n_lifts < MOST_OFFICES and m.lifts.random() < OFFICE_CHANCE):
+        # An office tower to go up in its place (see urbs.office_tower): the one it stands for built
+        # out of sight, for its draws of chance, so that the rest of the city is as it was.
+        m.unseen(lambda: build(m, rng, poly, district, street))
+        urbs.office_tower(m, m.lifts, poly, street, m.facades["brick"], urbs.unpainted_shade(m))
+        m.n_buildings += 1
+        return
     build(m, rng, poly, district, street)
     m.n_buildings += 1
 
@@ -864,7 +876,7 @@ def main():
     out = os.path.abspath(os.path.expanduser(out)) if out else os.path.join(HERE, "story_ferrum.blend")
     os.makedirs(os.path.dirname(out), exist_ok=True)
     bpy.ops.wm.save_as_mainfile(filepath=out)
-    print(f"[map] seed={seed} Ferrum, {HALF * 2:.0f} m across at x={OX:.0f}, buildings={m.n_buildings} "
+    print(f"[map] seed={seed} Ferrum, {HALF * 2:.0f} m across at x={OX:.0f}, buildings={m.n_buildings} lifts={m.n_lifts} "
           f"lights={m.n_lights} pieces of light={len(m.pieces)} -> {out}")
     if glb:
         base = os.path.splitext(os.path.abspath(glb))[0]

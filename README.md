@@ -121,6 +121,14 @@ the crate makes.
 
 28 October 2026:
 
+- **Office towers to go up**, fifteen in Urbs' midtown and downtown, seven in Ferrum's workers'
+  quarter, ten on Caelum's campus and port: a lobby off the street, open floors over it with desks,
+  lit along their ceilings, their windows open to the city over sills too high to jump, and a lift
+  up the back to every floor and the roof. The car stops at each floor in turn, up and back down,
+  a gate before the shaft standing open while it is there and shut while it is not, and waits
+  while someone stands in the doorway. The droids keep off the bottom of the shafts. Built by
+  `office_tower` in `data/story/story_urbs.py`, in place of a tower built out of sight so that
+  the rest of each city is as it was; driven by `src/lift.rs`.
 - **The cyber pistol is a pistol**, built by `~/Documents/blender/weapons/build_cyber_pistol.py`
   in place of the claw and crystal: a raked grip with charge cells down it, a frame with a rail
   and a trigger guard, a slide with serrations and lines of light, the energy core tumbling in a

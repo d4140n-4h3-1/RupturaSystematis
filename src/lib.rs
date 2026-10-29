@@ -41,6 +41,7 @@ mod heist;
 mod shield;
 mod firewall;
 mod ferry;
+mod lift;
 mod glow;
 mod fixtures;
 mod formants;

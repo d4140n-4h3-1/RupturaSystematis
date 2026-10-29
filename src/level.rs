@@ -9,6 +9,7 @@ use crate::{
     culling::Culling,
     distant::{self, Distant},
     ferry::Ferries,
+    lift::Lifts,
     roads::{RoadPlan, Roads},
     escape::Tunnels,
     precinct::Precincts,
@@ -97,6 +98,8 @@ pub struct Level {
     distant: Distant,
     /// What of the level moves: see [`Ferries`].
     pub ferries: Ferries,
+    /// The lifts up its towers: see [`Lifts`].
+    pub lifts: Lifts,
     /// The banks' vaults' doors, which open: see [`Vaults`].
     pub vaults: Vaults,
     /// The precincts, where security takes those it arrests: see [`Precincts`].
@@ -208,6 +211,11 @@ impl Level {
         } else {
             Default::default()
         };
+        let (lifts, lift_bodies) = if fixed {
+            Lifts::claim(&mut scene.graph, root)
+        } else {
+            Default::default()
+        };
         let (vaults, vault_bodies) = if fixed {
             Vaults::claim(&mut scene.graph, root, &markers)
         } else {
@@ -244,6 +252,7 @@ impl Level {
 
         let mut nodes = vec![root, body.to_base()];
         nodes.extend(ferry_bodies);
+        nodes.extend(lift_bodies);
         nodes.extend(vault_bodies);
         nodes.extend(precinct_bodies);
         nodes.extend(far_root);
@@ -264,6 +273,7 @@ impl Level {
             culling: None,
             distant,
             ferries,
+            lifts,
             vaults,
             precincts,
             tunnels,
@@ -279,6 +289,7 @@ impl Level {
         self.grid = survey::survey(graph, self.collider, ignore, open_sky);
         if let Some((grid, origin)) = self.grid.as_mut() {
             self.vaults.keep_out(grid, *origin);
+            self.lifts.keep_out(grid, *origin);
             self.precincts.keep_out(grid, *origin);
         }
         self.roads = roads.zip(self.grid.as_ref()).map(|(plan, (grid, origin))| plan.on(grid, *origin));
@@ -321,6 +332,7 @@ impl Level {
     /// out instead (see [`LAMPS_FADE`]); and a city far off is drawn simplified (see [`Distant`]).
     pub fn cull(&mut self, graph: &mut Graph, player: Vector3<f32>) {
         self.distant.update(graph, player);
+        self.lifts.show_near(graph, player);
         if let Some(culling) = self.culling.as_mut() {
             culling.update(graph, player);
         } else if self.lamps_on {
