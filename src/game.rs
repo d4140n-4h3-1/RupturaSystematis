@@ -4246,9 +4246,12 @@ impl MazeGame {
         self.drone_targets = targets.iter().map(|&t| (t != NOBODY).then_some(t)).collect();
         let live = self.phase == Phase::Playing && !self.menu.is_open();
         let mut says = std::mem::take(&mut self.drone_says);
+        // Ways looked for only where there is one to be had (see [`Inhabitants::can_reach`]).
+        let inhabitants = &self.inhabitants;
+        let reachable = |to: Vector3<f32>| inhabitants.can_reach((grid, *origin), to);
         for (n, drone) in self.drones.iter_mut().enumerate() {
             let target = targets[n];
-            let doing = drone.update(graph, (grid, *origin), &target, rng, ctx.dt, live);
+            let doing = drone.update(graph, (grid, *origin), &target, &reachable, rng, ctx.dt, live);
             says.extend(doing.says.map(|said| (n, said)));
             // At its target's middle, wherever they are as it fires.
             if let (Some((from, colour)), Some(shots)) = (doing.fired, self.shots.as_mut()) {

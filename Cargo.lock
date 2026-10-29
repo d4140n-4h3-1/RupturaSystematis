@@ -2100,7 +2100,7 @@ dependencies = [
 [[package]]
 name = "hydroxus-ai"
 version = "0.1.0"
-source = "git+https://github.com/d4140n-4h3-1/hydroxus-ai.git?branch=main#6a86df1d48e31065afe50a22346fd0cc5e9fcbcd"
+source = "git+https://github.com/d4140n-4h3-1/hydroxus-ai.git?branch=main#f1957b421682d06a681c370284be17e84b43163c"
 dependencies = [
  "nalgebra 0.35.0",
 ]

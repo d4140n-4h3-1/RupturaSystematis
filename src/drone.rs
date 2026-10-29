@@ -165,6 +165,10 @@ const FIRE_RANGE: f32 = 20.0;
 const FIRE_EVERY: f32 = 1.5;
 const FIRST_SHOT: f32 = 0.8;
 const REPLAN: f32 = 0.5;
+/// How far it looks for a way anywhere, in steps across the grid's half-meter cells: 200 m. With
+/// no way there - the player up on a roof it has no way under, say - a search with no bound goes
+/// over every cell it can reach in the whole city before it gives up, a tenth of a second and more.
+const ROUTE_REACH: f32 = 400.0;
 /// How many of the pistol's bolts bring it down.
 pub const HITS: u32 = 3;
 /// Its body: a ball this big across its middle, in meters.
@@ -336,6 +340,9 @@ pub struct Drone {
     /// On Alert, how long until it fires again, and until it works out its way to them again.
     fire_in: f32,
     replan: f32,
+    /// Whether there was no way to the player the last time it worked one out: it waits for
+    /// `replan` to try again, rather than trying every frame.
+    no_way: bool,
     /// How many of the pistol's bolts have hit it.
     hits: u32,
     /// In capture the flag, its side, and where it patrols round: its side's flag. On a side,
@@ -426,6 +433,7 @@ impl Drone {
             searched: 0,
             fire_in: 0.0,
             replan: 0.0,
+            no_way: false,
             hits: 0,
             side: None,
             post: None,
@@ -509,12 +517,7 @@ impl Drone {
             return false;
         };
         let routes = grid.routes_from(start, f32::INFINITY);
-        let reached: Vec<(usize, f32)> = routes
-            .costs
-            .iter()
-            .enumerate()
-            .filter_map(|(i, cost)| cost.map(|cost| (i, cost)))
-            .collect();
+        let reached: Vec<(usize, f32)> = routes.reached().collect();
         let away: Vec<usize> = reached
             .iter()
             .filter(|&&(_, cost)| cost >= AWAY_FROM_PLAYER && cost <= within.max(AWAY_FROM_PLAYER))
@@ -781,11 +784,13 @@ impl Drone {
     /// Goes about its business for another `dt` over the floor of `grid` whose corner is at
     /// `origin`, with the `player` where they are - if `live`, as while a round is being played;
     /// otherwise it only glows, hovering where it is. What it did.
+    #[allow(clippy::too_many_arguments)]
     pub fn update(
         &mut self,
         graph: &mut Graph,
         (grid, origin): (&WalkGrid, Vector3<f32>),
         player: &Target,
+        reachable: &dyn Fn(Vector3<f32>) -> bool,
         rng: &mut Rng,
         dt: f32,
         live: bool,
@@ -793,7 +798,7 @@ impl Drone {
         let mut doing = Doing::default();
         if live && self.placed {
             self.since += dt;
-            doing.says = self.think(graph, (grid, origin), player, rng, dt);
+            doing.says = self.think(graph, (grid, origin), player, reachable, rng, dt);
             self.fly(graph, (grid, origin), player, dt);
             self.pose(graph);
             // Its body goes where the animations take it: bobbing as it hovers, and down to the
@@ -862,9 +867,16 @@ impl Drone {
         graph: &Graph,
         (grid, origin): (&WalkGrid, Vector3<f32>),
         player: &Target,
+        reachable: &dyn Fn(Vector3<f32>) -> bool,
         rng: &mut Rng,
         dt: f32,
     ) -> Option<&'static str> {
+        // A way to `to`, if there is any: none looked for where there is none to be had (see
+        // [`ROUTE_REACH`]).
+        let route_to = |to: Vector3<f32>| match reachable(to) {
+            true => inhabitants::route_to((grid, origin), self.at - Vector3::new(0.0, HOVER, 0.0), to, ROUTE_REACH),
+            false => Vec::new(),
+        };
         // On a side, it watches all the while.
         let hostile = matches!(self.state, State::Alert | State::Search { .. }) || self.side.is_some();
         let sees = hostile && self.sees(graph, player);
@@ -885,7 +897,7 @@ impl Drone {
                         self.route = match self.post {
                             // On a side, round its flag.
                             Some(post) => inhabitants::spot_near((grid, origin), post, POST_REACH, rng)
-                                .map(|to| inhabitants::route_to((grid, origin), under, to, f32::INFINITY))
+                                .map(route_to)
                                 .unwrap_or_default(),
                             None => inhabitants::plan((grid, origin), under, TRIP, rng),
                         };
@@ -915,9 +927,10 @@ impl Drone {
                 self.replan -= dt;
                 if to.norm() <= ENGAGE {
                     self.route.clear();
-                } else if self.replan <= 0.0 || self.route.is_empty() {
+                } else if self.replan <= 0.0 || self.route.is_empty() && !self.no_way {
                     self.replan = REPLAN;
-                    self.route = inhabitants::route_to((grid, origin), under, player.feet, f32::INFINITY);
+                    self.route = route_to(player.feet);
+                    self.no_way = self.route.is_empty();
                 }
                 // Out of range, it holds its fire till it is nearer.
                 if to.norm() > FIRE_RANGE {
@@ -950,7 +963,7 @@ impl Drone {
                     if self.searched == 0 && flat(self.lost_at - under).norm() > REACHED {
                         // First where the player was.
                         self.searched = 1;
-                        self.route = inhabitants::route_to((grid, origin), under, self.lost_at, f32::INFINITY);
+                        self.route = route_to(self.lost_at);
                         says = Some("searching");
                     } else {
                         // Got there, or has nowhere to go: it scans.

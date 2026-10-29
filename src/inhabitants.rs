@@ -739,6 +739,43 @@ pub struct Inhabitants {
     body_look: f32,
     /// The trains, for those that take them.
     trains: Vec<Doors>,
+    /// In a city, which of the grid's cells can be walked to from where the player started, a
+    /// bit each by index (see [`Reach`]): where those going about their business may set off for.
+    /// An office tower's floors, up its lift, are no part of it - nor anything else walled off -
+    /// and a droid that picked a spot there would look for the way over every cell for a long
+    /// way round before it gave up, a tenth of a second or more. Empty, anywhere.
+    reachable: Reach,
+}
+
+/// Which of a grid's cells can be got to, a bit each by index - or, empty, all of them.
+#[derive(Debug, Default, Clone, PartialEq)]
+struct Reach(Vec<u64>);
+
+impl Reach {
+    fn of(cells: impl Iterator<Item = bool>) -> Self {
+        let mut bits = Vec::new();
+        for (i, can) in cells.enumerate() {
+            if i % 64 == 0 {
+                bits.push(0);
+            }
+            if can {
+                *bits.last_mut().unwrap() |= 1 << (i % 64);
+            }
+        }
+        Self(bits)
+    }
+
+    /// Whether the cell `index` can be got to.
+    fn can(&self, index: usize) -> bool {
+        self.0.is_empty() || self.0.get(index / 64).is_some_and(|bits| bits & (1 << (index % 64)) != 0)
+    }
+
+    /// Whether there is any way to `to` over `grid`, whose corner is at `origin`, at all: if not,
+    /// a search for one would go over every cell it could within its bound before it gave up -
+    /// for a droid's, the tenth part of a second and more.
+    fn to(&self, (grid, origin): (&WalkGrid, Vector3<f32>), to: Vector3<f32>) -> bool {
+        self.0.is_empty() || grid.walkable_cell(origin, to).is_some_and(|(x, z)| self.can(z * grid.width + x))
+    }
 }
 
 /// A foot chase in a city: one of its security after one of a gang, which runs for it - and if
@@ -1150,6 +1187,7 @@ fn wander(
     trip: (f32, f32),
     roads: Option<&Roads>,
     turfs: &[((usize, usize), f32)],
+    reachable: &Reach,
     rng: &mut Rng,
 ) -> Vec<Vector3<f32>> {
     let Some(roads) = roads else {
@@ -1167,7 +1205,7 @@ fn wander(
         (grid, origin),
         feet,
         trip,
-        |x, z| roads.is_road(x, z) || on_turf(x, z),
+        |x, z| roads.is_road(x, z) || on_turf(x, z) || !reachable.can(z * grid.width + x),
         |x, z| {
             let road = if on_road { 0.0 } else { roads.extra(x, z) };
             road + if on_turf(x, z) { TURF_COST } else { 0.0 }
@@ -1317,6 +1355,7 @@ impl Inhabitants {
             }
         }
         self.populated = false;
+        self.reachable = Reach::default();
         self.chase = None;
         self.chase_in = 0.0;
         self.shootout = None;
@@ -1364,22 +1403,20 @@ impl Inhabitants {
             return;
         };
         let routes = grid.routes_from(start, f32::INFINITY);
+        self.reachable = Reach::of((0..grid.width * grid.rows()).map(|i| routes.cost(i).is_some()));
         // A crowd turns up again anywhere it could have walked to, off the roads; and is about
         // the player from the start.
         self.chase_in = CHASE_FIRST;
         self.shootout_in = SHOOTOUT_FIRST;
         self.crowd = crowd.then(|| Crowd {
-            pavement: routes.costs.iter().enumerate().map(|(i, cost)| cost.is_some() && !on_road(i)).collect(),
+            pavement: (0..grid.width * grid.rows()).map(|i| routes.cost(i).is_some() && !on_road(i)).collect(),
             next: CROWD_EVERY,
         });
         let about = |cell: (usize, usize)| !crowd || flat(grid.on_floor(origin, cell) - player).norm() <= CROWD_BACK.1;
         // Where they can be put down, away from the player and near them, in one look over a
         // grid that can be a whole city's.
         let (mut places, mut near) = (Vec::new(), Vec::new());
-        for (i, cost) in routes.costs.iter().enumerate() {
-            let Some(cost) = *cost else {
-                continue;
-            };
+        for (i, cost) in routes.reached() {
             let far = cost >= AWAY_FROM_PLAYER;
             let cell = (i % grid.width, i / grid.width);
             if (far || (NEAR_PLAYER.0..=NEAR_PLAYER.1).contains(&cost)) && !on_road(i) && about(cell) {
@@ -2357,6 +2394,12 @@ impl Inhabitants {
         self.ring = ring;
     }
 
+    /// Whether there is any way at all to `to` over `grid`, whose corner is at `origin`, from where
+    /// the player started - for the drones, to look for a way only where there is one.
+    pub fn can_reach(&self, (grid, origin): (&WalkGrid, Vector3<f32>), to: Vector3<f32>) -> bool {
+        self.reachable.to((grid, origin), to)
+    }
+
     /// The trains, as of the end of this step, for those that take them.
     pub fn set_trains(&mut self, trains: Vec<Doors>) {
         self.trains = trains;
@@ -2439,7 +2482,16 @@ impl Inhabitants {
             survey::cell_at(grid, origin, spot)
                 .is_some_and(|(x, z)| grid.is_walkable(x, z) && (grid.floor(x, z) - spot.y).abs() <= ON_FLOOR)
         };
-        let go_to = |feet: Vector3<f32>, to: Vector3<f32>| trip::go_to((grid, origin), feet, to, CHASE_REACH, crossings);
+        // A way to `to`, if there is one at all: none looked for where there is none to be had.
+        let reachable = &self.reachable;
+        let go_to = |feet: Vector3<f32>, to: Vector3<f32>| match reachable.to((grid, origin), to) {
+            true => trip::go_to((grid, origin), feet, to, CHASE_REACH, crossings),
+            false => (Vec::new(), None),
+        };
+        let route_to = |feet: Vector3<f32>, to: Vector3<f32>| match reachable.to((grid, origin), to) {
+            true => route_to((grid, origin), feet, to, CHASE_REACH),
+            false => Vec::new(),
+        };
         // Where everyone is, and which way those walking are going; the player last.
         let everyone: Vec<(Vector3<f32>, Option<Vector3<f32>>)> = self
             .droids
@@ -2754,7 +2806,7 @@ impl Inhabitants {
                     Doing::Across => {
                         let to = trip.to;
                         droid.trip = None;
-                        droid.route = route_to((grid, origin), droid.feet, to, CHASE_REACH);
+                        droid.route = route_to(droid.feet, to);
                         on_trip = !droid.route.is_empty();
                     }
                     Doing::GiveUp => {
@@ -2827,9 +2879,11 @@ impl Inhabitants {
                     // After the other, the way to it worked out again every so often.
                     Pursuit::Chasing(other) => {
                         if let Some((feet, _)) = placed.get(other).copied().flatten() {
-                            if droid.replan <= 0.0 || droid.route.is_empty() {
+                            // With no way there last time, only once it is time to look again.
+                            if droid.replan <= 0.0 || droid.route.is_empty() && !droid.no_way {
                                 droid.replan = REPLAN;
-                                droid.route = route_to((grid, origin), droid.feet, feet, CHASE_REACH);
+                                droid.route = route_to(droid.feet, feet);
+                                droid.no_way = droid.route.is_empty();
                             }
                         }
                     }
@@ -2840,11 +2894,12 @@ impl Inhabitants {
                             .copied()
                             .flatten()
                             .and_then(|(feet, _)| flat(droid.feet - feet).try_normalize(1.0e-3));
-                        if let Some(away) = away.filter(|_| droid.replan <= 0.0 || droid.route.is_empty()) {
+                        if let Some(away) = away.filter(|_| droid.replan <= 0.0 || droid.route.is_empty() && !droid.no_way) {
                             droid.replan = REPLAN * 4.0;
                             let ahead = droid.feet + away * FLEE_AHEAD;
                             let to = spot_near((grid, origin), ahead, FLEE_AHEAD * 0.4, rng).unwrap_or(ahead);
-                            droid.route = route_to((grid, origin), droid.feet, to, CHASE_REACH);
+                            droid.route = route_to(droid.feet, to);
+                            droid.no_way = droid.route.is_empty();
                         }
                     }
                     // Caught, or holding the one caught: standing, facing the other.
@@ -3007,7 +3062,7 @@ impl Inhabitants {
                     let to = spots.iter().copied().find(|&spot| !open(spot)).or_else(|| {
                         spots.iter().copied().max_by(|a, b| flat(*a - danger).norm().total_cmp(&flat(*b - danger).norm()))
                     });
-                    droid.route = to.map_or_else(Vec::new, |to| route_to((grid, origin), droid.feet, to, CHASE_REACH));
+                    droid.route = to.map_or_else(Vec::new, |to| route_to(droid.feet, to));
                     droid.cover = Some((danger, true));
                 } else if droid.route.is_empty() {
                     let to = flat(danger - droid.feet);
@@ -3036,9 +3091,10 @@ impl Inhabitants {
                     // There, and the other standing: it stands too, facing the same way.
                     droid.route.clear();
                     droid.heading = leader.heading;
-                } else if droid.replan <= 0.0 || droid.route.is_empty() {
+                } else if droid.replan <= 0.0 || droid.route.is_empty() && !droid.no_way {
                     droid.replan = REPLAN;
-                    droid.route = route_to((grid, origin), droid.feet, slot, CHASE_REACH);
+                    droid.route = route_to(droid.feet, slot);
+                    droid.no_way = droid.route.is_empty();
                 }
                 catching_up = off > CATCH_UP;
             } else if droid.route.is_empty() {
@@ -3073,7 +3129,7 @@ impl Inhabitants {
                             None => match droid.turf {
                                 Some((at, _)) => (
                                     spot_near((grid, origin), at, TURF_KEEP, rng)
-                                        .map_or_else(Vec::new, |to| route_to((grid, origin), droid.feet, to, CHASE_REACH)),
+                                        .map_or_else(Vec::new, |to| route_to(droid.feet, to)),
                                     None,
                                 ),
                                 // Now and then, near the station, taking the train.
@@ -3090,7 +3146,7 @@ impl Inhabitants {
                                         droid.ride = Some(ride);
                                         (route, None)
                                     }
-                                    None => (wander((grid, origin), droid.feet, TRIP, roads, &turfs, rng), None),
+                                    None => (wander((grid, origin), droid.feet, TRIP, roads, &turfs, &self.reachable, rng), None),
                                 },
                             },
                         },
@@ -4404,7 +4460,7 @@ mod tests {
         let mut rng = Rng::new(11);
         let mut crossed = 0;
         for _ in 0..40 {
-            let route = wander((&grid, Vector3::zeros()), Vector3::new(2.0, 0.12, 2.0), (10.0, 30.0), Some(&roads), &[], &mut rng);
+            let route = wander((&grid, Vector3::zeros()), Vector3::new(2.0, 0.12, 2.0), (10.0, 30.0), Some(&roads), &[], &Reach::default(), &mut rng);
             assert!(!route.is_empty());
             for at in &route {
                 let (x, z) = survey::cell_at(&grid, Vector3::zeros(), *at).unwrap();
@@ -4414,7 +4470,7 @@ mod tests {
         }
         assert!(crossed > 0, "it does cross, at the crossing");
         // On the road, it gets off it.
-        let route = wander((&grid, Vector3::zeros()), Vector3::new(10.0, 0.0, 2.0), (10.0, 30.0), Some(&roads), &[], &mut rng);
+        let route = wander((&grid, Vector3::zeros()), Vector3::new(10.0, 0.0, 2.0), (10.0, 30.0), Some(&roads), &[], &Reach::default(), &mut rng);
         let end = route.first().unwrap();
         let (x, z) = survey::cell_at(&grid, Vector3::zeros(), *end).unwrap();
         assert!(!roads.is_road(x, z));
@@ -4438,7 +4494,7 @@ mod tests {
         let turfs = [(survey::cell_at(&grid, Vector3::zeros(), spot).unwrap(), 3.0 / 0.5)];
         let mut rng = Rng::new(5);
         for _ in 0..40 {
-            let route = wander((&grid, Vector3::zeros()), Vector3::new(2.0, 0.12, 2.0), (10.0, 30.0), Some(&roads), &turfs, &mut rng);
+            let route = wander((&grid, Vector3::zeros()), Vector3::new(2.0, 0.12, 2.0), (10.0, 30.0), Some(&roads), &turfs, &Reach::default(), &mut rng);
             if let Some(end) = route.first() {
                 // Give or take the half-meter cells it is reckoned in.
                 assert!(flat(end - spot).norm() >= 2.5, "makes for {end:?}, on the turf");
@@ -4462,6 +4518,47 @@ mod tests {
             within_talking(droids.into_iter(), Vector3::zeros(), AHEAD),
             [1, 0]
         );
+    }
+
+    #[test]
+    fn what_can_be_got_to_is_kept_a_bit_a_cell_and_empty_is_anywhere() {
+        let reach = Reach::of((0..130).map(|i| i % 3 == 0));
+        assert!(reach.can(0) && reach.can(63) && reach.can(129));
+        assert!(!reach.can(1) && !reach.can(64) && !reach.can(128));
+        assert!(!reach.can(10_000), "past the end");
+        assert!(Reach::default().can(10_000), "anywhere, with nothing known");
+    }
+
+    #[test]
+    fn a_droid_going_about_its_business_does_not_set_off_for_where_it_cannot_get_to() {
+        // Two pavements, a path between them; the far one, as if walled off, not to be got to.
+        let mut grid = WalkGrid::new(40, 10, 1.0);
+        for z in 0..10 {
+            for x in (0..15).chain(25..40) {
+                grid.set(x, z, true);
+            }
+        }
+        for x in 15..25 {
+            grid.set(x, 0, true);
+        }
+        let plan: crate::roads::RoadPlan =
+            serde_json::from_str(r#"{ "level": 0.06, "roads": [], "crossings": [] }"#).unwrap();
+        let roads = plan.on(&grid, Vector3::zeros());
+        let reach = Reach::of((0..grid.width * grid.rows()).map(|i| i % grid.width < 25));
+        let (mut rng, mut went) = (Rng::new(3), 0);
+        for _ in 0..60 {
+            let route = wander((&grid, Vector3::zeros()), Vector3::new(2.0, 0.0, 5.0), (10.0, 30.0), Some(&roads), &[], &reach, &mut rng);
+            assert!(route.iter().all(|at| at.x < 25.0), "set off for the far side: {route:?}");
+            went += !route.is_empty() as u32;
+        }
+        assert!(went > 0, "it goes somewhere");
+        // Not kept off it, it does go there now and then.
+        let anywhere = (0..60).any(|_| {
+            wander((&grid, Vector3::zeros()), Vector3::new(2.0, 0.0, 5.0), (10.0, 30.0), Some(&roads), &[], &Reach::default(), &mut rng)
+                .iter()
+                .any(|at| at.x >= 25.0)
+        });
+        assert!(anywhere, "the far side is there to go to");
     }
 
     /// The train at the first station with one doorway, on its right, its doors open there for as

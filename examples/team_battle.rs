@@ -1382,7 +1382,7 @@ impl Battle {
             .filter(|(s, _)| !taken.contains(s) && Some(*s) != now)
             .filter_map(|(s, cover)| {
                 let cell = grid.cell_at(*origin, cover.position)?;
-                let cost = routes.costs[cell.1 * grid.width + cell.0]?;
+                let cost = routes.cost(cell.1 * grid.width + cell.0)?;
                 let to_threat = flat(threat - cover.position);
                 let distance = to_threat.norm();
                 if distance < 4.0 {
