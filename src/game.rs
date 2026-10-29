@@ -1794,17 +1794,17 @@ impl MazeGame {
                 if !self.precinct_guards.is_empty() {
                     Log::info(format!("Precincts: {} guarded", self.precinct_guards.len()));
                 }
-                // And the gang in its den, down in the escape tunnels.
+                // And the gang in its den, down in the escape tunnels, and in its hideouts - Subura's
+                // Stronghold.
                 let gang = script.and_then(|script| script.characters.iter().position(|c| c.gang));
                 if let Some(gang) = gang {
-                    let kept = self
-                        .level
-                        .tunnels
-                        .den
-                        .iter()
-                        .filter_map(|&at| self.inhabitants.post_guard(scene, (grid, *origin), at, rng.below(628) as f32 / 100.0, gang, rng))
+                    let hideouts = self.level.markers.iter().filter(|m| m.name.starts_with("hideout_")).map(|m| m.position);
+                    let posts: Vec<Vector3<f32>> = self.level.tunnels.den.iter().copied().chain(hideouts).collect();
+                    let kept = posts
+                        .into_iter()
+                        .filter_map(|at| self.inhabitants.post_guard(scene, (grid, *origin), at, rng.below(628) as f32 / 100.0, gang, rng))
                         .count();
-                    Log::info(format!("Escape tunnels: {kept} of the gang in the den"));
+                    Log::info(format!("Escape tunnels and hideouts: {kept} of the gang kept there"));
                 }
             }
         }
@@ -4309,7 +4309,7 @@ impl MazeGame {
             return;
         };
         if model.is_ok() {
-            self.trains = LINES.iter().map(|&stations| Train::spawn(&mut ctx.scenes[self.scene], &model, stations)).collect();
+            self.trains = LINES.iter().map(|&line| Train::spawn(&mut ctx.scenes[self.scene], &model, line)).collect();
         } else {
             Log::err(format!("Could not load {TRAIN_MODEL}; Urbs' railway has no train"));
         }

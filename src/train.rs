@@ -3,8 +3,10 @@
 //! track, so it is run as two that never meet ([`LINES`]): the north train from Curia's station
 //! through Urbs' north one to the middle one just north of the middle crossing and back, the south
 //! train from the middle one just south of it through Urbs' south one to Caelum's and back, over
-//! and over. Riders change trains by crossing the street between the two middle stations. At each
-//! station a train stops with its doors open, both sides, for a while.
+//! and over. A third, the west train, runs a beam of its own along the middle street west, from the
+//! west station just off the middle crossing over the west gate to Subura's and back. Riders change
+//! trains by crossing the streets between the middle stations. At each station a train stops with
+//! its doors open, both sides, for a while.
 //!
 //! Its model, [`TRAIN_MODEL`], is made in Blender (`~/Documents/blender/train/build_train.py`):
 //! `train`, its cars `car_1` to `car_3`, and under each its door leaves,
@@ -20,7 +22,11 @@
 //! getting on at one station and off at another (see [`crate::inhabitants`]).
 
 use fyrox::{
-    core::{algebra::Vector3, log::Log, pool::Handle},
+    core::{
+        algebra::{UnitQuaternion, Vector3},
+        log::Log,
+        pool::Handle,
+    },
     graph::SceneGraph,
     resource::model::{ModelResource, ModelResourceExtension},
     scene::{
@@ -39,16 +45,60 @@ pub const TRAIN_MODEL: &str = "data/train.glb";
 
 /// How high the beam's top is, which the train's origin rides on, in meters.
 const BEAM_TOP: f32 = 9.5;
-/// Where along the line, in the world's z, a train stands at each of its stations, from the north
-/// end of its line to the south: the north train at Curia's (600 m north of Urbs' middle), Urbs'
-/// north one (352 m north) and the middle one north of the middle crossing (32 m north); the south
-/// train at the middle one south of it (32 m south), Urbs' south one (352 m south) and Caelum's
-/// (600 m south). North is -z here. Each goes from the first of its stations to the last and back.
-/// (The stations are made in `data/story/story_urbs.py`, `story_curia.py` and `story_caelum.py`.)
-pub const LINES: [&[f32]; 2] = [&[-600.0, -352.0, -32.0], &[32.0, 352.0, 600.0]];
-/// Where the line ends, in the world's z, at the faces of the buffers in Curia and Caelum.
+/// A line a train runs, back and forth: which way its beam goes, and where along it a train stands
+/// at each of its stations, from one end of it to the other.
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+pub struct Line {
+    pub way: Way,
+    pub stations: &'static [f32],
+}
+
+/// Which way a line's beam goes: down the middle avenue, along the world's z, or along the middle
+/// street, along its x.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum Way {
+    #[default]
+    NorthSouth,
+    EastWest,
+}
+
+impl Line {
+    /// The middle of the beam's top `along` meters along the line.
+    pub fn at(&self, along: f32) -> Vector3<f32> {
+        match self.way {
+            Way::NorthSouth => Vector3::new(0.0, BEAM_TOP, along),
+            Way::EastWest => Vector3::new(along, BEAM_TOP, 0.0),
+        }
+    }
+
+    /// How a train on it is turned: its front, the model's -z, along the line.
+    fn turn(&self) -> UnitQuaternion<f32> {
+        match self.way {
+            Way::NorthSouth => UnitQuaternion::identity(),
+            Way::EastWest => UnitQuaternion::from_axis_angle(&Vector3::y_axis(), std::f32::consts::FRAC_PI_2),
+        }
+    }
+}
+
+/// Where along each line, in meters, a train stands at each of its stations. The north train's, in
+/// the world's z (north is -z), from Curia's (600 m north of Urbs' middle) through Urbs' north one
+/// (352 m north) to the middle one north of the middle crossing (32 m north); the south train's from
+/// the middle one south of it (32 m south) through Urbs' south one (352 m south) to Caelum's (600 m
+/// south). The west train's, in the world's x, from Subura's (646 m west) to the west one just off
+/// the middle crossing (33 m west). Each goes from the first of its stations to the last and back.
+/// (The stations are made in `data/story/story_urbs.py`, `story_curia.py`, `story_caelum.py` and
+/// `story_subura.py`.)
+pub const LINES: [Line; 3] = [
+    Line { way: Way::NorthSouth, stations: &[-600.0, -352.0, -32.0] },
+    Line { way: Way::NorthSouth, stations: &[32.0, 352.0, 600.0] },
+    Line { way: Way::EastWest, stations: &[-646.0, -33.0] },
+];
+/// Where the lines end, along them, at the faces of the buffers: in Curia and Caelum; and in Subura
+/// and by the middle crossing.
 #[cfg(test)]
 const BUFFERS: [f32; 2] = [-622.8, 622.8];
+#[cfg(test)]
+const WEST_BUFFERS: [f32; 2] = [-668.77, -11.23];
 /// Half a train's length, end to end, in meters.
 #[cfg(test)]
 const TRAIN_HALF_LENGTH: f32 = 19.4;
@@ -85,12 +135,15 @@ const PLATFORM: f32 = 8.0 - BEAM_TOP;
 /// doors are open to get on and off by.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Doors {
-    /// Where along the line it stands at each of its stations (see [`LINES`]).
-    pub stations: &'static [f32],
+    /// The line it runs, and where along it it stands at each of its stations (see [`LINES`]).
+    pub line: Line,
     /// The middle of the beam's top under it, where it will be at the end of this step.
     pub at: Vector3<f32>,
-    /// The middle of each doorway, on the floor in it, from `at`.
+    /// The middle of each doorway, on the floor in it, from `at`, in the world's terms.
     pub doorways: Vec<Vector3<f32>>,
+    /// Which way, in the world, is across it, to its right-hand side; and which way along it.
+    pub across: Vector3<f32>,
+    pub along: Vector3<f32>,
     /// While its doors are wide open, at which station, and for how much longer, in seconds.
     pub open: Option<(usize, f32)>,
 }
@@ -98,18 +151,24 @@ pub struct Doors {
 impl Doors {
     /// How many stations there are.
     pub fn stations(&self) -> usize {
-        self.stations.len()
+        self.line.stations.len()
     }
 
     /// Where the train stands at the `n`th station, its doors open.
     pub fn station(&self, n: usize) -> Vector3<f32> {
-        Vector3::new(0.0, BEAM_TOP, self.stations[n])
+        self.line.at(self.line.stations[n])
+    }
+
+    /// How far out to the side of it `at` is, to its right-hand side, in meters - to its left,
+    /// less than nothing.
+    pub fn out(&self, at: Vector3<f32>) -> f32 {
+        (at - self.at).dot(&self.across)
     }
 
     /// Whether `at` is in one of its cars, by the plan - not out on the platform beside it.
     pub fn within(&self, at: Vector3<f32>) -> bool {
         let off = at - self.at;
-        off.x.abs() < INSIDE && off.z.abs() < HALF_LENGTH
+        off.dot(&self.across).abs() < INSIDE && off.dot(&self.along).abs() < HALF_LENGTH
     }
 
     /// The height of its floor.
@@ -120,7 +179,10 @@ impl Doors {
     /// The platform beside the `n`th doorway at the `station`, `out` meters out from it.
     pub fn platform(&self, station: usize, n: usize, out: f32) -> Vector3<f32> {
         let doorway = self.doorways[n];
-        self.station(station) + Vector3::new(doorway.x + doorway.x.signum() * out, PLATFORM, doorway.z)
+        let side = doorway.dot(&self.across).signum();
+        let mut at = self.station(station) + doorway + self.across * side * out;
+        at.y = self.station(station).y + PLATFORM;
+        at
     }
 }
 
@@ -142,22 +204,24 @@ pub struct Train {
     leaves: Vec<Leaf>,
     /// The doorways' blockers.
     blockers: Vec<Handle<Node>>,
-    /// The middle of each doorway, on the floor in it, from the beam's top under the train.
+    /// The middle of each doorway, on the floor in it, from the beam's top under the train, as the
+    /// train has it, before it is turned along its line.
     doorways: Vec<Vector3<f32>>,
-    /// Where along the line it stands at each of its stations.
-    stations: &'static [f32],
+    /// The line it runs.
+    line: Line,
     /// Seconds into its round of the line.
     clock: f32,
 }
 
 impl Train {
-    /// Puts a train from `model` on the line that stops at `stations`, at the first of them with its
-    /// doors shut.
-    pub fn spawn(scene: &mut Scene, model: &ModelResource, stations: &'static [f32]) -> Self {
-        let start = Vector3::new(0.0, BEAM_TOP, along_line(stations, 0.0));
+    /// Puts a train from `model` on `line`, at the first of its stations with its doors shut.
+    pub fn spawn(scene: &mut Scene, model: &ModelResource, line: Line) -> Self {
+        let stations = line.stations;
+        let start = line.at(along_line(stations, 0.0));
+        let turn = line.turn();
         let root = model.instantiate(scene);
         let graph = &mut scene.graph;
-        graph[root].local_transform_mut().set_position(start);
+        graph[root].local_transform_mut().set_position(start).set_rotation(turn);
         graph.update_hierarchical_data();
         let nodes: Vec<Handle<Node>> = graph.traverse_handle_iter(root).collect();
         // Its own clips are left off.
@@ -183,7 +247,7 @@ impl Train {
                 let shut = **graph[node].local_transform().position();
                 leaves.push(Leaf { node, shut, out, along });
                 if leaf == "a" {
-                    let at = graph[node].global_position() - start;
+                    let at = turn.inverse_transform_vector(&(graph[node].global_position() - start));
                     blockers.push(Vector3::new(out * BLOCKER_OUT, BLOCKER_MIDDLE, at.z));
                 }
             } else if name.starts_with("car_") && graph[node].is_mesh() {
@@ -196,7 +260,7 @@ impl Train {
             .build(graph);
         let mut body = BaseBuilder::new()
             .with_name("train")
-            .with_local_transform(TransformBuilder::new().with_local_position(start).build())
+            .with_local_transform(TransformBuilder::new().with_local_position(start).with_local_rotation(turn).build())
             .with_child(shape);
         let doorways = blockers.iter().map(|at| Vector3::new(at.x.signum() * BLOCKER_OUT, FLOOR, at.z)).collect();
         let blockers: Vec<Handle<Node>> = blockers
@@ -221,16 +285,17 @@ impl Train {
         graph.update_hierarchical_data();
         graph.link_nodes_keep_global_transform(root, body);
         Log::info(format!(
-            "Train: {} cars, {} door leaves, {} doorways, {} stations from z {:.0} to {:.0}, round the line in {:.0} s",
+            "Train: {} cars, {} door leaves, {} doorways, {} stations from {:.0} to {:.0} {:?}, round the line in {:.0} s",
             cars.len(),
             leaves.len(),
             blockers.len(),
             stations.len(),
             stations[0],
             stations[stations.len() - 1],
+            line.way,
             round(stations)
         ));
-        Self { body, cars, leaves, blockers, doorways, stations, clock: 0.0 }
+        Self { body, cars, leaves, blockers, doorways, line, clock: 0.0 }
     }
 
     /// Takes the train out of the scene.
@@ -244,7 +309,7 @@ impl Train {
     pub fn reset(&mut self, graph: &mut Graph) {
         self.clock = 0.0;
         if let Ok(body) = graph.try_get_mut_of_type::<RigidBody>(self.body) {
-            body.local_transform_mut().set_position(Vector3::new(0.0, BEAM_TOP, along_line(self.stations, 0.0)));
+            body.local_transform_mut().set_position(self.line.at(along_line(self.line.stations, 0.0)));
             body.set_lin_vel(Vector3::zeros());
         }
         self.pose(graph);
@@ -259,7 +324,7 @@ impl Train {
         self.clock += dt;
         if let Ok(body) = graph.try_get_mut_of_type::<RigidBody>(self.body) {
             let here = **body.local_transform().position();
-            let there = Vector3::new(0.0, BEAM_TOP, along_line(self.stations, self.clock));
+            let there = self.line.at(along_line(self.line.stations, self.clock));
             body.set_lin_vel((there - here) / dt);
         }
         self.pose(graph);
@@ -267,16 +332,19 @@ impl Train {
 
     /// The train as the droids go by it, as of the end of this step.
     pub fn doors(&self) -> Doors {
+        let turn = self.line.turn();
         Doors {
-            stations: self.stations,
-            at: Vector3::new(0.0, BEAM_TOP, along_line(self.stations, self.clock)),
-            doorways: self.doorways.clone(),
-            open: wide_open(self.stations, self.clock),
+            line: self.line,
+            at: self.line.at(along_line(self.line.stations, self.clock)),
+            doorways: self.doorways.iter().map(|doorway| turn * doorway).collect(),
+            across: turn * Vector3::x(),
+            along: turn * Vector3::z(),
+            open: wide_open(self.line.stations, self.clock),
         }
     }
 
     fn pose(&self, graph: &mut Graph) {
-        let open = doors_open(self.stations, self.clock);
+        let open = doors_open(self.line.stations, self.clock);
         let out = DOOR_OUT * (open / 0.2).min(1.0);
         let slide = DOOR_SLIDE * ((open - 0.2) / 0.8).clamp(0.0, 1.0);
         for leaf in &self.leaves {
@@ -386,7 +454,7 @@ mod tests {
 
     #[test]
     fn it_stands_at_each_station_from_one_end_to_the_other_and_back() {
-        for stations in LINES {
+        for stations in LINES.map(|line| line.stations) {
             let mut stood = Vec::new();
             let mut t = 0.0;
             while t < round(stations) {
@@ -400,7 +468,9 @@ mod tests {
             }
             let stops: Vec<usize> = (0..stop_count(stations)).map(|k| stop(stations, k)).collect();
             assert_eq!(stood, stops);
-            assert_eq!(stops, vec![0, 1, 2, 1]);
+            let there: Vec<usize> = (0..stations.len()).collect();
+            let back: Vec<usize> = (1..stations.len() - 1).rev().collect();
+            assert_eq!(stops, [there, back].concat());
             assert_eq!(along_line(stations, 0.0), stations[0]);
             assert!((along_line(stations, round(stations) - 0.01) - stations[0]).abs() < 0.01, "back where it began");
             assert_eq!(along_line(stations, round(stations) + 1.0), stations[0]);
@@ -411,7 +481,7 @@ mod tests {
     fn the_two_trains_never_meet() {
         // The line is one track: each train keeps to its own stretch of it, the two meeting only
         // at the middle station, where they stand at either end of it with room between them.
-        let [north, south] = LINES;
+        let [north, south, _] = LINES.map(|line| line.stations);
         let north_reach = north.iter().copied().fold(f32::MIN, f32::max) + TRAIN_HALF_LENGTH;
         let south_reach = south.iter().copied().fold(f32::MAX, f32::min) - TRAIN_HALF_LENGTH;
         assert!(north_reach + 2.0 < south_reach, "{north_reach} against {south_reach}");
@@ -424,15 +494,27 @@ mod tests {
 
     #[test]
     fn neither_runs_into_the_buffers_at_the_ends_of_the_line() {
-        let [north, south] = LINES;
+        let [north, south, _] = LINES.map(|line| line.stations);
         assert!(north[0] - TRAIN_HALF_LENGTH > BUFFERS[0] + 1.0, "Curia's");
         assert!(south[south.len() - 1] + TRAIN_HALF_LENGTH < BUFFERS[1] - 1.0, "Caelum's");
+        let west = LINES[2].stations;
+        assert!(west[0] - TRAIN_HALF_LENGTH > WEST_BUFFERS[0] + 1.0, "Subura's");
+        assert!(west[west.len() - 1] + TRAIN_HALF_LENGTH < WEST_BUFFERS[1] - 1.0, "by the middle crossing");
+    }
+
+    #[test]
+    fn the_west_train_keeps_clear_of_the_others_at_the_middle_crossing() {
+        // Its east end, at the west station, short of the avenue the others run down, and their
+        // cars, out either side of their beam.
+        let west = LINES[2].stations;
+        let east_end = west.iter().copied().fold(f32::MIN, f32::max) + TRAIN_HALF_LENGTH;
+        assert!(east_end < -INSIDE - 2.0, "{east_end}");
     }
 
     #[test]
     fn it_is_never_faster_than_its_top_speed() {
         let step = 0.05;
-        for stations in LINES {
+        for stations in LINES.map(|line| line.stations) {
             let mut t = 0.0;
             while t < round(stations) {
                 let speed = (along_line(stations, t + step) - along_line(stations, t)).abs() / step;
@@ -444,7 +526,7 @@ mod tests {
 
     #[test]
     fn the_doors_open_only_while_it_stands_at_a_station() {
-        for stations in LINES {
+        for stations in LINES.map(|line| line.stations) {
             assert_eq!(doors_open(stations, 0.0), 0.0);
             assert_eq!(doors_open(stations, AT_STATION / 2.0), 1.0);
             assert_eq!(doors_open(stations, AT_STATION - 0.5), 0.0);
@@ -460,7 +542,7 @@ mod tests {
 
     #[test]
     fn the_doors_are_wide_open_only_while_they_are_all_the_way_open() {
-        for stations in LINES {
+        for stations in LINES.map(|line| line.stations) {
             let mut t = 0.0;
             let mut at = Vec::new();
             while t < round(stations) {
@@ -482,11 +564,14 @@ mod tests {
 
     #[test]
     fn the_platform_is_beside_the_doorway_out_from_it() {
-        let stations = LINES[0];
+        let line = LINES[0];
+        let stations = line.stations;
         let doors = Doors {
-            stations,
+            line,
             at: Vector3::new(0.0, BEAM_TOP, stations[1]),
             doorways: vec![Vector3::new(BLOCKER_OUT, FLOOR, 2.75), Vector3::new(-BLOCKER_OUT, FLOOR, -8.5)],
+            across: Vector3::x(),
+            along: Vector3::z(),
             open: Some((1, 10.0)),
         };
         let right = doors.platform(1, 0, 1.0);
@@ -496,5 +581,28 @@ mod tests {
         assert!(!doors.within(right), "out on the platform");
         assert!(doors.within(doors.at + Vector3::new(1.7, FLOOR, 2.75)), "aboard");
         assert_eq!(doors.floor(), 8.25, "a step up");
+    }
+
+    #[test]
+    fn on_the_west_line_the_platform_is_beside_the_doorway_too() {
+        // Turned along the world's x: what is across the train there is along the world's z.
+        let line = LINES[2];
+        let turn = line.turn();
+        let doors = Doors {
+            line,
+            at: line.at(line.stations[0]),
+            doorways: vec![turn * Vector3::new(BLOCKER_OUT, FLOOR, 2.75)],
+            across: turn * Vector3::x(),
+            along: turn * Vector3::z(),
+            open: Some((0, 10.0)),
+        };
+        assert!((doors.along - Vector3::x()).norm() < 1e-5, "along the world's x: {:?}", doors.along);
+        let out = doors.platform(0, 0, 1.0);
+        assert!((out.x - (line.stations[0] + 2.75)).abs() < 1e-4, "beside the doorway: {out:?}");
+        assert!((doors.out(out) - (BLOCKER_OUT + 1.0)).abs() < 1e-4, "out from it: {out:?}");
+        assert!(out.z.abs() > BLOCKER_OUT && out.y == 8.0, "{out:?}");
+        assert!(!doors.within(out), "out on the platform");
+        assert!(doors.within(doors.at + turn * Vector3::new(1.7, FLOOR, 2.75)), "aboard");
+        assert_eq!(doors.platform(1, 0, 1.0).x, line.stations[1] + 2.75, "at the other station");
     }
 }

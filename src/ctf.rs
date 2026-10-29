@@ -111,6 +111,11 @@ pub const CAELUM: &str = "data/story/story_caelum.glb";
 /// along with it: Urbs' middle avenue goes on over a bridge, through the Gate of Nations, into it.
 pub const CURIA: &str = "data/story/story_curia.glb";
 
+/// Subura: the undercity west of Urbs, a model of its own (see `data/story/story_subura.py`), played
+/// along with it: a bridge from Urbs' west gate, and Urbs' west line, lead into it through the
+/// Breach. Its gang keeps in the Stronghold (`hideout_<k>`).
+pub const SUBURA: &str = "data/story/story_subura.glb";
+
 /// Urbs: a whole city in the void, for a story to be told in. As yet it is played as a maze,
 /// with `MAZE_MODEL=data/story/story_urbs.glb`: the round is to find the way across it, robbing its
 /// stores and banks on the way (see [`crate::computer::Kind`] and [`crate::vault`]).
@@ -119,12 +124,12 @@ pub const URBS: Map = Map {
     path: "data/story/story_urbs.glb",
     about: "A whole city: towers downtown, homes and shops round them, the docks over the canal; \
             east over a bridge, Ferrum and its works; south, Caelum and its spaceport; north, Curia, \
-            the capital.",
+            the capital; west, Subura, the undercity.",
     void: true,
     open_sky: true,
     night: true,
     echoes: true,
-    alongside: &[FERRUM, CAELUM, CURIA],
+    alongside: &[FERRUM, CAELUM, CURIA, SUBURA],
 };
 
 /// The places a story could be told in.

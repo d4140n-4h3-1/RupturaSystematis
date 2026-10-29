@@ -21,8 +21,10 @@ And places of their own: the central plaza with its monument, six parks, the mar
 hall under a dome behind its colonnade, the arena, and the elevated railway down the middle
 avenue, with three stations on it - out in the north, in the middle and out in the south by the
 canal - each climbed by stairs. Bridges cross the canal at every street, steps go
-down to its water, and gates lead out over the void east and west, to pads with an obelisk each; in the south the middle
-avenue goes on over a bridge to Caelum, and in the north to Curia.
+down to its water, and gates lead out over the void east and west, to pads with an obelisk each (two in the west, either
+side of the west line); in the south the middle avenue goes on over a bridge to Caelum, and in the north to Curia. A second
+railway, the west line, runs along the middle street west from a buffer by the middle crossing, through the west station
+just past it, over the west gate to its pad, where Subura's takes it on.
 
 Precincts, where security takes those it arrests: three blocks have one on a corner (precinct_<n>),
 up on a podium climbed by a flight from the street - a hall with the desk (precinct_<n>_desk) and
@@ -70,7 +72,7 @@ light), rather than an object for each piece, which a city this size would have 
 thousands of; each lamp's glass stays a piece of its own, as the game finds lamps by it.
 
 Stairs are of 0.25 m steps, 0.35 m deep. Empties named place_* mark the city's landmarks for a
-story to use: place_summa, place_plaza, place_station, place_station_middle, place_station_south, place_park_west, place_park_east,
+story to use: place_summa, place_plaza, place_station, place_station_middle, place_station_middle_south, place_station_south, place_station_west, place_park_west, place_park_east,
 place_park_north, place_park_far_west, place_park_far_east, place_park_far_north, place_market, place_hall, place_arena, place_docks,
 place_gate_east and place_gate_west.
 
@@ -113,6 +115,14 @@ STATIONS = (
     (-372.0, -332.0, -1, "place_station_south"),
 )
 GATE = (22.0, 6.0, 24.0)      # the gates' bridges: how long and wide, and their pads' size
+# The west line: a beam of its own along the middle street west, in a frame whose y runs west from
+# the middle crossing; from a buffer just off the crossing (10 m west), through the west station,
+# on over the west gate to the middle of its pad, where Subura's (data/story/story_subura.py) takes
+# it on, a pillar under it there.
+WEST = Frame(0.0, 0.0, math.pi / 2)
+WEST_BUFFER = 10.0
+WEST_STATION = (13.0, 53.0, 1, "place_station_west")
+WEST_PAD = HALF + GATE[0] + GATE[2] / 2         # 490 m
 TILE = 128.0                  # the meshes are gathered by tiles of this size: big, as the game pays by the mesh
 FAR_TILE = 256.0              # and again, simplified, by blocks of this size, for the game to show far off
 # Far off, what is too small to make out goes: pieces of a collection smaller than this across,
@@ -2036,6 +2046,8 @@ def parked(m, rng):
                     continue
                 if not horizontal and abs(c) < 1 and any(s0 - 14 < t < s1 + 14 for s0, s1, _, _ in STATIONS):
                     continue
+                if horizontal and abs(c) < 1 and -(WEST_STATION[1] + 27) < t < 4:
+                    continue
                 side = rng.choice((-1, 1)) * (STREET / 2 - 1.5)
                 x, y = (t, c + side) if horizontal else (c + side, t)
                 f = Frame(x, y, 0.0 if horizontal else math.pi / 2)
@@ -2276,22 +2288,25 @@ def docks_place(m, rng, cx, cy, inner):
 SPECIAL = {}
 
 
-def railway(m, y0=-(HALF + 20.0), y1=HALF + 20.0, stations=STATIONS, canal=CANAL, ends=(), bridges=True):
+def railway(m, y0=-(HALF + 20.0), y1=HALF + 20.0, stations=STATIONS, canal=CANAL, ends=(), bridges=True, f=WORLD,
+            pillars_at=()):
     """The elevated railway down the middle avenue, from `y0` to `y1`: a beam on pillars, and
     `stations` over the avenue along it with platforms either side, climbed by stairs. Urbs' runs
     off both ends over the bridges, where Caelum's and Curia's take it on; theirs end in a buffer
     at the `ends` they name (`y0`, `y1` or both). Urbs' holds the beam up over the middle of each
-    bridge too (`bridges`), where its and the other city's meet."""
+    bridge too (`bridges`), where its and the other city's meet, and anywhere else `pillars_at`
+    says. All of it in frame `f`, its y along the line: the west line runs along the middle street
+    west, in a frame turned a quarter round from the world's."""
     top, w, d = RAIL
     plat = STATION[2]
-    m.box(WORLD, -w / 2, w / 2, y0, y1, top - d, top, m.struct, m.facades["slate"])
+    m.box(f, -w / 2, w / 2, y0, y1, top - d, top, m.struct, m.facades["slate"])
     for x in (-w / 2 - 0.02, w / 2 + 0.02):
-        m.line(Vector((x, y0, top - 0.2)), Vector((x, y1, top - 0.2)), m.lines["cyan"], across=Vector((0, 0, 1)))
+        m.line(f.at(x, y0, top - 0.2), f.at(x, y1, top - 0.2), m.lines["cyan"], across=Vector((0, 0, 1)))
     for end in ends:
         way = 1 if end == y1 else -1
-        m.box(WORLD, -w / 2 - 0.3, w / 2 + 0.3, end - way * 1.2, end, top, top + 1.4, m.struct, m.facades["slate"])
+        m.box(f, -w / 2 - 0.3, w / 2 + 0.3, end - way * 1.2, end, top, top + 1.4, m.struct, m.facades["slate"])
         face = end - way * 1.23                      # toward the track, and the train coming in
-        m.line(Vector((-w / 2 - 0.3, face, top + 0.7)), Vector((w / 2 + 0.3, face, top + 0.7)),
+        m.line(f.at(-w / 2 - 0.3, face, top + 0.7), f.at(w / 2 + 0.3, face, top + 0.7),
                m.lines["red"], width=0.4, height=0.03, across=Vector((0, 0, 1)), light=False)
     pillars = []
     y = -HALF + 32.0
@@ -2302,12 +2317,13 @@ def railway(m, y0=-(HALF + 20.0), y1=HALF + 20.0, stations=STATIONS, canal=CANAL
         y += PITCH
     if bridges:
         pillars += [b for b in (-(HALF + 20.0), HALF + 20.0) if y0 <= b <= y1]
+    pillars += list(pillars_at)
     for y in pillars:
-        m.box(WORLD, -0.7, 0.7, y - 0.7, y + 0.7, -1.2 if abs(y) > HALF else 0.0, top - d, m.struct,
+        m.box(f, -0.7, 0.7, y - 0.7, y + 0.7, -1.2 if abs(y) > HALF else 0.0, top - d, m.struct,
               m.facades["concrete"])
-        m.line(Vector((0.72, y, 0.0)), Vector((0.72, y, top - d)), m.lines["cyan"], width=0.08, across=Vector((0, 1, 0)))
+        m.line(f.at(0.72, y, 0.0), f.at(0.72, y, top - d), m.lines["cyan"], width=0.08, across=f.way(0, 1))
     for s0, s1, way, marker in stations:
-        station(m, s0, s1, plat, way, marker)
+        station(m, s0, s1, plat, way, marker, f)
 
 
 def clear_of_crossings(y):
@@ -2316,44 +2332,50 @@ def clear_of_crossings(y):
     return min(abs(y - c * PITCH) for c in range(-BLOCKS // 2, BLOCKS // 2 + 1)) > STREET / 2 + 3.5
 
 
-def station(m, s0, s1, plat, way, marker):
+def turned_by(f, angle):
+    """Frame `f`, turned by `angle` more about its origin."""
+    return Frame(f.origin.x, f.origin.y, f.angle + angle)
+
+
+def station(m, s0, s1, plat, way, marker, f=WORLD):
     """A station from `s0` to `s1` along the avenue: a platform either side of the beam, a canopy
     over each, and stairs down from the end `way` says - 1 the north, -1 the south - to the street
-    past it; a parapet round the rest of each platform. Its `marker` at the foot of the stairs."""
+    past it; a parapet round the rest of each platform. Its `marker` at the foot of the stairs. All
+    in frame `f`, its y along the line."""
     _, w, _ = RAIL
     shut, stairs = (s0, s1) if way > 0 else (s1, s0)
     n = round(plat / RISE)
     for sx in (-1, 1):
         a, b = sorted((sx * (w / 2 + 0.3), sx * (STREET / 2 - 1.0)))
-        m.box(WORLD, a, b, s0, s1, plat - DECK, plat, m.struct, m.deck)
-        m.line(Vector((sx * (w / 2 + 0.3), s0, plat + 0.006)), Vector((sx * (w / 2 + 0.3), s1, plat + 0.006)),
+        m.box(f, a, b, s0, s1, plat - DECK, plat, m.struct, m.deck)
+        m.line(f.at(sx * (w / 2 + 0.3), s0, plat + 0.006), f.at(sx * (w / 2 + 0.3), s1, plat + 0.006),
                m.lines["yellow"], width=0.25, height=0.012)
         outer_x = sx * (STREET / 2 - 1.0)
-        m.parapet(Vector((outer_x - sx * 0.15, s0, 0)), Vector((outer_x - sx * 0.15, s1, 0)), plat, m.lines["cyan"])
+        m.parapet(f.at(outer_x - sx * 0.15, s0), f.at(outer_x - sx * 0.15, s1), plat, m.lines["cyan"])
         # Across the end away from the stairs, whole; across the end with them, but for the top
         # of the stairs - both clear of where the train's cars go through.
         ea, eb = sorted((sx * TRAIN_HALF, outer_x))
-        m.parapet(Vector((ea, shut + way * 0.15, 0)), Vector((eb, shut + way * 0.15, 0)), plat, m.lines["cyan"])
+        m.parapet(f.at(ea, shut + way * 0.15), f.at(eb, shut + way * 0.15), plat, m.lines["cyan"])
         lo_x, hi_x = sorted((sx * (STREET / 2 - 1.2), sx * (STREET / 2 - 2.8)))
-        m.parapet(Vector((ea, stairs - way * 0.15, 0)), Vector((eb, stairs - way * 0.15, 0)), plat, m.lines["cyan"],
+        m.parapet(f.at(ea, stairs - way * 0.15), f.at(eb, stairs - way * 0.15), plat, m.lines["cyan"],
                   [((lo_x - ea) / (eb - ea), (hi_x - ea) / (eb - ea))])
         posts = (s0 + 2.0, (s0 + s1) / 2, s1 - 6.0) if way > 0 else (s1 - 2.0, (s0 + s1) / 2, s0 + 6.0)
         for y in [y for y in posts if clear_of_crossings(y)]:
-            m.box(WORLD, outer_x - sx * 0.6 - 0.15, outer_x - sx * 0.6 + 0.15, y - 0.15, y + 0.15, 0.0, plat - DECK,
+            m.box(f, outer_x - sx * 0.6 - 0.15, outer_x - sx * 0.6 + 0.15, y - 0.15, y + 0.15, 0.0, plat - DECK,
                   m.struct, m.facades["concrete"])
-            m.box(WORLD, outer_x - sx * 0.6 - 0.12, outer_x - sx * 0.6 + 0.12, y - 0.12, y + 0.12, plat, plat + 3.4,
+            m.box(f, outer_x - sx * 0.6 - 0.12, outer_x - sx * 0.6 + 0.12, y - 0.12, y + 0.12, plat, plat + 3.4,
                   m.struct, m.rail)
-        canopy = rect(a, b, s0, s1)
+        canopy = [f.at(p.x, p.y) for p in rect(a, b, s0, s1)]
         m.solid(canopy, plat + 3.4, plat + 3.6, m.struct, m.facades["teal"])
         m.ring(canopy, plat + 3.5, m.lines["cyan"], out=0.03, width=0.06)
         for y in (s0 + 8.0, s1 - 12.0) if way > 0 else (s1 - 8.0, s0 + 12.0):
-            m.glass_pane(WORLD, min(a, b) + 1.0, max(a, b) - 1.0, y - 0.3, y + 0.3, plat + 3.36, plat + 3.4)
+            m.glass_pane(f, min(a, b) + 1.0, max(a, b) - 1.0, y - 0.3, y + 0.3, plat + 3.36, plat + 3.4)
         # The stairs, from the platform's end down to the street, on away from it.
         if way > 0:
-            g = Frame(0.0, 0.0, math.pi / 2)    # local +x north, local y is -x
+            g = turned_by(f, math.pi / 2)    # local +x north, local y is -x
             m.flight(g, s1 + n * RUN, -hi_x, -lo_x, 0.0, plat, -1, "yellow")
         else:
-            g = Frame(0.0, 0.0, -math.pi / 2)   # local +x south, local y is +x
+            g = turned_by(f, -math.pi / 2)   # local +x south, local y is +x
             m.flight(g, -s0 + n * RUN, lo_x, hi_x, 0.0, plat, -1, "yellow")
     # Pillars under the platforms, at their ends and no more than 24 m apart, but not in a cross street.
     k = math.ceil((s1 - s0 - 2.0) / 24.0)
@@ -2362,9 +2384,9 @@ def station(m, s0, s1, plat, way, marker):
     for sx in (-1, 1):
         for y in under:
             x = sx * (STREET / 2 - 3.0)
-            m.box(WORLD, x - 0.4, x + 0.4, y - 0.4, y + 0.4, 0.0, plat - DECK, m.struct, m.facades["concrete"])
+            m.box(f, x - 0.4, x + 0.4, y - 0.4, y + 0.4, 0.0, plat - DECK, m.struct, m.facades["concrete"])
     foot = stairs + way * (n * RUN + 2.0)
-    m.mark(marker, Vector((0.0, foot, 0.0)), -math.pi / 2 if way > 0 else math.pi / 2)
+    m.mark(marker, f.at(0.0, foot), (-math.pi / 2 if way > 0 else math.pi / 2) + f.angle)
 
 
 def gates(m):
@@ -2379,11 +2401,14 @@ def gates(m):
         pads = [f.at(-pad / 2, far), f.at(pad / 2, far), f.at(pad / 2, far + pad), f.at(-pad / 2, far + pad)]
         m.solid(pads, -1.5, -0.002, m.ground, m.road)
         m.ring(pads, 0.006, m.lines[shade], out=-0.1)
-        g = f.at(0, far + pad / 2 + 3.0)
-        base, top = octagon(2.5, g.x, g.y), octagon(0.8, g.x, g.y)
-        m.solid(base, 0.0, 22.0, m.struct, m.dark[0], top=top)
-        m.fins(base, top, 0.0, 22.0, m.lines[shade])
-        m.ring(base, 1.0, m.lines[shade])
+        # The obelisk in the middle of the pad - in the west, one either side of it, the west line
+        # going on over it between them.
+        for ox in (0.0,) if sx > 0 else (-8.0, 8.0):
+            g = f.at(ox, far + pad / 2 + 3.0)
+            base, top = octagon(2.5, g.x, g.y), octagon(0.8, g.x, g.y)
+            m.solid(base, 0.0, 22.0, m.struct, m.dark[0], top=top)
+            m.fins(base, top, 0.0, 22.0, m.lines[shade])
+            m.ring(base, 1.0, m.lines[shade])
         for x in (-pad / 2 + 1.2, pad / 2 - 1.2):
             m.pylon(f, x, far + 1.2, shade=shade)
         p = f.at(0, far + 3.0)
@@ -2435,6 +2460,8 @@ def main():
         for j in range(BLOCKS):
             block(m, rng, i, j)
     railway(m)
+    railway(m, WEST_BUFFER, WEST_PAD, stations=(WEST_STATION,), canal=None, ends=(WEST_BUFFER,), bridges=False, f=WEST,
+            pillars_at=(WEST_PAD,))
     gates(m)
     escape_tunnels(m)
     parked(m, rng)

@@ -1119,7 +1119,7 @@ impl Ride {
             }
             Riding::Aboard => Rides::Go(Vec::new()),
             Riding::Leaving
-                if (feet.x - train.at.x).abs() > CLEAR_OF_DOORS && flat(self.off - feet).norm() < AT_PLATFORM =>
+                if train.out(feet).abs() > CLEAR_OF_DOORS && flat(self.off - feet).norm() < AT_PLATFORM =>
             {
                 Rides::Off
             }
@@ -1167,8 +1167,8 @@ fn take_train(
     if route.is_empty() {
         return None;
     }
-    let inward = -train.doorways[doorway].x.signum();
-    let spot = train.doorways[doorway] + Vector3::new(inward * STAND_IN, 0.0, between(rng, (-0.5, 0.5)));
+    let inward = -train.doorways[doorway].dot(&train.across).signum();
+    let spot = train.doorways[doorway] + train.across * inward * STAND_IN + train.along * between(rng, (-0.5, 0.5));
     Some((route, Ride { train: which, from, to, doorway, spot, wait, off, stage: Riding::ToPlatform, waited: 0.0 }))
 }
 
@@ -1707,6 +1707,8 @@ impl Inhabitants {
                     && droid.side.is_none()
                     && droid.cover.is_none()
                     && droid.speaking == 0.0
+                    // Not one keeping a post: a precinct's guard, or the gang in its hideout.
+                    && droid.post.is_none()
             };
             let droids = &self.droids;
             // The nearest of those `of` kind, calm, to `site` - and far enough off - as many as
@@ -3220,8 +3222,11 @@ impl Inhabitants {
                                     None,
                                 ),
                                 // Now and then, near the station, taking the train.
+                                // Not one of a kind that keeps in groups, gone off by itself:
+                                // it is to make a group afresh with others of its kind.
                                 None => match (!self.trains.is_empty()
                                     && droid.partner.is_none()
+                                    && self.groupings.get(droid.character).is_none_or(|g| g.groups_of < 2)
                                     && droid.side.is_none()
                                     && !droid.sentry
                                     && rng.below(TRAIN_CHANCE) == 0)
@@ -4652,9 +4657,11 @@ mod tests {
     /// long as `open_for` says; and a ride by it to the last station, waiting on the platform.
     fn at_the_station(open_for: Option<f32>) -> (Doors, Ride) {
         let mut train = Doors {
-            stations: crate::train::LINES[0],
+            line: crate::train::LINES[0],
             at: Vector3::zeros(),
             doorways: vec![Vector3::new(2.53, -1.25, 2.75)],
+            across: Vector3::x(),
+            along: Vector3::z(),
             open: None,
         };
         train.at = train.station(0);
