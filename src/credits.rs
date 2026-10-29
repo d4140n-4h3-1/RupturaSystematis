@@ -23,7 +23,7 @@ pub struct Credits(pub u64);
 
 impl Credits {
     /// `whole` credits and `cents` hundredths of one.
-    pub fn new(whole: u64, cents: u64) -> Self {
+    pub const fn new(whole: u64, cents: u64) -> Self {
         Self(whole * 100 + cents)
     }
 

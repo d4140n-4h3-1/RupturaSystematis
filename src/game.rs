@@ -166,6 +166,8 @@ const EXIT_NOT_FAR: f32 = 60.0;
 /// The ambient light with the lights off: next to none, so that what the flashlight is not
 /// pointed at is as good as black.
 const DARK_AMBIENT: Color = Color::opaque(3, 3, 5);
+/// The credits the player starts with, before they have taken any.
+const STARTING_CREDITS: Credits = Credits::new(200, 0);
 /// How long the player is shown they were deleted before the next maze, in seconds.
 const DELETED_FOR: f32 = 4.0;
 /// How high the floor under everything is: a little below the level's own, or, in the void, far
@@ -469,7 +471,8 @@ pub struct MazeGame {
     /// Whether MAZE_KNOCKDOWN has shot a droid down this round yet.
     knocked_down: bool,
     best_time: Option<f32>,
-    /// The credits the player has taken from computers, kept from one maze to the next.
+    /// The credits the player has: [`STARTING_CREDITS`], and those taken from computers, kept from
+    /// one maze to the next.
     #[visit(skip)]
     #[reflect(hidden)]
     credits: Credits,
@@ -748,6 +751,7 @@ impl MazeGame {
             health_sounds: HealthSounds::make(),
             alarm_sound: AlarmSound::make(),
             latency: OutputLatency::watch(),
+            credits: STARTING_CREDITS,
             ..Default::default()
         }
     }
