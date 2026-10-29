@@ -121,6 +121,15 @@ the crate makes.
 
 29 October 2026:
 
+- **Curia**, the capital north of Urbs, `data/story/story_curia.glb`, built by
+  `data/story/story_curia.py`: a model of its own, played along with Urbs, Ferrum and Caelum,
+  Urbs' middle avenue going on over a bridge into it through the Gate of Nations, a triumphal arch.
+  Fourteen by fourteen blocks in white stone and gold light, the avenue its axis: the Mall's
+  lawns, reflecting pools and obelisks; the Parliament across it in the middle, a rotunda under a
+  dome ribbed in gold behind its columns, a portico and two wings on a podium; the Gardens of the
+  Republic behind it and the Tower of the Republic at the avenue's head; the Supreme Court and the
+  State Archive either side; two Plazas of Nations ringed with flags; colonnaded ministries all
+  round, embassies in the west, terraced residences in the east, and eight office towers with lifts.
 - **The droids' left hand grips the right wrist properly**: its fingers swung over the top of the
   wrist and their tips closed onto it, rather than standing up off it, and the left shoulder
   rolled forward so the arm reaches out to the wrist rather than lying across the chest.

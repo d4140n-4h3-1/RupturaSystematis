@@ -107,6 +107,10 @@ pub const FERRUM: &str = "data/story/story_ferrum.glb";
 /// played along with it: Urbs' middle avenue goes on over a bridge into it.
 pub const CAELUM: &str = "data/story/story_caelum.glb";
 
+/// Curia: the capital north of Urbs, a model of its own (see `data/story/story_curia.py`), played
+/// along with it: Urbs' middle avenue goes on over a bridge, through the Gate of Nations, into it.
+pub const CURIA: &str = "data/story/story_curia.glb";
+
 /// Urbs: a whole city in the void, for a story to be told in. As yet it is played as a maze,
 /// with `MAZE_MODEL=data/story/story_urbs.glb`: the round is to find the way across it, robbing its
 /// stores and banks on the way (see [`crate::computer::Kind`] and [`crate::vault`]).
@@ -114,12 +118,13 @@ pub const URBS: Map = Map {
     name: "Urbs",
     path: "data/story/story_urbs.glb",
     about: "A whole city: towers downtown, homes and shops round them, the docks over the canal; \
-            east over a bridge, Ferrum and its works; south, Caelum and its spaceport.",
+            east over a bridge, Ferrum and its works; south, Caelum and its spaceport; north, Curia, \
+            the capital.",
     void: true,
     open_sky: true,
     night: true,
     echoes: true,
-    alongside: &[FERRUM, CAELUM],
+    alongside: &[FERRUM, CAELUM, CURIA],
 };
 
 /// The places a story could be told in.
