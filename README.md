@@ -121,6 +121,12 @@ the crate makes.
 
 29 October 2026:
 
+- **The droids hold the pistol in both hands as a shooter does**: both arms reach forward to it,
+  the left hand on the left of the grip over the right fingertips, its fingers round the front
+  over the right hand's and its thumb forward along the frame, rather than clamping the right
+  wrist with the forearm across the chest. The droid's arms are short for its long hands, so the
+  right elbow bends a little, the left shoulder rolls forward and the sight sits a little under
+  the eyes, the head tipped down onto it.
 - **The droids' hand wraps the grip**: the right hand set on the pistol with its knuckles down the
   front of the grip and the wrist cocked down off the forearm, each finger closing until it rests
   on the pistol, the middle, ring and little fingers round the grip, the index on the trigger, the
