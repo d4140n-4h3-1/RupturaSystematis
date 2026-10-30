@@ -2002,6 +2002,53 @@ impl Inhabitants {
         })
     }
 
+    /// The two droids nearest the `player`'s feet, within `reach` meters of them, that each walk
+    /// about by themselves - not one of a pair or a group - going about their business, and have
+    /// come within `near` meters of each other: to stop and talk, if they will.
+    pub fn meeting(&self, player: Vector3<f32>, reach: f32, near: f32) -> Option<(usize, usize)> {
+        let lone: Vec<usize> = (0..self.droids.len())
+            .filter(|&n| {
+                let droid = &self.droids[n];
+                !droid.leads && droid.partner.is_none() && droid.witness.is_none() && droid.with.is_none()
+            })
+            .filter(|&n| self.at_ease(&[n], player, reach))
+            .collect();
+        let away = |n: usize| flat(self.droids[n].feet - player).norm();
+        lone.iter()
+            .enumerate()
+            .flat_map(|(i, &n)| lone[i + 1..].iter().map(move |&m| (n, m)))
+            .filter(|&(n, m)| flat(self.droids[n].feet - self.droids[m].feet).norm() < near)
+            .min_by(|a, b| (away(a.0) + away(a.1)).total_cmp(&(away(b.0) + away(b.1))))
+    }
+
+    /// Whether the `n`th droid and the `m`th, stopped to talk with each other, are still at it -
+    /// nothing else has taken either of them up - and within `reach` meters of the `player`'s
+    /// feet, to be heard.
+    pub fn still_meeting(&self, n: usize, m: usize, player: Vector3<f32>, reach: f32) -> bool {
+        [(n, m), (m, n)].iter().all(|&(a, b)| {
+            self.droids.get(a).is_some_and(|droid| {
+                droid.talking
+                    && droid.with == Some(b)
+                    && !droid.down
+                    && droid.alert.is_none()
+                    && droid.warned == 0
+                    && droid.pursuit.is_none()
+                    && flat(droid.feet - player).norm() < reach
+            })
+        })
+    }
+
+    /// Lets the `n`th droid and the `m`th, stopped to talk with each other, go on their ways -
+    /// those of them still talking with the other: one taken up by something else since is left
+    /// to it.
+    pub fn part(&mut self, n: usize, m: usize) {
+        for (a, b) in [(n, m), (m, n)] {
+            if self.droids.get(a).is_some_and(|droid| droid.with == Some(b)) {
+                self.set_talking(a, false);
+            }
+        }
+    }
+
     /// Whether the `n`th droid speaks for its pair or group: the first of them still standing -
     /// the one leading it, unless that is down - or one walking about by itself.
     pub fn speaks_for_group(&self, n: usize) -> bool {

@@ -134,6 +134,22 @@ struct Talk {
     next_in: f32,
 }
 
+/// Two droids walking about by themselves that have met near the player and stopped to talk (see
+/// [`MazeGame::meet`]): the two, the first to say the first line; which of the meetings; the line
+/// next to be said; and in how long, in seconds.
+#[derive(Debug, Clone, PartialEq)]
+struct Meet {
+    pair: [usize; 2],
+    meeting: usize,
+    line: usize,
+    next_in: f32,
+}
+
+/// How near each other two droids have to come to stop and talk, in meters; and how long between
+/// one such meeting and the next, in seconds, from least to most.
+const MEET_NEAR: f32 = 3.0;
+const MEET_EVERY: (f32, f32) = (12.0, 30.0);
+
 /// A witness being questioned by a sentry it has come to (see [`MazeGame::question`]): where the
 /// shooting was, whether it knows who did it, how far the questioning has got - the sentry asking,
 /// the witness answering, the sentry saying what it makes of it - and how long till the next
@@ -609,6 +625,21 @@ pub struct MazeGame {
     #[visit(skip)]
     #[reflect(hidden)]
     last_talk: Option<(usize, usize)>,
+    /// Two droids stopped to talk near the player, if they have; how long till another two are
+    /// looked for, in seconds; and which meeting was had last, and between which two, who do not
+    /// stop for another straight away (see [`MazeGame::meet`]).
+    #[visit(skip)]
+    #[reflect(hidden)]
+    meeting: Option<Meet>,
+    #[visit(skip)]
+    #[reflect(hidden)]
+    last_met: Option<[usize; 2]>,
+    #[visit(skip)]
+    #[reflect(hidden)]
+    meet_in: f32,
+    #[visit(skip)]
+    #[reflect(hidden)]
+    last_meeting: Option<usize>,
     /// In capture the flag, whether the player has the enemy's flag, to bring home.
     #[visit(skip)]
     #[reflect(hidden)]
@@ -963,6 +994,7 @@ impl MazeGame {
         let scene = &mut ctx.scenes[self.scene];
         self.inhabitants.clear(&mut scene.graph);
         self.talk = None;
+        self.meeting = None;
         self.firewalls.clear(&mut scene.graph);
         for computer in &mut self.computers {
             computer.hide(&mut scene.graph);
@@ -1186,6 +1218,7 @@ impl MazeGame {
         // Everyone is put down afresh for the new round, away from where the player starts.
         self.inhabitants.clear(&mut scene.graph);
         self.talk = None;
+        self.meeting = None;
         if let Some(shots) = self.shots.as_mut() {
             shots.clear(&mut scene.graph);
         }
@@ -1630,6 +1663,8 @@ impl MazeGame {
             // Out of the way first: the new maze's survey would take them for walls.
             self.inhabitants.clear(&mut ctx.scenes[self.scene].graph);
             self.talk = None;
+            self.meeting = None;
+        self.meeting = None;
             self.level.clear(&mut ctx.scenes[self.scene]);
             self.set_banner(ctx, "");
             self.phase = Phase::Loading;
@@ -2616,6 +2651,7 @@ impl MazeGame {
             self.bark_anyway(n, name, mood);
         }
         self.talk_among(ctx);
+        self.meet(ctx);
         // In capture the flag, a droid going after one of the other side says so, and the
         // droids' shots leave their pistols.
         for n in engaged {
@@ -2736,6 +2772,70 @@ impl MazeGame {
         talk.next_in = TALK_PAUSE + line.says.len() as f32 * TALK_PER_LETTER;
         talk.line += 1;
         self.talk = Some(talk);
+    }
+
+    /// Now and then has two droids that walk about by themselves, and have come close to each
+    /// other near the player, stop and talk: they stand facing each other and say the lines of
+    /// one of the meetings their kinds can have - never the one had last - in turn, each in the
+    /// time it takes to say, and go on their ways. Either taken up by something else, or the
+    /// player gone off, and they break off.
+    fn meet(&mut self, ctx: &mut PluginContext) {
+        let player = self.player.feet(&ctx.scenes[self.scene].graph);
+        let Some(mut meet) = self.meeting.take() else {
+            self.meet_in -= ctx.dt;
+            if self.meet_in > 0.0 {
+                return;
+            }
+            self.meet_in = TALK_RETRY;
+            let Some((n, m)) = self.inhabitants.meeting(player, TALK_HEARD, MEET_NEAR) else {
+                return;
+            };
+            if self.last_met.is_some_and(|met| met.contains(&n) && met.contains(&m)) {
+                return;
+            }
+            let kind = |n: usize| self.inhabitants.who(n).map_or(0, |(character, _)| character);
+            let mut meetings = self
+                .script
+                .as_ref()
+                .map(|script| script.meetings_between(kind(n), kind(m)))
+                .unwrap_or_default();
+            if meetings.len() > 1 {
+                meetings.retain(|&(i, _)| Some(i) != self.last_meeting);
+            }
+            if meetings.is_empty() {
+                return;
+            }
+            let (meeting, swapped) = meetings[self.rng().below(meetings.len())];
+            let pair = if swapped { [m, n] } else { [n, m] };
+            self.last_meeting = Some(meeting);
+            self.last_met = Some(pair);
+            self.inhabitants.talk_with(n, m);
+            Log::info(format!("Droids {pair:?} meet and talk"));
+            // A moment to stop and turn to each other before the first line.
+            self.meeting = Some(Meet { pair, meeting, line: 0, next_in: TALK_PAUSE });
+            return;
+        };
+        let [first, second] = meet.pair;
+        let line = self
+            .script
+            .as_ref()
+            .and_then(|script| script.meetings.get(meet.meeting)?.lines.get(meet.line).cloned())
+            .filter(|_| self.inhabitants.still_meeting(first, second, player, TALK_HEARD * 1.5));
+        meet.next_in -= ctx.dt;
+        if meet.next_in > 0.0 && line.is_some() {
+            self.meeting = Some(meet);
+            return;
+        }
+        let Some(line) = line else {
+            self.inhabitants.part(first, second);
+            self.meet_in = crate::inhabitants::between(self.rng(), MEET_EVERY);
+            return;
+        };
+        let n = meet.pair[meet.line % 2];
+        self.say_bark(n, &line, Mood::Normal);
+        meet.next_in = TALK_PAUSE + line.says.len() as f32 * TALK_PER_LETTER;
+        meet.line += 1;
+        self.meeting = Some(meet);
     }
 
     /// Has the `n`th droid say its bark called `name`, if its kind has one, feeling `mood`: out

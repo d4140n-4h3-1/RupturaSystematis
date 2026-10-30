@@ -43,6 +43,9 @@
 //! code, and `{exit_far}` and `{exit_way}`, how far off the exit is and which way. Each is put in
 //! System Latin where the droid says it, and in English where the meaning is given.
 //!
+//! Two droids walking about by themselves can also meet near the player and stop to talk: the
+//! script's [`Meeting`]s, each between two kinds of droid, said by one and then the other in turn.
+//!
 //! [`screen`] draws it all.
 
 pub mod screen;
@@ -275,6 +278,10 @@ fn one() -> f32 {
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 pub struct Script {
     pub characters: Vec<Character>,
+    /// What two droids walking about by themselves say when they meet, near the player, and stop
+    /// to talk.
+    #[serde(default)]
+    pub meetings: Vec<Meeting>,
     /// How many droids live in a level they are in; the game's own number, without.
     #[serde(default)]
     pub inhabitants: Option<usize>,
@@ -284,7 +291,43 @@ pub struct Script {
     pub crowd: bool,
 }
 
+/// What two droids walking about by themselves say when they meet: lines said one after the
+/// other, by the first and then the second, in turn.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct Meeting {
+    /// The kinds of droid it is between, by name: the first says the first line. An empty name
+    /// is any kind.
+    #[serde(default)]
+    pub between: [String; 2],
+    pub lines: Vec<Bark>,
+}
+
+impl Meeting {
+    /// Whether droids of the kinds called `first` and `second` can have it, the first saying its
+    /// first line.
+    pub fn between(&self, first: &str, second: &str) -> bool {
+        let is = |kind: &String, name: &str| kind.is_empty() || kind == name;
+        is(&self.between[0], first) && is(&self.between[1], second)
+    }
+}
+
 impl Script {
+    /// The meetings two droids of the kinds `a` and `b` can have: each one's place in
+    /// `meetings`, and whether `b` is the one to say its first line.
+    pub fn meetings_between(&self, a: usize, b: usize) -> Vec<(usize, bool)> {
+        let name = |n: usize| self.characters.get(n).map_or("", |c| c.name.as_str());
+        let (a, b) = (name(a), name(b));
+        self.meetings
+            .iter()
+            .enumerate()
+            .filter_map(|(i, meeting)| match (meeting.between(a, b), meeting.between(b, a)) {
+                (true, _) => Some((i, false)),
+                (false, true) => Some((i, true)),
+                _ => None,
+            })
+            .collect()
+    }
+
     /// The conversations in the file at `path`, as long as every reply leads somewhere there is.
     pub fn load(path: &str) -> Result<Self, String> {
         let text = crate::platform::read_to_string(path)?;
@@ -336,6 +379,16 @@ impl Script {
                         }
                         _ => (),
                     }
+                }
+            }
+        }
+        for (i, meeting) in self.meetings.iter().enumerate() {
+            if meeting.lines.is_empty() {
+                problems.push(format!("meeting {i} has no lines"));
+            }
+            for kind in meeting.between.iter().filter(|kind| !kind.is_empty()) {
+                if !self.characters.iter().any(|character| &character.name == kind) {
+                    problems.push(format!("meeting {i} is between {kind}, a kind there is not"));
                 }
             }
         }
@@ -797,6 +850,21 @@ mod tests {
     fn the_droids_conversations_load() {
         let script = Script::load(SCRIPT).unwrap();
         assert!(!script.characters.is_empty());
+    }
+
+    #[test]
+    fn in_urbs_any_two_kinds_walking_by_themselves_have_meetings_the_first_named_speaking_first() {
+        let script = Script::load(URBS_SCRIPT).unwrap();
+        let kind = |name: &str| script.characters.iter().position(|c| c.name == name).unwrap();
+        let (explorer, repairer, sentry) = (kind("Explorator"), kind("Reparator"), kind("Defendator"));
+        for (a, b) in [(explorer, repairer), (repairer, explorer), (explorer, explorer), (repairer, repairer), (sentry, explorer)] {
+            assert!(script.meetings_between(a, b).len() >= 3, "{a} and {b} meet");
+        }
+        // The explorer has the first line of its meeting with a repairer, whichever met which.
+        let only = |(i, _): &(usize, bool)| script.meetings[*i].between == ["Explorator".to_string(), "Reparator".to_string()];
+        assert_eq!(script.meetings_between(explorer, repairer).into_iter().find(only).map(|m| m.1), Some(false));
+        assert_eq!(script.meetings_between(repairer, explorer).into_iter().find(only).map(|m| m.1), Some(true));
+        assert!(script.meetings.iter().all(|m| m.lines.len() >= 3 && m.lines.iter().all(|l| !l.means.is_empty())));
     }
 
     #[test]

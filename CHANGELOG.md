@@ -6,6 +6,10 @@ What changed in Ruptura Systematis, newest first. How to play it is in the [READ
 
 - **The rifle is blue**: its glow, its sight's glass, its chamber, its bolts and the light at its
   muzzle, where the pistol's are green.
+- **Droids talk to each other**: two walking about by themselves that meet near you now and
+  then stop, face each other and talk - an explorer telling a repair droid the street light is
+  out, a sentry asking a passer-by whether it has seen the thief, two repair droids counting
+  last night's broken terminals - twelve conversations in System Latin, with subtitles.
 - **Select fire**: X takes the rifle from semi-automatic to a three-round burst to full auto
   and round again; the HUD shows which after its name. The mouse wheel changes guns.
 - **The rifle is carried across the chest** at the ready, and on the move: its muzzle turned to

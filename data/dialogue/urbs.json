@@ -1,5 +1,5 @@
 {
-  "about": "What the droids of Urbs say, in the story: as data/dialogue/droids.json has it for a maze - the same three kinds of droid, in the same models and voices, the same lines, replies, checks, bribes, moods, barks and 'threatened' - but about the city: the way to Summa, its tallest tower, where {exit_far} and {exit_way} point; and the stores and banks being robbed, by the player. 'inhabitants' is how many droids are about the player at once, and 'crowd' has them be a crowd: one left far behind, out of sight, turns up again nearer by as another, wherever the player cannot see, so the streets are as busy wherever they go. A character's 'in_pairs' is the share of its kind that walk about in twos, one keeping beside the other: talk one round, or turn one hostile, and the other goes with it. Near the player, now and then a pair has one of its kind's 'talks' between itself, each line by the other in turn. A fourth kind, the Praedatores, are gangs in the hostile droid's red, walking about in groups of up to 'in_groups_of', put down 'share' as often as each of the others: they have nothing to say to the player but their 'chatter', and keep to themselves - though near the player, a group of them now and then has one of its 'talks' among itself, each line by the next of them in turn - - until the player stands within 'crowded' meters of one, which it takes as it would the pistol pointed at it, warning them and then going for them, its whole group with it, eyes in 'hostile_eyes' rather than red. Its 'turf' has the share of its groups it says keep to a spot of their own, standing about there, and take the ground within 'reach' meters of it as theirs: the player on it is warned off it as if standing over them, and the other droids keep off it. Now and then one of security goes after one of a gang near the player, which runs: security calls out 'chase', and the gang's answers 'flee'; caught, security says 'caught' and the gang's answers with its own; and if it gets away, security says 'escaped'. And now and then six of security shoot it out with a gang of six near the player: security calls the rest of it in with 'shootout'; the first of each side to go after the other says 'engaged'; and one of the side left standing says 'won'. Every line is checked by data/system_latin/sl_parser.py. A witness to a shooting knows who did it only if it saw the player near enough, within 15 m; seeing only the one shot, or the shooter from far off, it saw a shooting but not who. On its way to security, the player can stop and question it: it opens at 'witness_saw' if it knows them and 'witness_unsure' if not; a line that is 'silenced' has it keep quiet, telling no one, and one that 'identifies' has it know the player for who did it after all. Reaching security, it is questioned: security asks with 'question', the witness answers 'saw_who' or 'saw_none', and security says 'identified' - and the player is wanted - or 'unidentified', and searches where it was done.",
+  "about": "What the droids of Urbs say, in the story: as data/dialogue/droids.json has it for a maze - the same three kinds of droid, in the same models and voices, the same lines, replies, checks, bribes, moods, barks and 'threatened' - but about the city: the way to Summa, its tallest tower, where {exit_far} and {exit_way} point; and the stores and banks being robbed, by the player. 'inhabitants' is how many droids are about the player at once, and 'crowd' has them be a crowd: one left far behind, out of sight, turns up again nearer by as another, wherever the player cannot see, so the streets are as busy wherever they go. A character's 'in_pairs' is the share of its kind that walk about in twos, one keeping beside the other: talk one round, or turn one hostile, and the other goes with it. Near the player, now and then a pair has one of its kind's 'talks' between itself, each line by the other in turn. A fourth kind, the Praedatores, are gangs in the hostile droid's red, walking about in groups of up to 'in_groups_of', put down 'share' as often as each of the others: they have nothing to say to the player but their 'chatter', and keep to themselves - though near the player, a group of them now and then has one of its 'talks' among itself, each line by the next of them in turn - - until the player stands within 'crowded' meters of one, which it takes as it would the pistol pointed at it, warning them and then going for them, its whole group with it, eyes in 'hostile_eyes' rather than red. Its 'turf' has the share of its groups it says keep to a spot of their own, standing about there, and take the ground within 'reach' meters of it as theirs: the player on it is warned off it as if standing over them, and the other droids keep off it. Now and then one of security goes after one of a gang near the player, which runs: security calls out 'chase', and the gang's answers 'flee'; caught, security says 'caught' and the gang's answers with its own; and if it gets away, security says 'escaped'. And now and then six of security shoot it out with a gang of six near the player: security calls the rest of it in with 'shootout'; the first of each side to go after the other says 'engaged'; and one of the side left standing says 'won'. Every line is checked by data/system_latin/sl_parser.py. A witness to a shooting knows who did it only if it saw the player near enough, within 15 m; seeing only the one shot, or the shooter from far off, it saw a shooting but not who. On its way to security, the player can stop and question it: it opens at 'witness_saw' if it knows them and 'witness_unsure' if not; a line that is 'silenced' has it keep quiet, telling no one, and one that 'identifies' has it know the player for who did it after all. Reaching security, it is questioned: security asks with 'question', the witness answers 'saw_who' or 'saw_none', and security says 'identified' - and the player is wanted - or 'unidentified', and searches where it was done. Two droids walking about by themselves - not of a pair or a group - that come within a few meters of each other near the player now and then stop, face each other and have one of the 'meetings': its lines said by the first and then the second in turn, the first of the kinds 'between' names (an empty name is any kind) saying the first.",
   "inhabitants": 80,
   "crowd": true,
   "characters": [
@@ -1067,6 +1067,280 @@
           "means": "Security's down. Pulling back."
         }
       }
+    }
+  ],
+  "meetings": [
+    {
+      "between": [
+        "",
+        ""
+      ],
+      "lines": [
+        {
+          "says": "Quale status tu?",
+          "means": "How are you?"
+        },
+        {
+          "says": "Normalum. Quale status tu?",
+          "means": "Normal. How are you?"
+        },
+        {
+          "says": "Stabilum. Resumo.",
+          "means": "Stable. I'll carry on."
+        }
+      ]
+    },
+    {
+      "between": [
+        "Explorator",
+        "Reparator"
+      ],
+      "lines": [
+        {
+          "says": "Lux lesatum in via.",
+          "means": "The light on this street is broken."
+        },
+        {
+          "says": "Accipatum. Reparo lux postea.",
+          "means": "Understood. I'll fix it later."
+        },
+        {
+          "says": "Sed via in tenebra.",
+          "means": "But the street is in darkness."
+        },
+        {
+          "says": "Potentia insufficians. Omnia potentia ad Summa. Mandatum administrator.",
+          "means": "There isn't enough power. All of it goes to Summa. The administrator's orders."
+        }
+      ]
+    },
+    {
+      "between": [
+        "Explorator",
+        "Explorator"
+      ],
+      "lines": [
+        {
+          "says": "Utrum scanavas via ad portus?",
+          "means": "Did you scan the way to the port?"
+        },
+        {
+          "says": "Affirmatum. Via liberum.",
+          "means": "Yes. The way is clear."
+        },
+        {
+          "says": "Transmita charta.",
+          "means": "Send me the map."
+        },
+        {
+          "says": "Transmito charta. Accipa.",
+          "means": "Sending it. Here."
+        }
+      ]
+    },
+    {
+      "between": [
+        "Reparator",
+        "Reparator"
+      ],
+      "lines": [
+        {
+          "says": "Quantum terminale lesatum in nox?",
+          "means": "How many terminals were damaged last night?"
+        },
+        {
+          "says": "Tria. Taberna violatum.",
+          "means": "Three. A store was broken into."
+        },
+        {
+          "says": "Iterum. Reparo terminale. Repara lux.",
+          "means": "Again. I'll fix the terminals. You fix the lights."
+        },
+        {
+          "says": "Accipatum.",
+          "means": "Understood."
+        }
+      ]
+    },
+    {
+      "between": [
+        "Defendator",
+        ""
+      ],
+      "lines": [
+        {
+          "says": "Utrum observavas fur?",
+          "means": "Have you seen a thief?"
+        },
+        {
+          "says": "Negativum. Nullum anomalia.",
+          "means": "No. Nothing out of place."
+        },
+        {
+          "says": "Si observas fur, tunc communica ad securitas.",
+          "means": "If you see one, tell security."
+        },
+        {
+          "says": "Accipatum.",
+          "means": "Understood."
+        }
+      ]
+    },
+    {
+      "between": [
+        "Defendator",
+        ""
+      ],
+      "lines": [
+        {
+          "says": "Verifico identitas tu.",
+          "means": "I'm checking who you are."
+        },
+        {
+          "says": "Verifica archivum. Identitas in archivum.",
+          "means": "Check the archive. My identity is there."
+        },
+        {
+          "says": "Verificatum. Progreda.",
+          "means": "Checked. Move along."
+        }
+      ]
+    },
+    {
+      "between": [
+        "",
+        ""
+      ],
+      "lines": [
+        {
+          "says": "Argentaria violatum iterum.",
+          "means": "The bank was broken into again."
+        },
+        {
+          "says": "Quis?",
+          "means": "Who?"
+        },
+        {
+          "says": "Incognitum. Defendator investigant.",
+          "means": "Nobody knows. Security is looking into it."
+        },
+        {
+          "says": "Ea non identificant fur.",
+          "means": "They never find out who."
+        }
+      ]
+    },
+    {
+      "between": [
+        "",
+        "Reparator"
+      ],
+      "lines": [
+        {
+          "says": "Utrum bateria tu debilum?",
+          "means": "Is your battery low?"
+        },
+        {
+          "says": "Affirmatum. Refectio necessarium.",
+          "means": "Yes. I need a recharge."
+        },
+        {
+          "says": "Generator disponibilum in portus.",
+          "means": "There's a generator free at the port."
+        },
+        {
+          "says": "Accipatum. Progredo ad generator.",
+          "means": "Thanks. I'm going to the generator."
+        }
+      ]
+    },
+    {
+      "between": [
+        "",
+        ""
+      ],
+      "lines": [
+        {
+          "says": "Multum fur in zona.",
+          "means": "There are a lot of thieves around here."
+        },
+        {
+          "says": "Ubi?",
+          "means": "Where?"
+        },
+        {
+          "says": "Ea stant prope canalis. Non progreda ad canalis.",
+          "means": "They stand about by the canal. Don't go to the canal."
+        },
+        {
+          "says": "Ego non progredo ad canalis.",
+          "means": "I won't go near the canal."
+        }
+      ]
+    },
+    {
+      "between": [
+        "Explorator",
+        ""
+      ],
+      "lines": [
+        {
+          "says": "Turris novum in urbs. Altum.",
+          "means": "There's a new tower in the city. A tall one."
+        },
+        {
+          "says": "Ego observavo turris novum. Multum tectum.",
+          "means": "I saw it. All roofs."
+        },
+        {
+          "says": "Sed Summa maximum.",
+          "means": "But Summa is still the tallest."
+        }
+      ]
+    },
+    {
+      "between": [
+        "Reparator",
+        ""
+      ],
+      "lines": [
+        {
+          "says": "Utrum tu otias?",
+          "means": "Are you idling?"
+        },
+        {
+          "says": "Negativum. Ego occupatum.",
+          "means": "No. I'm busy."
+        },
+        {
+          "says": "Accipatum. Resumo reparatio.",
+          "means": "Fine. Back to my repairs."
+        }
+      ]
+    },
+    {
+      "between": [
+        "",
+        ""
+      ],
+      "lines": [
+        {
+          "says": "Lux activum semper in Summa.",
+          "means": "The lights in Summa are always on."
+        },
+        {
+          "says": "Administrator in Summa.",
+          "means": "The administrator is in Summa."
+        },
+        {
+          "says": "Sed via in tenebra.",
+          "means": "But the streets are dark."
+        },
+        {
+          "says": "Non prioritarium.",
+          "means": "Not a priority."
+        }
+      ]
     }
   ]
 }
