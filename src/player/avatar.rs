@@ -402,20 +402,23 @@ const PISTOL_PARTS: GunParts = GunParts {
     screen: "gun_hud",
     shell: "projectile_source",
     core: "projectile_source.001",
+    glass: GLASS_GREEN,
 };
-/// The rifle's: its reflex sight's glass, and the chamber in its receiver.
+/// The rifle's: its reflex sight's glass, and the chamber in its receiver, blue.
 const RIFLE_PARTS: GunParts = GunParts {
     screen: "rifle_hud",
     shell: "rifle_source",
     core: "rifle_source.001",
+    glass: super::pistol::RIFLE_COLOR,
 };
 
-/// The parts of a gun that the droid lights and tumbles, by name.
+/// The parts of a gun that the droid lights and tumbles, by name, and the colour of their glass.
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct GunParts {
     screen: &'static str,
     shell: &'static str,
     core: &'static str,
+    glass: Color,
 }
 /// How fast the shell tumbles about each of its own axes - across, up and ahead - in radians a
 /// second. The core tumbles just as fast the opposite way round: turned back each moment by as
@@ -426,7 +429,8 @@ const SPIN: Vector3<f32> = Vector3::new(1.3, 2.1, 0.8);
 /// glows the screen is as it goes off, as a part of that.
 const FLASH_FADE: f32 = 8.0;
 const FLASH_BRIGHTER: f32 = 2.0;
-/// The glass of the screen and of the shell: green, and see-through, glowing a little by itself.
+/// The glass of the screen and of the shell: the pistol's green, or the rifle's blue, and
+/// see-through, glowing a little by itself.
 /// The pistol's green, `hud_screen` in `cyber_pistol.blend`: (0.02, 1.0, 0.05) in linear light.
 const GLASS_GREEN: Color = Color::opaque(39, 255, 63);
 const SCREEN_TINT: f32 = 0.6;
@@ -518,7 +522,7 @@ struct Crosshair {
 
 /// Gives the droid its own copy of the glowing material of the crosshair on the pistol's
 /// `screen`: the marks below the screen itself, if they glow.
-/// Readies the parts of `gun` named by `parts`: the screen and the shell as see-through green
+/// Readies the parts of `gun` named by `parts`: the screen and the shell as see-through coloured
 /// glass - the model's own see-through shell comes in solid, and would hide the core. Only the
 /// screen itself: the crosshair on it keeps its own solid glow, which flashes with it. Gives the
 /// parts that tumble, each with whether it goes the opposite way round, and the screen's flash.
@@ -530,11 +534,11 @@ fn dress_gun(graph: &mut Graph, gun: Handle<Node>, parts: GunParts) -> (Vec<(Han
         .collect();
     let (screen, shell) = (find(graph, parts.screen), find(graph, parts.shell));
     if let Some(shell) = shell {
-        let glass = green_glass(SHELL_TINT, SHELL_GLOW).build_resource();
+        let glass = gun_glass(parts.glass, SHELL_TINT, SHELL_GLOW).build_resource();
         replace_materials(graph, shell, |_| true, &glass);
     }
     let flash = screen.map(|screen| {
-        let glass = screen_glass().build_resource();
+        let glass = screen_glass(parts.glass).build_resource();
         if let Some(mesh) = graph[screen].cast_mut::<Mesh>() {
             for surface in mesh.surfaces_mut() {
                 surface.set_material(glass.clone());
@@ -600,28 +604,28 @@ fn tumbled(time: f32) -> UnitQuaternion<f32> {
     UnitQuaternion::from_euler_angles(angle.x, angle.y, angle.z)
 }
 
-/// See-through green glass, tinting what is behind it `tint` of the way to green and glowing
+/// See-through glass of `color`, tinting what is behind it `tint` of the way to it and glowing
 /// `glow` brightly. Nothing seen through it is bent: a screen and a shell, not lenses.
-fn green_glass(tint: f32, glow: f32) -> GlassMaterial {
+fn gun_glass(color: Color, tint: f32, glow: f32) -> GlassMaterial {
     GlassMaterial {
-        tint: GLASS_GREEN,
+        tint: color,
         tint_strength: tint,
         index_of_refraction: 1.0,
         distortion: 0.0,
         waviness: 0.0,
-        emission: GLASS_GREEN,
+        emission: color,
         emission_strength: glow,
         ..Default::default()
     }
 }
 
-/// The glass of the pistol's screen: green glass that shows neither what is round it nor the
+/// The glass of a gun's screen, of `color`: glass that shows neither what is round it nor the
 /// lights on it, only what is through it and its own glow - a display, not a window.
-fn screen_glass() -> GlassMaterial {
+fn screen_glass(color: Color) -> GlassMaterial {
     GlassMaterial {
         reflectivity: 0.0,
         specular_strength: 0.0,
-        ..green_glass(SCREEN_TINT, SCREEN_GLOW)
+        ..gun_glass(color, SCREEN_TINT, SCREEN_GLOW)
     }
 }
 /// How quickly the turn that brings the barrel round to the camera catches up with how far it
@@ -1768,6 +1772,8 @@ pub struct Avatar {
     /// in seconds.
     queued: bool,
     since_shot: f32,
+    /// How many shots the droid has fired, all told: for a burst to count them off.
+    fired: u32,
     /// Where the pistol has every bone of the upper body, as of this frame.
     arms_pose: FxHashMap<Handle<Node>, Bone>,
     /// The left arm, which swings with the legs at the ready rather than as the pistol has it;
@@ -2617,6 +2623,7 @@ impl Avatar {
             arms_from: Default::default(),
             arms_blend: 1.0,
             queued: false,
+            fired: 0,
             since_shot: READY_AFTER,
             arms_pose,
             left_arm,
@@ -2891,6 +2898,11 @@ impl Avatar {
         self.rifle_in_hand
     }
 
+    /// How many shots the droid has fired, all told, counted as each is let go.
+    pub(super) fn fired(&self) -> u32 {
+        self.fired
+    }
+
     /// Whether the droid has a rifle.
     pub(super) fn has_rifle(&self) -> bool {
         self.gun_of(true).is_some()
@@ -2993,6 +3005,7 @@ impl Avatar {
                 }
             }
             if next == Arms::Firing(false) {
+                self.fired = self.fired.wrapping_add(1);
                 self.queued = false;
                 self.since_shot = 0.0;
                 self.barrel = barrel.unwrap_or(self.barrel);

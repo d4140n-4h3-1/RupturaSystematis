@@ -196,8 +196,13 @@ pub struct Player {
     confiscated: bool,
     /// The pistol's shots.
     bolts: pistol::Bolts,
-    /// Whether the gun the player wants is the rifle rather than the pistol.
+    /// Whether the gun the player wants is the rifle rather than the pistol; how the rifle
+    /// fires; how many shots of a burst are left to fire; and how many shots the droid had
+    /// fired as of the last frame, to count them off.
     rifle: bool,
+    fire_mode: pistol::FireMode,
+    burst_left: u8,
+    fired_seen: u32,
     /// The pistol and the rifle held in view in first person, once the droid has loaded, as it
     /// has them.
     viewmodels: Vec<viewmodel::Viewmodel>,
@@ -261,6 +266,9 @@ impl Default for Player {
             confiscated: false,
             bolts: Default::default(),
             rifle: false,
+            fire_mode: pistol::FireMode::default(),
+            burst_left: 0,
+            fired_seen: 0,
             viewmodels: Vec::new(),
             in_own_eyes: false,
             noises: Default::default(),

@@ -2,6 +2,15 @@
 
 What changed in Ruptura Systematis, newest first. How to play it is in the [README](README.md).
 
+## 30 October 2026
+
+- **The rifle is blue**: its glow, its sight's glass, its chamber, its bolts and the light at its
+  muzzle, where the pistol's are green.
+- **Select fire**: X takes the rifle from semi-automatic to a three-round burst to full auto
+  and round again; the HUD shows which after its name. The mouse wheel changes guns.
+- **The rifle is carried across the chest** at the ready, and on the move: its muzzle turned to
+  the left and dipped, near parallel to the chest, rather than pointing straight ahead.
+
 ## 29 October 2026
 
 - **The rifle fires faster, and sounds its own**: held down, it fires ten bolts a second, where

@@ -34,9 +34,8 @@ use fyrox::{
 
 /// How long a note stays on screen, in seconds.
 const NOTE_TIME: f32 = 3.0;
-/// The names over the ammo, for the pistol and the rifle.
+/// The name over the ammo before the game says which gun is out.
 const PISTOL_NAME: &str = "CYBER PISTOL";
-const RIFLE_NAME: &str = "CYBER RIFLE";
 /// How often what blinks goes round, in seconds, and how much of that it is showing.
 const BLINK: f32 = 0.6;
 const BLINK_ON: f32 = 0.4;
@@ -76,9 +75,9 @@ pub enum Status {
         /// How much health is left, from 0 to 1, and how long is left of the red flash of a hit,
         /// in seconds.
         health: (f32, f32),
-        /// Whether the pistol is out, and whether it is the rifle instead.
+        /// Whether the pistol is out, and the name of the gun - the rifle's with how it fires.
         armed: bool,
-        rifle: bool,
+        gun: String,
         mouse_captured: bool,
         /// How the droids hunting the player are going about it, if any are, and how many seconds
         /// that has left.
@@ -117,12 +116,11 @@ pub struct Hud {
     /// What the health bar last showed: how full, how long is left of a hit's flash, whether it
     /// was the shield's, and whether the shield could be raised.
     shown_health: Option<(f32, f32, bool, bool)>,
-    /// The gun's ammo, and whether it is showing; and the gun's name over it, and whether it
-    /// was the rifle's.
+    /// The gun's ammo, and whether it is showing; and the gun's name over it, as it was shown.
     ammo: Handle<UiNode>,
     shown_ammo: bool,
     gun_label: Handle<Text>,
-    shown_rifle: bool,
+    shown_gun: String,
     /// The player's credits in the top right, and what it last said.
     credits: Handle<Text>,
     shown_credits: Option<Credits>,
@@ -399,9 +397,9 @@ impl Hud {
         self.note_time = (self.note_time - dt).max(0.0);
         self.blink = (self.blink + dt) % BLINK;
         let blinking_on = self.blink < BLINK_ON;
-        let (text, alarm, breath, health, (armed, rifle), credits, shield, shield_ready) = match status {
-            Status::Loading => ("Loading the maze...".to_string(), None, None, None, (false, false), None, None, false),
-            Status::Blank => (String::new(), None, None, None, (false, false), None, None, false),
+        let (text, alarm, breath, health, (armed, gun), credits, shield, shield_ready) = match status {
+            Status::Loading => ("Loading the maze...".to_string(), None, None, None, (false, None), None, None, false),
+            Status::Blank => (String::new(), None, None, None, (false, None), None, None, false),
             Status::Round {
                 time,
                 best,
@@ -409,7 +407,7 @@ impl Hud {
                 frozen,
                 health,
                 armed,
-                rifle,
+                gun,
                 mouse_captured,
                 alarm,
                 credits,
@@ -430,7 +428,7 @@ impl Hud {
                 if self.note_time > 0.0 {
                     text += &format!("\n{}", self.note);
                 }
-                (text, alarm, Some((breath, frozen)), Some(health), (armed, rifle), Some(credits), shield, shield_ready)
+                (text, alarm, Some((breath, frozen)), Some(health), (armed, Some(gun)), Some(credits), shield, shield_ready)
             }
         };
         ui.send(self.status, TextMessage::Text(text));
@@ -519,10 +517,9 @@ impl Hud {
             ui.send(self.ammo, WidgetMessage::Visibility(armed));
             self.shown_ammo = armed;
         }
-        if rifle != self.shown_rifle {
-            let name = if rifle { RIFLE_NAME } else { PISTOL_NAME };
-            ui.send(self.gun_label, TextMessage::Text(name.to_string()));
-            self.shown_rifle = rifle;
+        if let Some(gun) = gun.filter(|gun| *gun != self.shown_gun) {
+            ui.send(self.gun_label, TextMessage::Text(gun.clone()));
+            self.shown_gun = gun;
         }
     }
 }

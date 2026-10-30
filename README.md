@@ -37,8 +37,9 @@ what you do.
   in the evidence locker. Serve your sentence, or pick the lock (rings of light, each drifting
   round a core), pry up the drain and escape through the tunnels. Down there is a gang's den, and
   a fence who will wipe your record clean for a price.
-- **A pistol and a rifle.** Green energy bolts, held as in Call of Duty in first person. A bolt
-  breaks a droid into pieces, with no blood, and the droid falls as a ragdoll.
+- **A pistol and a rifle.** Green energy bolts from the one and blue from the other, held as in
+  Call of Duty in first person. A bolt breaks a droid into pieces, with no blood, and the droid
+  falls as a ragdoll.
 - **Gangs.** They keep to groups of up to six, guard their turf and their hideouts, and regroup
   when they are broken up.
 - **Five cities, played as one:**
@@ -183,8 +184,9 @@ Pages.
 | Middle mouse (hold) | Swing the camera round the droid to see it from any side    |
 | Right mouse (hold) | Strafe: keep facing ahead whichever way you go; anything faster than a walk is a jog |
 | R                | Draw the pistol, or holster it                                |
-| X, mouse wheel   | Change to the rifle, or back to the pistol: the one out is put away and the other drawn |
-| Left mouse       | Draw the gun; once it is drawn, fire: the pistol a shot a click, the rifle as long as it is held, ten a second |
+| Mouse wheel      | Change to the rifle, or back to the pistol: the one out is put away and the other drawn |
+| X                | The rifle's select fire: semi-automatic, three-round burst or full auto (the HUD says which) |
+| Left mouse       | Draw the gun; once it is drawn, fire: the pistol a shot a click; the rifle a shot a click, three, or as long as it is held, ten a second |
 | Right mouse, drawn | Raise the pistol to aim, rather than hold it at the ready   |
 | E                | Talk to the droid close by and in front of you, or use the computer in front of you |
 | H                | In Urbs, with security after you: put your hands up and go quietly, for a shorter sentence |

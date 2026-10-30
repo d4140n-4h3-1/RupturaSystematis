@@ -33,10 +33,13 @@ use fyrox::{
         base::BaseBuilder,
         collider::Collider,
         graph::Graph,
-        light::{point::PointLightBuilder, BaseLightBuilder},
+        light::{
+            point::{PointLight, PointLightBuilder},
+            BaseLightBuilder,
+        },
         mesh::{
             surface::{SurfaceBuilder, SurfaceData, SurfaceResource},
-            MeshBuilder,
+            Mesh, MeshBuilder,
         },
         node::Node,
         sound::{Sound as SoundNode, SoundBufferResource, SoundBuilder, Status},
@@ -48,6 +51,39 @@ use fyrox::{
 pub const PISTOL_SOUNDS: &str = "data/sounds/pistol_formants.json";
 /// The rifle's: its own `shot`, heavier and shorter, the bolt humming as the pistol's does.
 pub const RIFLE_SOUNDS: &str = "data/sounds/rifle_formants.json";
+
+/// How the rifle fires while the trigger is held: once a pull, three shots a pull, or for as
+/// long as it is held. X goes from one to the next; the pistol fires once a pull, always.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FireMode {
+    Semi,
+    Burst,
+    #[default]
+    Auto,
+}
+
+impl FireMode {
+    /// The one X goes on to.
+    pub fn next(self) -> Self {
+        match self {
+            Self::Semi => Self::Burst,
+            Self::Burst => Self::Auto,
+            Self::Auto => Self::Semi,
+        }
+    }
+
+    /// What the HUD calls it, after the rifle's name.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Semi => "SEMI",
+            Self::Burst => "BURST",
+            Self::Auto => "AUTO",
+        }
+    }
+}
+
+/// How many shots a burst is.
+const BURST: u8 = 3;
 
 /// How long after the mouse wheel changes guns it can change them again, in seconds.
 const WHEEL_REPEAT: f32 = 0.35;
@@ -67,6 +103,10 @@ const BOLT_WIDTH: f32 = 0.05;
 /// itself.
 const BOLT_COLOR: Color = Color::opaque(39, 255, 63);
 const BOLT_GREEN: Vector3<f32> = Vector3::new(0.02, 1.0, 0.05);
+/// The rifle's bolts are blue, as its glow is - `BLUE` in `build_cyber_rifle.py`: (0.02, 0.3,
+/// 1.0) in linear light - as a colour, and as the glow.
+pub(super) const RIFLE_COLOR: Color = Color::opaque(39, 149, 255);
+const RIFLE_BLUE: Vector3<f32> = Vector3::new(0.02, 0.3, 1.0);
 /// The glow of the ball at the muzzle, lighting what is round it while the pistol is out: how
 /// bright it is, and how far it reaches, in meters.
 const MUZZLE_BRIGHTNESS: f32 = 0.6;
@@ -131,6 +171,10 @@ pub struct Bolts {
     bolts: Vec<(Handle<Node>, Option<Bolt>)>,
     /// Every bolt's hum, as `bolts` has them, if there is one to hum.
     hums: Vec<Handle<Node>>,
+    /// Every bolt's flash, as `bolts` has them; and how a bolt glows, the pistol's and the
+    /// rifle's: each bolt is given the one it is fired from as it is fired.
+    flashes: Vec<Handle<Node>>,
+    glows: [MaterialResource; 2],
     /// The sound of a shot, and how far off it is heard at full volume, if there is one.
     shot: Option<(SoundBufferResource, f32)>,
     /// The rifle's shot, likewise; and whether the bolt being fired is the rifle's.
@@ -166,11 +210,14 @@ impl Bolts {
             vec![255; 4],
         )
         .map(TextureResource::new_embedded);
-        let mut material = Material::standard();
-        material.set_property("diffuseColor", BOLT_COLOR);
-        material.set_property("emissionStrength", BOLT_GREEN * BOLT_GLOW);
-        material.bind("emissionTexture", white);
-        let material = MaterialResource::new_embedded(material);
+        let glows = [(BOLT_COLOR, BOLT_GREEN), (RIFLE_COLOR, RIFLE_BLUE)].map(|(color, glow)| {
+            let mut material = Material::standard();
+            material.set_property("diffuseColor", color);
+            material.set_property("emissionStrength", glow * BOLT_GLOW);
+            material.bind("emissionTexture", white.clone());
+            MaterialResource::new_embedded(material)
+        });
+        let material = glows[0].clone();
         let sounds = Sounds::load(PISTOL_SOUNDS)
             .inspect_err(|error| fyrox::core::log::Log::err(format!("Pistol: silent, {error}")))
             .ok();
@@ -180,6 +227,7 @@ impl Bolts {
             .ok();
         let rifle_shot = made(rifle_shot.as_ref(), "shot");
         let mut hums = Vec::new();
+        let mut flashes = Vec::new();
         // Drawn out along +Z, the way it flies.
         let shape = SurfaceResource::new_embedded(SurfaceData::make_sphere(
             8,
@@ -201,6 +249,7 @@ impl Bolts {
                 .with_radius(FLASH_REACH)
                 .build(graph)
                 .to_base();
+                flashes.push(flash);
                 let mut base = BaseBuilder::new()
                     .with_cast_shadows(false)
                     .with_visibility(false)
@@ -228,6 +277,8 @@ impl Bolts {
         Self {
             bolts,
             hums,
+            flashes,
+            glows,
             shot,
             rifle_shot,
             rifle: false,
@@ -293,12 +344,27 @@ impl Bolts {
             landed: None,
             out: false,
         });
-        let node = &mut graph[*mesh];
+        let mesh = *mesh;
+        // Green from the pistol, blue from the rifle.
+        if let Ok(node) = graph.try_get_mut_of_type::<Mesh>(mesh) {
+            for surface in node.surfaces_mut() {
+                surface.set_material(self.glows[self.rifle as usize].clone());
+            }
+        }
+        if let Some(&flash) = self.flashes.get(index) {
+            if let Ok(flash) = graph.try_get_mut_of_type::<PointLight>(flash) {
+                flash.base_light_mut().set_color(if self.rifle { RIFLE_COLOR } else { BOLT_COLOR });
+            }
+        }
+        let Some((_, bolt)) = self.bolts.get(index) else {
+            return;
+        };
+        let node = &mut graph[mesh];
         node.local_transform_mut()
             .set_rotation(UnitQuaternion::face_towards(&direction, &Vector3::y()));
         node.set_visibility(true);
         if let Some(bolt) = bolt {
-            show(graph, *mesh, bolt);
+            show(graph, mesh, bolt);
         }
         self.hum(graph, index, true);
         // The shot sounds where it leaves, once, and is gone: the rifle's, from the rifle.
@@ -522,20 +588,24 @@ impl Player {
                 .try_get(pistol)
                 .is_ok_and(|node| node.global_visibility())
         };
-        let from_view = self.viewmodel_nodes(graph).filter(|&(pistol, _)| showing(pistol));
+        let from_view = self.viewmodel_nodes(graph).filter(|&(_, pistol, _)| showing(pistol));
         let from_droid = self.avatar.as_ref().and_then(|avatar| {
             [false, true]
                 .into_iter()
-                .filter_map(|rifle| avatar.gun_nodes(rifle))
-                .find(|&(pistol, _)| showing(pistol))
+                .filter_map(|rifle| avatar.gun_nodes(rifle).map(|(pistol, muzzle)| (rifle, pistol, muzzle)))
+                .find(|&(_, pistol, _)| showing(pistol))
         });
-        let muzzle = from_view
-            .or(from_droid)
-            .and_then(|(_, muzzle)| graph.try_get(muzzle).ok())
-            .map(|muzzle| muzzle.global_position());
-        if let Ok(lamp) = graph.try_get_mut(self.pistol_lamp) {
-            if let Some(at) = muzzle {
+        let muzzle = from_view.or(from_droid).and_then(|(rifle, _, muzzle)| {
+            Some((rifle, graph.try_get(muzzle).ok()?.global_position()))
+        });
+        // Green at the pistol's muzzle, blue at the rifle's.
+        if let Ok(lamp) = graph.try_get_mut_of_type::<PointLight>(self.pistol_lamp) {
+            if let Some((rifle, at)) = muzzle {
                 lamp.local_transform_mut().set_position(at);
+                let color = if rifle { RIFLE_COLOR } else { BOLT_COLOR };
+                if lamp.base_light_ref().color() != color {
+                    lamp.base_light_mut().set_color(color);
+                }
             }
             if lamp.visibility() != muzzle.is_some() {
                 lamp.set_visibility(muzzle.is_some());
@@ -555,9 +625,31 @@ impl Player {
 
     /// Changes from the pistol to the rifle, or back, if the droid has a rifle: the one out is
     /// put away and the other drawn; with neither out, the other is the one drawn next.
-    pub(super) fn change_gun(&mut self) {
+    fn change_gun(&mut self) {
         if self.avatar.as_ref().is_some_and(|avatar| avatar.has_rifle()) {
             self.rifle = !self.rifle;
+        }
+    }
+
+    /// Goes on to the rifle's next way of firing, if the rifle is the gun out or to be drawn:
+    /// the pistol has only the one.
+    pub(super) fn select_fire(&mut self) {
+        if self.rifle {
+            self.fire_mode = self.fire_mode.next();
+            self.burst_left = 0;
+        }
+    }
+
+    /// How the rifle fires.
+    pub fn fire_mode(&self) -> FireMode {
+        self.fire_mode
+    }
+
+    /// The name of the gun the player has, or will draw, and for the rifle how it fires.
+    pub fn gun_name(&self) -> String {
+        match self.rifle {
+            true => format!("CYBER RIFLE  {}", self.fire_mode.name()),
+            false => "CYBER PISTOL".to_string(),
         }
     }
 
@@ -596,6 +688,10 @@ impl Player {
         if self.armed {
             self.keys.trigger = true;
             self.keys.trigger_held = true;
+            let rifle = self.avatar.as_ref().is_some_and(|avatar| avatar.rifle_in_hand());
+            if rifle && self.fire_mode == FireMode::Burst && self.burst_left == 0 {
+                self.burst_left = BURST;
+            }
         } else {
             self.armed = true;
         }
@@ -606,13 +702,27 @@ impl Player {
         self.keys.trigger_held = false;
     }
 
-    /// Holding the trigger down with the rifle out keeps pulling it: the droid fires as often
-    /// as the rifle lets it (see [`Avatar::arm`](super::avatar::Avatar)).
+    /// Holding the trigger down with the rifle out on full auto keeps pulling it: the droid
+    /// fires as often as the rifle lets it (see [`Avatar::arm`](super::avatar::Avatar)). A burst
+    /// keeps pulling it, held or not, till its three shots are fired; semi fires once a pull.
     pub(super) fn hold_trigger(&mut self) {
-        let rifle = self.avatar.as_ref().is_some_and(|avatar| avatar.rifle_in_hand());
-        if self.keys.trigger_held && self.armed && rifle && !self.confiscated {
-            self.keys.trigger = true;
+        let Some(avatar) = self.avatar.as_ref() else {
+            return;
+        };
+        let (rifle, fired) = (avatar.rifle_in_hand(), avatar.fired());
+        let shots = fired.wrapping_sub(self.fired_seen) as u8;
+        self.fired_seen = fired;
+        self.burst_left = self.burst_left.saturating_sub(shots);
+        if !(self.armed && rifle && !self.confiscated) {
+            self.burst_left = 0;
+            return;
         }
+        let pulling = match self.fire_mode {
+            FireMode::Semi => false,
+            FireMode::Burst => self.burst_left > 0,
+            FireMode::Auto => self.keys.trigger_held,
+        };
+        self.keys.trigger |= pulling;
     }
 }
 
@@ -724,5 +834,13 @@ mod tests {
         player.pull_trigger();
         assert_eq!(player.gait(), Gait::Running);
         assert!(player.strafing());
+    }
+
+    #[test]
+    fn select_fire_goes_from_semi_to_burst_to_auto_and_round_again() {
+        assert_eq!(FireMode::default(), FireMode::Auto);
+        let modes: Vec<FireMode> = std::iter::successors(Some(FireMode::Semi), |mode| Some(mode.next())).take(4).collect();
+        assert_eq!(modes, [FireMode::Semi, FireMode::Burst, FireMode::Auto, FireMode::Semi]);
+        assert_eq!(FireMode::Burst.name(), "BURST");
     }
 }

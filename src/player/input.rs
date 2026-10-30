@@ -35,9 +35,10 @@ pub(super) struct Keys {
     pub(super) strafe: bool,
     /// Whether R is down, so that key repeat does not draw or holster the pistol again.
     pistol: bool,
-    /// Whether X is down, likewise for changing guns; and how long since the wheel last changed
-    /// them, in seconds, so that one turn of it - many steps on a touchpad - changes them once.
-    change_gun: bool,
+    /// Whether X is down, likewise for changing how the rifle fires; and how long since the
+    /// wheel last changed guns, in seconds, so that one turn of it - many steps on a touchpad -
+    /// changes them once.
+    select_fire: bool,
     pub(super) since_wheel: f32,
     /// Whether the left mouse button is held down, pulled with a gun out: the rifle keeps firing.
     pub(super) trigger_held: bool,
@@ -102,10 +103,10 @@ impl Player {
                 self.keys.pistol = pressed;
             }
             KeyCode::KeyX => {
-                if pressed && !self.keys.change_gun {
-                    self.change_gun();
+                if pressed && !self.keys.select_fire {
+                    self.select_fire();
                 }
-                self.keys.change_gun = pressed;
+                self.keys.select_fire = pressed;
             }
             KeyCode::KeyZ => {
                 if pressed && !self.keys.crawl {

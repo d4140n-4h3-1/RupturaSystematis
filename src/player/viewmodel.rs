@@ -309,9 +309,10 @@ impl Player {
         self.viewmodels.iter().find(|v| v.shown(graph))
     }
 
-    /// The copy held in first person that can be seen, and its muzzle, if one can.
-    pub(super) fn viewmodel_nodes(&self, graph: &Graph) -> Option<(Handle<Node>, Handle<Node>)> {
-        self.shown_viewmodel(graph).map(|v| (v.pistol, v.muzzle))
+    /// The copy held in first person that can be seen - whether it is the rifle, the copy, and
+    /// its muzzle - if one can.
+    pub(super) fn viewmodel_nodes(&self, graph: &Graph) -> Option<(bool, Handle<Node>, Handle<Node>)> {
+        self.shown_viewmodel(graph).map(|v| (v.rifle, v.pistol, v.muzzle))
     }
 
     /// Holds the pistol and the rifle in first person for another `dt`.

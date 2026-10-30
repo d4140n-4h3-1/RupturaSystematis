@@ -1463,7 +1463,7 @@ impl MazeGame {
                 frozen: self.player.stamina_frozen(),
                 health: (self.health.left, self.health.flash),
                 armed: self.player.armed(),
-                rifle: self.player.rifle(),
+                gun: self.player.gun_name(),
                 // The menu and the conversation say what to do next, so the hint to click would
                 // only be in the way.
                 mouse_captured: self.mouse_captured

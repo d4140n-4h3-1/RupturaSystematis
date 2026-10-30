@@ -1913,6 +1913,7 @@ impl Battle {
                 raised: raised && tall.is_none_or(|(_, _, out)| out),
                 look,
                 way,
+                rifle: false,
             };
             droid.avatar.animate(graph, going, dt);
         }
