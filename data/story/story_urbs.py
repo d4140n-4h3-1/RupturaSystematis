@@ -28,7 +28,8 @@ just past it, over the west gate to its pad, where Subura's takes it on.
 
 Precincts, where security takes those it arrests: three blocks have one on a corner (precinct_<n>),
 up on a podium climbed by a flight from the street - a hall with the desk (precinct_<n>_desk) and
-the evidence locker (precinct_<n>_locker), a gate (precinct_<n>_gate) through to the
+the evidence locker (precinct_<n>_locker, before it; the lockers themselves, the game's model, at
+precinct_<n>_lockers), a gate (precinct_<n>_gate) through to the
 cell block - a firewall - a corridor where the guard keeps (precinct_<n>_guard), and the cells
 along the back (cell_<n>_<c>, each behind a firewall, cell_wall_<n>_<c>, which drops). The first cell's back
 wall has a loose panel (tunnel_panel_<n>, tunnel_<n> before it) onto a stair down into a tunnel
@@ -1372,10 +1373,11 @@ def precinct(m, poly, street_faces):
     br_town.marker(f"precinct_{n}_desk", spot.x, spot.y, P, facing(-v))
     spot = a + u * (w / 2) + v * (desk - 1.1)
     br_town.marker(f"precinct_{n}", spot.x, spot.y, P, facing(v))
-    locker = quad(a, u, v, t, t + 0.6, desk + 1.1, hall - 0.2)
-    m.prism(locker, P, P + 2.0, m.facades["bronze"], col=m.cover)
-    m.line(a + u * (t + 0.62) + v * (desk + 1.1) + up * (P + 1.0), a + u * (t + 0.62) + v * (hall - 0.2) + up * (P + 1.0),
-           red, width=0.04, light=False)
+    # The lockers are the game's, a model of their own (data/locker.glb, built by
+    # ~/Documents/blender/precinct/build_locker.py), 1.9 m along the wall, 0.6 m out and 2 m high: put
+    # with its back to the wall, facing out along precinct_<n>_lockers.
+    spot = a + u * t + v * ((desk + 1.1 + hall - 0.2) / 2)
+    br_town.marker(f"precinct_{n}_lockers", spot.x, spot.y, P, facing(u))
     spot = a + u * (t + 1.1) + v * ((desk + 1.1 + hall - 0.2) / 2)
     br_town.marker(f"precinct_{n}_locker", spot.x, spot.y, P, facing(-u))
     # The gate's wall across, and its gate: a firewall, which the game makes glow.

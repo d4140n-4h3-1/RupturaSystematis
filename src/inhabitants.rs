@@ -3536,6 +3536,7 @@ impl Inhabitants {
                 pushing: true,
                 strafing: false,
                 armed: droid.armed_left > 0.0 && !droid.down,
+                rifle: false,
                 trigger,
                 raised: target.is_some() || held.is_some(),
                 look,

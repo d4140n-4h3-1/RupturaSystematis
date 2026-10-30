@@ -196,8 +196,11 @@ pub struct Player {
     confiscated: bool,
     /// The pistol's shots.
     bolts: pistol::Bolts,
-    /// The pistol held in view in first person, once the droid has loaded, if it has one.
-    viewmodel: Option<viewmodel::Viewmodel>,
+    /// Whether the gun the player wants is the rifle rather than the pistol.
+    rifle: bool,
+    /// The pistol and the rifle held in view in first person, once the droid has loaded, as it
+    /// has them.
+    viewmodels: Vec<viewmodel::Viewmodel>,
     /// Whether the view is from the droid's own eyes, as of this frame: first person, and
     /// neither swung round the droid nor closed in on someone talked to.
     in_own_eyes: bool,
@@ -257,7 +260,8 @@ impl Default for Player {
             armed: false,
             confiscated: false,
             bolts: Default::default(),
-            viewmodel: None,
+            rifle: false,
+            viewmodels: Vec::new(),
             in_own_eyes: false,
             noises: Default::default(),
             talk: Default::default(),
@@ -523,6 +527,7 @@ impl Player {
             // In cover, the wall sets which way the droid faces.
             strafing: can_move && self.strafing() && !self.in_cover(),
             armed: self.armed,
+            rifle: self.rifle,
             trigger: can_move && keys.trigger,
             raised: can_move && keys.strafe,
             look: (look.y.clamp(-1.0, 1.0).asin(), look.x.atan2(look.z)),

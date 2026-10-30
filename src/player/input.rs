@@ -35,6 +35,10 @@ pub(super) struct Keys {
     pub(super) strafe: bool,
     /// Whether R is down, so that key repeat does not draw or holster the pistol again.
     pistol: bool,
+    /// Whether X is down, likewise for changing guns; and how long since the wheel last changed
+    /// them, in seconds, so that one turn of it - many steps on a touchpad - changes them once.
+    change_gun: bool,
+    pub(super) since_wheel: f32,
     /// Whether the trigger has been pulled since the last update.
     pub(super) trigger: bool,
 }
@@ -95,6 +99,12 @@ impl Player {
                 }
                 self.keys.pistol = pressed;
             }
+            KeyCode::KeyX => {
+                if pressed && !self.keys.change_gun {
+                    self.change_gun();
+                }
+                self.keys.change_gun = pressed;
+            }
             KeyCode::KeyZ => {
                 if pressed && !self.keys.crawl {
                     self.posture = self.posture.crawl_toggled();
@@ -110,6 +120,7 @@ impl Player {
         if let Some(held) = self.keys.shift_held.as_mut() {
             *held += dt;
         }
+        self.keys.since_wheel += dt;
     }
 
     /// Holds the right mouse button down, or lets it go: while it is down, the droid strafes,

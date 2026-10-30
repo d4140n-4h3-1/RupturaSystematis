@@ -39,6 +39,7 @@ use crate::{
     hud::{self, Hud, Status},
     loading::{LoadingScreen, Step},
     train::{Train, LINES, TRAIN_MODEL},
+    locker::LOCKER_MODEL,
     inhabitants::{Alert, Grouping, Inhabitants, Livery, News, Rival, Threat, HOSTILE_MODEL},
     layout::{self, Rng},
     level::Level,
@@ -318,6 +319,10 @@ pub struct MazeGame {
     #[visit(skip)]
     #[reflect(hidden)]
     train_model: Option<ModelResource>,
+    /// The precincts' evidence lockers, in Urbs, to go into the level (see [`crate::locker`]).
+    #[visit(skip)]
+    #[reflect(hidden)]
+    locker_model: Option<ModelResource>,
     #[visit(skip)]
     #[reflect(hidden)]
     trains: Vec<Train>,
@@ -880,6 +885,7 @@ impl MazeGame {
                 let alongside = ctf::map_at(&path).map_or(&[][..], |map| map.alongside);
                 self.alongside = alongside.iter().map(|&other| (other.to_string(), resources.request::<Model>(other))).collect();
                 self.train_model = (path == ctf::URBS.path).then(|| resources.request::<Model>(TRAIN_MODEL));
+                self.locker_model = (path == ctf::URBS.path).then(|| resources.request::<Model>(LOCKER_MODEL));
                 self.sky = ctf::map_at(&path)
                     .filter(|map| map.void || map.night)
                     .map(|_| resources.request::<Texture>(ctf::VOID_SKY));
@@ -978,6 +984,7 @@ impl MazeGame {
         self.model = None;
         self.alongside.clear();
         self.train_model = None;
+        self.locker_model = None;
         for train in self.trains.drain(..) {
             train.remove(&mut ctx.scenes[self.scene].graph);
         }
@@ -1012,7 +1019,7 @@ impl MazeGame {
         if let Some(model) = &self.model {
             let fbx = self.model_path.to_ascii_lowercase().ends_with(".fbx");
             let alongside: Vec<&ModelResource> = self.alongside.iter().map(|(_, model)| model).collect();
-            self.level = Level::from_model(model, &alongside, fbx, scene, &mut self.doubled);
+            self.level = Level::from_model(model, &alongside, self.locker_model.as_ref(), fbx, scene, &mut self.doubled);
             return Ok(());
         }
         let Some(prefabs) = self.prefabs.clone() else {
@@ -1212,6 +1219,7 @@ impl MazeGame {
         self.stop_picking(ctx);
         let grid = self.level.grid.as_mut().map(|(grid, _)| grid);
         self.level.precincts.reset(&mut ctx.scenes[self.scene].graph, grid);
+        self.level.lockers.reset(&mut ctx.scenes[self.scene].graph);
         self.phase = Phase::Playing;
         self.set_banner(ctx, "");
         self.start_royale(ctx);
@@ -1407,6 +1415,7 @@ impl MazeGame {
             (Some(model), _) => {
                 let mut models = vec![(self.model_path.clone(), model.clone())];
                 models.extend(self.alongside.iter().cloned());
+                models.extend(self.locker_model.iter().map(|model| (LOCKER_MODEL.to_string(), model.clone())));
                 models.extend(self.firewalls.models());
                 models.extend(self.doors.models());
                 models
@@ -1454,6 +1463,7 @@ impl MazeGame {
                 frozen: self.player.stamina_frozen(),
                 health: (self.health.left, self.health.flash),
                 armed: self.player.armed(),
+                rifle: self.player.rifle(),
                 // The menu and the conversation say what to do next, so the hint to click would
                 // only be in the way.
                 mouse_captured: self.mouse_captured
@@ -3504,6 +3514,7 @@ impl MazeGame {
         self.player.teleport_feet(graph, middle + Vector3::new(0.0, 0.1, 0.0), to_wall.x.atan2(to_wall.z));
         self.player.set_confiscated(true);
         self.locker = Some(p);
+        self.level.lockers.set_open(self.level.precincts.precincts[p].number, false);
         self.health = Health::default();
         let mut custody = Custody::new(p, c, self.wanted);
         if again {
@@ -3583,6 +3594,7 @@ impl MazeGame {
             let locker = self.level.precincts.precincts[p].locker;
             if (locker - feet).xz().norm() < LOCKER_REACH && (locker.y - feet.y).abs() < 1.5 {
                 self.locker = None;
+                self.level.lockers.set_open(self.level.precincts.precincts[p].number, true);
                 self.player.set_confiscated(false);
                 self.hud.show_note("Your pistol, back from the evidence locker".to_string());
                 return true;
@@ -3713,6 +3725,7 @@ impl MazeGame {
         }
         let dt = ctx.dt;
         self.level.precincts.flicker(self.round_time);
+        self.level.lockers.update(&mut ctx.scenes[self.scene].graph, dt);
         // With MAZE_ARREST=<seconds>, to try jail out: that far into the round, the player is
         // arrested where they stand; and with MAZE_PICK as well, starts picking their cell's lock.
         let arrest_at = platform::var("MAZE_ARREST").and_then(|s| s.trim().parse::<f32>().ok());
@@ -5236,6 +5249,12 @@ impl Plugin for MazeGame {
                     }
                     if held && !self.menu.is_open() && !self.busy() {
                         self.want_mouse = true;
+                    }
+                }
+                WindowEvent::MouseWheel { .. } => {
+                    // The wheel changes guns, either way it turns.
+                    if !self.menu.is_open() && !self.busy() && self.mouse_captured {
+                        self.player.wheel_gun();
                     }
                 }
                 WindowEvent::MouseInput {

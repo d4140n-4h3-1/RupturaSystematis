@@ -10,6 +10,7 @@ use crate::{
     distant::{self, Distant},
     ferry::Ferries,
     lift::Lifts,
+    locker::Lockers,
     roads::{RoadPlan, Roads},
     escape::Tunnels,
     precinct::Precincts,
@@ -104,6 +105,8 @@ pub struct Level {
     pub vaults: Vaults,
     /// The precincts, where security takes those it arrests: see [`Precincts`].
     pub precincts: Precincts,
+    /// Their evidence lockers: see [`Lockers`].
+    pub lockers: Lockers,
     /// The escape tunnels under a city, and the hatches down to them: see [`Tunnels`].
     pub tunnels: Tunnels,
     /// The roads the droids keep off but to cross, on a map with streets: see [`Roads`].
@@ -129,16 +132,17 @@ impl Level {
             maze.depth,
             pieces.len()
         ));
-        let mut level = Self::prepare(root, scene, false, doubled);
+        let mut level = Self::prepare(root, scene, false, None, doubled);
         level.culling = Some(culling);
         Ok(level)
     }
 
     /// Puts a fixed maze model into the scene, and `alongside` it others, where they stand: one
-    /// level of them all, as one.
+    /// level of them all, as one; and `lockers`, the precincts' evidence lockers, where it marks them.
     pub fn from_model(
         model: &ModelResource,
         alongside: &[&ModelResource],
+        lockers: Option<&ModelResource>,
         fbx: bool,
         scene: &mut Scene,
         doubled: &mut FxHashSet<u64>,
@@ -153,15 +157,17 @@ impl Level {
                 .local_transform_mut()
                 .set_scale(Vector3::repeat(FBX_SCALE));
         }
-        Self::prepare(root, scene, true, doubled)
+        Self::prepare(root, scene, true, lockers, doubled)
     }
 
     /// Readies a level under `root` for play: its glass, its lamps' places, and a static
-    /// collider that follows its shape. `fixed` is for a maze model rather than tiles.
+    /// collider that follows its shape. `fixed` is for a maze model rather than tiles, and
+    /// `lockers` the precincts' evidence lockers' model, to put in it.
     fn prepare(
         root: Handle<Node>,
         scene: &mut Scene,
         fixed: bool,
+        lockers: Option<&ModelResource>,
         doubled: &mut FxHashSet<u64>,
     ) -> Self {
         // World transforms must be up to date before anything is measured in world space.
@@ -196,6 +202,13 @@ impl Level {
             )),
             None => Log::info("Maze: nothing to find in the level, using a marker of our own"),
         }
+
+        // The lockers, now that what to find is known, which they are not; before their glow is
+        // claimed and the level's shape taken, which they are part of.
+        let lockers = match lockers {
+            Some(model) if fixed => Lockers::place(scene, root, model, &markers),
+            _ => Lockers::default(),
+        };
 
         // The lamps' glass, while it can still be told by its colour, to go with the full detail
         // of a city far off.
@@ -276,6 +289,7 @@ impl Level {
             lifts,
             vaults,
             precincts,
+            lockers,
             tunnels,
             roads: None,
         }
@@ -333,6 +347,7 @@ impl Level {
     pub fn cull(&mut self, graph: &mut Graph, player: Vector3<f32>) {
         self.distant.update(graph, player);
         self.lifts.show_near(graph, player);
+        self.lockers.show_near(graph, player);
         if let Some(culling) = self.culling.as_mut() {
             culling.update(graph, player);
         } else if self.lamps_on {

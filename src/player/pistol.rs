@@ -47,6 +47,8 @@ use fyrox::{
 /// The pistol's sounds, as formants: `shot` as a bolt leaves, and `hum` as it flies.
 pub const PISTOL_SOUNDS: &str = "data/sounds/pistol_formants.json";
 
+/// How long after the mouse wheel changes guns it can change them again, in seconds.
+const WHEEL_REPEAT: f32 = 0.35;
 /// How many bolts can be in the air at once. Firing another takes the one that has flown
 /// longest.
 const BOLTS: usize = 8;
@@ -472,7 +474,8 @@ impl Player {
     /// Where the pistol is pointed while it is out: from where the view is, along the middle of
     /// it, one meter long. None while it is put away.
     pub fn pistol_aim(&self, graph: &Graph) -> Option<(Vector3<f32>, Vector3<f32>)> {
-        let out = self.avatar.as_ref()?.pistol_out(graph);
+        let avatar = self.avatar.as_ref()?;
+        let out = avatar.gun_out(graph, false) || avatar.gun_out(graph, true);
         let camera = &graph[self.camera];
         out.then(|| (camera.global_position(), camera.look_vector().normalize()))
     }
@@ -495,16 +498,13 @@ impl Player {
                 .try_get(pistol)
                 .is_ok_and(|node| node.global_visibility())
         };
-        let from_view = self
-            .viewmodel
-            .as_ref()
-            .and_then(|view| view.pistol_nodes())
-            .filter(|&(pistol, _)| showing(pistol));
-        let from_droid = self
-            .avatar
-            .as_ref()
-            .and_then(|avatar| avatar.pistol_nodes())
-            .filter(|&(pistol, _)| showing(pistol));
+        let from_view = self.viewmodel_nodes(graph).filter(|&(pistol, _)| showing(pistol));
+        let from_droid = self.avatar.as_ref().and_then(|avatar| {
+            [false, true]
+                .into_iter()
+                .filter_map(|rifle| avatar.gun_nodes(rifle))
+                .find(|&(pistol, _)| showing(pistol))
+        });
         let muzzle = from_view
             .or(from_droid)
             .and_then(|(_, muzzle)| graph.try_get(muzzle).ok())
@@ -527,6 +527,27 @@ impl Player {
     /// Takes the pistol out, or puts it away.
     pub(super) fn toggle_pistol(&mut self) {
         self.armed = !self.armed && !self.confiscated;
+    }
+
+    /// Changes from the pistol to the rifle, or back, if the droid has a rifle: the one out is
+    /// put away and the other drawn; with neither out, the other is the one drawn next.
+    pub(super) fn change_gun(&mut self) {
+        if self.avatar.as_ref().is_some_and(|avatar| avatar.has_rifle()) {
+            self.rifle = !self.rifle;
+        }
+    }
+
+    /// Changes guns for a turn of the mouse wheel, unless the wheel has only just changed them.
+    pub fn wheel_gun(&mut self) {
+        if self.keys.since_wheel >= WHEEL_REPEAT {
+            self.keys.since_wheel = 0.0;
+            self.change_gun();
+        }
+    }
+
+    /// Whether the gun the player has, or will draw, is the rifle.
+    pub fn rifle(&self) -> bool {
+        self.rifle
     }
 
     /// Takes the pistol off the player, put away, or gives it back.

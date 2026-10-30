@@ -10253,5 +10253,28 @@
     "bone": "DEF-shin.R"
    }
   }
+ },
+ "rifle": {
+  "about": "As the pistol's: the rifle node shows from the draw's show_frame and hides after the holster's hide_after_frame; the bolt leaves the muzzle node on the fire clip's shot_frame. Both hands hold it at the ready too.",
+  "node": "rifle",
+  "muzzle_node": "rifle_muzzle",
+  "parent_bone": "DEF-hand.R",
+  "clips": {
+   "draw": "droid_rifle_draw",
+   "aim": "droid_rifle_aim",
+   "fire": "droid_rifle_fire",
+   "holster": "droid_rifle_holster",
+   "ready": "droid_rifle_ready",
+   "ready_to_aim": "droid_rifle_ready_to_aim",
+   "aim_to_ready": "droid_rifle_aim_to_ready"
+  },
+  "moving": {
+   "walk": "droid_rifle_walk",
+   "jog": "droid_rifle_jog",
+   "run": "droid_rifle_run"
+  },
+  "show_frame": 6,
+  "hide_after_frame": 9,
+  "shot_frame": 2
  }
 }

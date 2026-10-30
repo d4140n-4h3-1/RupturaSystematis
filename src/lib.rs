@@ -42,6 +42,7 @@ mod shield;
 mod firewall;
 mod ferry;
 mod lift;
+mod locker;
 mod glow;
 mod fixtures;
 mod formants;

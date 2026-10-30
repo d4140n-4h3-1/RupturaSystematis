@@ -918,6 +918,7 @@ Pages.
 | Middle mouse (hold) | Swing the camera round the droid to see it from any side    |
 | Right mouse (hold) | Strafe: keep facing ahead whichever way you go; anything faster than a walk is a jog |
 | R                | Draw the pistol, or holster it                                |
+| X, mouse wheel   | Change to the rifle, or back to the pistol: the one out is put away and the other drawn |
 | Left mouse       | Draw the pistol; once it is drawn, fire                       |
 | Right mouse, drawn | Raise the pistol to aim, rather than hold it at the ready   |
 | E                | Talk to the droid close by and in front of you, or use the computer in front of you |

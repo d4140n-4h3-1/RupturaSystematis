@@ -1,4 +1,5 @@
-//! The pistol in first person, held as in Call of Duty: a copy of the droid's own pistol, carried
+//! The pistol in first person - and the rifle, held as it is - as in Call of Duty: a copy of the
+//! droid's own pistol, carried
 //! by the camera low and to the right, pointing a little in towards the middle of the view.
 //! Holding the right mouse button brings it up into the middle to aim, with the screen on top of
 //! it - crosshair and all - square in the middle of the view, as a sight.
@@ -22,16 +23,39 @@ use fyrox::{
     scene::{base::BaseBuilder, graph::Graph, node::Node, pivot::PivotBuilder},
 };
 
-/// How big the pistol is held, as a scale on the model's own pistol: 24 cm long.
-const SIZE: f32 = 0.1;
-/// Where it is held from the camera, in the camera's own terms - +z ahead, +y up, and -x to the
-/// right - at the hip, and raised to aim. Raised, the middle of its screen is on the middle of
-/// the view: the screen sits this far above the pistol's middle line and this far back from its
-/// middle, in the model's own terms.
-const HIP: Vector3<f32> = Vector3::new(-0.13, -0.17, 0.3);
-const SCREEN_ABOVE: f32 = 1.05;
-const SCREEN_BEHIND: f32 = 0.95;
-const SIGHT_DISTANCE: f32 = 0.28;
+/// How a gun is held in first person.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) struct Hold {
+    /// How big it is held, as a scale on the model's own gun.
+    size: f32,
+    /// Where it is held from the camera, in the camera's own terms - +z ahead, +y up, and -x to
+    /// the right - at the hip.
+    hip: Vector3<f32>,
+    /// Raised to aim, the middle of its sight is on the middle of the view, this far ahead, in
+    /// meters: the sight sits `screen_above` its grip's middle line and `screen_behind` its
+    /// middle, in the model's own terms.
+    screen_above: f32,
+    screen_behind: f32,
+    sight_distance: f32,
+}
+
+/// The pistol: 24 cm long, its screen on top (`SIGHT` in build_cyber_pistol.py).
+const PISTOL: Hold = Hold {
+    size: 0.1,
+    hip: Vector3::new(-0.13, -0.17, 0.3),
+    screen_above: 1.05,
+    screen_behind: 0.95,
+    sight_distance: 0.28,
+};
+/// The rifle: 74 cm long, held lower at the hip, and raised to look through its reflex sight
+/// (`SIGHT` in build_cyber_rifle.py), its stock below the view, into the shoulder.
+const RIFLE: Hold = Hold {
+    size: 0.1,
+    hip: Vector3::new(-0.12, -0.2, 0.22),
+    screen_above: 1.29,
+    screen_behind: 0.55,
+    sight_distance: 0.3,
+};
 /// How far off the pistol at the hip points to cross the middle of the view, in meters.
 const CONVERGE: f32 = 8.0;
 /// How much lower and nearer it is put away, in meters, and how far its muzzle is dipped, in
@@ -61,9 +85,12 @@ const RADIUS: f32 = 0.1;
 const ONTO_EASING: f32 = 15.0;
 pub(super) const SIGHTED: f32 = 100.0;
 
-/// The pistol held in first person.
+/// The pistol held in first person, or the rifle.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct Viewmodel {
+    /// Whether it is the rifle, and how it is held.
+    rifle: bool,
+    hold: Hold,
     /// What the camera carries, turned and moved to hold the pistol.
     grip: Handle<Node>,
     /// The copy of the pistol in it, and its muzzle.
@@ -92,16 +119,17 @@ fn quarter_turn() -> UnitQuaternion<f32> {
     UnitQuaternion::from_axis_angle(&Vector3::y_axis(), -std::f32::consts::FRAC_PI_2)
 }
 
-/// Where the middle of its screen is in the grip, held `at` and turned by `turn`.
-fn sight(at: Vector3<f32>, turn: UnitQuaternion<f32>) -> Vector3<f32> {
-    at + turn * quarter_turn() * Vector3::new(-SCREEN_BEHIND, SCREEN_ABOVE, 0.0).scale(SIZE)
+/// Where the middle of its screen is in the grip, held as `hold` has it, `at` and turned by
+/// `turn`.
+fn sight(hold: &Hold, at: Vector3<f32>, turn: UnitQuaternion<f32>) -> Vector3<f32> {
+    at + turn * quarter_turn() * Vector3::new(-hold.screen_behind, hold.screen_above, 0.0).scale(hold.size)
 }
 
 /// The turn, about its sight, that brings the barrel of the pistol held `aim` of the way in, its
 /// muzzle `muzzle_at` in the grip, round onto what the middle of the view is on, `sighted` ahead.
-fn onto(aim: f32, muzzle_at: Vector3<f32>, sighted: f32) -> UnitQuaternion<f32> {
-    let (at, turn) = held(aim);
-    let (sight, target) = (sight(at, turn), Vector3::z() * sighted);
+fn onto(hold: &Hold, aim: f32, muzzle_at: Vector3<f32>, sighted: f32) -> UnitQuaternion<f32> {
+    let (at, turn) = held(hold, aim);
+    let (sight, target) = (sight(hold, at, turn), Vector3::z() * sighted);
     // Turning it about the sight moves the muzzle a little too: a few goes settle it to within
     // a small part of a degree.
     let mut onto = UnitQuaternion::identity();
@@ -114,31 +142,29 @@ fn onto(aim: f32, muzzle_at: Vector3<f32>, sighted: f32) -> UnitQuaternion<f32> 
     onto
 }
 
-/// Where the pistol is held, and how it is turned, `aim` of the way in from the hip to aiming.
-fn held(aim: f32) -> (Vector3<f32>, UnitQuaternion<f32>) {
+/// Where the gun is held, as `hold` has it, and how it is turned, `aim` of the way in from the
+/// hip to aiming.
+fn held(hold: &Hold, aim: f32) -> (Vector3<f32>, UnitQuaternion<f32>) {
+    let hip = hold.hip;
     let sights = Vector3::new(
         0.0,
-        -SCREEN_ABOVE * SIZE,
-        SIGHT_DISTANCE + SCREEN_BEHIND * SIZE,
+        -hold.screen_above * hold.size,
+        hold.sight_distance + hold.screen_behind * hold.size,
     );
     // At the hip it points in and up at the middle of the view, some way off.
-    let hip_turn = UnitQuaternion::from_axis_angle(&Vector3::y_axis(), (-HIP.x).atan2(CONVERGE))
-        * UnitQuaternion::from_axis_angle(&Vector3::x_axis(), HIP.y.atan2(CONVERGE));
-    let at = HIP + (sights - HIP) * aim;
+    let hip_turn = UnitQuaternion::from_axis_angle(&Vector3::y_axis(), (-hip.x).atan2(CONVERGE))
+        * UnitQuaternion::from_axis_angle(&Vector3::x_axis(), hip.y.atan2(CONVERGE));
+    let at = hip + (sights - hip) * aim;
     let turn = hip_turn.slerp(&UnitQuaternion::identity(), aim);
     (at, turn)
 }
 
 impl Viewmodel {
-    /// The copy of the pistol, and its muzzle.
-    pub(super) fn pistol_nodes(&self) -> Option<(Handle<Node>, Handle<Node>)> {
-        Some((self.pistol, self.muzzle))
-    }
-
-    /// A copy of `avatar`'s pistol, carried by `camera`, out of sight until it is drawn. None if
-    /// the droid has no pistol.
-    pub(super) fn new(graph: &mut Graph, avatar: &Avatar, camera: Handle<Node>) -> Option<Self> {
-        let (original, original_muzzle) = avatar.pistol_nodes()?;
+    /// A copy of `avatar`'s pistol - or its rifle, if `rifle` - carried by `camera`, out of
+    /// sight until it is drawn. None if the droid has no such gun.
+    pub(super) fn new(graph: &mut Graph, avatar: &Avatar, camera: Handle<Node>, rifle: bool) -> Option<Self> {
+        let hold = if rifle { RIFLE } else { PISTOL };
+        let (original, original_muzzle) = avatar.gun_nodes(rifle)?;
         let (pistol, map) = graph.copy_node_inplace(original, &mut |_, _| true);
         let mut muzzle = original_muzzle;
         if !map.try_map(&mut muzzle) {
@@ -163,9 +189,11 @@ impl Viewmodel {
         node.local_transform_mut()
             .set_position(Vector3::zeros())
             .set_rotation(quarter_turn())
-            .set_scale(Vector3::repeat(SIZE));
-        let muzzle_at = quarter_turn() * graph[muzzle].local_transform().position().scale(SIZE);
+            .set_scale(Vector3::repeat(hold.size));
+        let muzzle_at = quarter_turn() * graph[muzzle].local_transform().position().scale(hold.size);
         Some(Self {
+            rifle,
+            hold,
             grip,
             pistol,
             muzzle,
@@ -220,7 +248,7 @@ impl Viewmodel {
         // where it is: from the muzzle to there.
         self.onto = self
             .onto
-            .slerp(&onto(self.aim, self.muzzle_at, sighted), ease(ONTO_EASING));
+            .slerp(&onto(&self.hold, self.aim, self.muzzle_at, sighted), ease(ONTO_EASING));
         self.place(graph);
         // Every part of it as the droid's own: the ball at the muzzle tumbling, and the screen
         // lit.
@@ -247,8 +275,8 @@ impl Viewmodel {
 
     /// Puts it where it is held, as far up, in, tucked and kicked as it is.
     fn place(&self, graph: &mut Graph) {
-        let (at, turn) = held(self.aim);
-        let sight = sight(at, turn);
+        let (at, turn) = held(&self.hold, self.aim);
+        let sight = sight(&self.hold, at, turn);
         let (at, turn) = (sight + self.onto * (at - sight), self.onto * turn);
         // Put away, or tucked down out of a wall's way: lower, nearer, and dipped. Smoothed at
         // both ends, so it eases up and down.
@@ -264,41 +292,57 @@ impl Viewmodel {
 }
 
 impl Player {
-    /// Makes the pistol to hold in first person, from the droid's.
+    /// Makes the pistol and the rifle to hold in first person, from the droid's.
     pub(super) fn make_viewmodel(&mut self, graph: &mut Graph) {
-        self.viewmodel = self
-            .avatar
-            .as_ref()
-            .and_then(|avatar| Viewmodel::new(graph, avatar, self.camera.transmute()));
+        let camera = self.camera.transmute();
+        self.viewmodels = match self.avatar.as_ref() {
+            Some(avatar) => [false, true]
+                .into_iter()
+                .filter_map(|rifle| Viewmodel::new(graph, avatar, camera, rifle))
+                .collect(),
+            None => Vec::new(),
+        };
     }
 
-    /// Holds the pistol in first person for another `dt`.
+    /// The gun held in first person that can be seen, if one can.
+    fn shown_viewmodel(&self, graph: &Graph) -> Option<&Viewmodel> {
+        self.viewmodels.iter().find(|v| v.shown(graph))
+    }
+
+    /// The copy held in first person that can be seen, and its muzzle, if one can.
+    pub(super) fn viewmodel_nodes(&self, graph: &Graph) -> Option<(Handle<Node>, Handle<Node>)> {
+        self.shown_viewmodel(graph).map(|v| (v.pistol, v.muzzle))
+    }
+
+    /// Holds the pistol and the rifle in first person for another `dt`.
     pub(super) fn hold_pistol(&mut self, graph: &mut Graph, dt: f32) {
         let Some(avatar) = self.avatar.as_ref() else {
             return;
         };
-        let out = avatar.pistol_out(graph);
         let camera = &graph[self.camera];
         let (eye, ahead) = (camera.global_position(), camera.look_vector());
         let sighted = self.distance_to_hit(graph, eye, ahead.normalize(), SIGHTED);
         let (seen, raised) = (self.in_own_eyes, self.keys.strafe);
-        if let Some(viewmodel) = self.viewmodel.as_mut() {
+        for viewmodel in &mut self.viewmodels {
+            let out = avatar.gun_out(graph, viewmodel.rifle);
             viewmodel.hold(graph, seen, out, raised, sighted, dt);
         }
     }
 
-    /// Kicks the pistol held in first person, for a shot that has just left it.
+    /// Kicks the gun held in first person, for a shot that has just left it.
     pub(super) fn kick_pistol(&mut self, graph: &mut Graph) {
-        if let Some(viewmodel) = self.viewmodel.as_mut() {
-            viewmodel.kick(graph);
+        for viewmodel in &mut self.viewmodels {
+            if viewmodel.shown(graph) {
+                viewmodel.kick(graph);
+            }
         }
     }
 
-    /// Where a shot leaves, and which way it goes, one meter long, while the pistol is held in
-    /// first person: from its muzzle, for whatever the middle of the view is looking at. None
-    /// while it is not.
+    /// Where a shot leaves, and which way it goes, one meter long, while a gun is held in first
+    /// person: from its muzzle, for whatever the middle of the view is looking at. None while
+    /// none is.
     pub(super) fn aim_from_view(&self, graph: &Graph) -> Option<(Vector3<f32>, Vector3<f32>)> {
-        let viewmodel = self.viewmodel.as_ref().filter(|v| v.shown(graph))?;
+        let viewmodel = self.shown_viewmodel(graph)?;
         let camera = &graph[self.camera];
         let (eye, ahead) = (camera.global_position(), camera.look_vector().normalize());
         let target = eye + ahead * self.distance_to_hit(graph, eye, ahead, SIGHTED);
@@ -307,13 +351,10 @@ impl Player {
         Some((muzzle, way))
     }
 
-    /// The pistol held in first person, while it can be seen, for the graphics effects: a
-    /// capsule round it, and how far it has moved since the last time this was asked.
+    /// The gun held in first person, while it can be seen, for the graphics effects: a capsule
+    /// round it, and how far it has moved since the last time this was asked.
     pub(super) fn viewmodel_moving(&mut self, graph: &Graph) -> Option<fyrox_gfx::MovingThing> {
-        let viewmodel = self.viewmodel.as_mut()?;
-        if !viewmodel.shown(graph) {
-            return None;
-        }
+        let viewmodel = self.viewmodels.iter_mut().find(|v| v.shown(graph))?;
         let (back, front) = (
             graph[viewmodel.pistol].global_position(),
             graph[viewmodel.muzzle].global_position(),
@@ -338,7 +379,7 @@ mod tests {
 
     #[test]
     fn at_the_hip_it_is_low_and_right_and_points_in_at_the_middle() {
-        let (at, turn) = held(0.0);
+        let (at, turn) = held(&PISTOL, 0.0);
         assert!(
             at.x < 0.0 && at.y < 0.0,
             "low, and to the right (-x): {at:?}"
@@ -353,27 +394,27 @@ mod tests {
 
     #[test]
     fn raised_its_screen_is_in_the_middle_of_the_view() {
-        let (at, turn) = held(1.0);
+        let (at, turn) = held(&PISTOL, 1.0);
         // The screen's middle, in the pistol's own terms, turned the way the pistol is held in
         // the grip: its +x ahead.
         let quarter = -std::f32::consts::FRAC_PI_2;
         let to_screen = UnitQuaternion::from_axis_angle(&Vector3::y_axis(), quarter)
-            * Vector3::new(-SCREEN_BEHIND, SCREEN_ABOVE, 0.0)
-            * SIZE;
+            * Vector3::new(-PISTOL.screen_behind, PISTOL.screen_above, 0.0)
+            * PISTOL.size;
         let screen = at + turn * to_screen;
         assert!(screen.xy().norm() < 1.0e-4, "{screen:?}");
-        assert!((screen.z - SIGHT_DISTANCE).abs() < 1.0e-4);
+        assert!((screen.z - PISTOL.sight_distance).abs() < 1.0e-4);
     }
 
     #[test]
     fn its_barrel_comes_round_onto_what_the_middle_of_the_view_is_on() {
         // The model's muzzle: ahead of the grip and above it.
-        let muzzle_at = quarter_turn() * Vector3::new(0.96, 0.64, 0.0).scale(SIZE);
+        let muzzle_at = quarter_turn() * Vector3::new(0.96, 0.64, 0.0).scale(PISTOL.size);
         for aim in [0.0, 0.5, 1.0] {
             for sighted in [1.0, 3.0, SIGHTED] {
-                let (at, turn) = held(aim);
-                let sight = sight(at, turn);
-                let onto = onto(aim, muzzle_at, sighted);
+                let (at, turn) = held(&PISTOL, aim);
+                let sight = sight(&PISTOL, at, turn);
+                let onto = onto(&PISTOL, aim, muzzle_at, sighted);
                 let (at, turn) = (sight + onto * (at - sight), onto * turn);
                 let muzzle = at + turn * muzzle_at;
                 let to = (Vector3::z() * sighted - muzzle).normalize();
@@ -382,7 +423,7 @@ mod tests {
                     "aim {aim}, {sighted} m"
                 );
                 assert!(
-                    (self::sight(at, turn) - sight).norm() < 1.0e-5,
+                    (self::sight(&PISTOL, at, turn) - sight).norm() < 1.0e-5,
                     "the sight stays put"
                 );
             }
