@@ -46,6 +46,8 @@ use fyrox::{
 
 /// The pistol's sounds, as formants: `shot` as a bolt leaves, and `hum` as it flies.
 pub const PISTOL_SOUNDS: &str = "data/sounds/pistol_formants.json";
+/// The rifle's: its own `shot`, heavier and shorter, the bolt humming as the pistol's does.
+pub const RIFLE_SOUNDS: &str = "data/sounds/rifle_formants.json";
 
 /// How long after the mouse wheel changes guns it can change them again, in seconds.
 const WHEEL_REPEAT: f32 = 0.35;
@@ -131,6 +133,9 @@ pub struct Bolts {
     hums: Vec<Handle<Node>>,
     /// The sound of a shot, and how far off it is heard at full volume, if there is one.
     shot: Option<(SoundBufferResource, f32)>,
+    /// The rifle's shot, likewise; and whether the bolt being fired is the rifle's.
+    rifle_shot: Option<(SoundBufferResource, f32)>,
+    rifle: bool,
     /// What bolts have hit since the game last asked, and where they flew in their last flight.
     struck: Vec<Strike>,
     passed: Vec<Pass>,
@@ -141,7 +146,7 @@ pub struct Bolts {
 fn made(sounds: Option<&Sounds>, name: &str) -> Option<(SoundBufferResource, f32)> {
     let sounds = sounds?;
     let sound = sounds.sounds.get(name).or_else(|| {
-        fyrox::core::log::Log::warn(format!("Pistol: {PISTOL_SOUNDS} has no {name}"));
+        fyrox::core::log::Log::warn(format!("Pistol: no {name} in its sounds"));
         None
     })?;
     Some((formants::buffer(sound, sounds.sample_rate)?, sound.reach))
@@ -170,6 +175,10 @@ impl Bolts {
             .inspect_err(|error| fyrox::core::log::Log::err(format!("Pistol: silent, {error}")))
             .ok();
         let (shot, hum) = (made(sounds.as_ref(), "shot"), made(sounds.as_ref(), "hum"));
+        let rifle_shot = Sounds::load(RIFLE_SOUNDS)
+            .inspect_err(|error| fyrox::core::log::Log::err(format!("Rifle: silent, {error}")))
+            .ok();
+        let rifle_shot = made(rifle_shot.as_ref(), "shot");
         let mut hums = Vec::new();
         // Drawn out along +Z, the way it flies.
         let shape = SurfaceResource::new_embedded(SurfaceData::make_sphere(
@@ -220,6 +229,8 @@ impl Bolts {
             bolts,
             hums,
             shot,
+            rifle_shot,
+            rifle: false,
             struck: Vec::new(),
             passed: Vec::new(),
         }
@@ -243,6 +254,14 @@ impl Bolts {
     /// Fires a bolt from `from` along `direction`, one meter long.
     pub fn fire(&mut self, graph: &mut Graph, from: Vector3<f32>, direction: Vector3<f32>) {
         self.fire_for(graph, from, direction, BOLT_RANGE, false);
+    }
+
+    /// Fires a bolt from the rifle, from `from` along `direction`, one meter long: as
+    /// [`Bolts::fire`], but with the rifle's shot.
+    pub fn fire_rifle(&mut self, graph: &mut Graph, from: Vector3<f32>, direction: Vector3<f32>) {
+        self.rifle = true;
+        self.fire(graph, from, direction);
+        self.rifle = false;
     }
 
     /// Fires a bolt from `from` along `direction`, one meter long, that flies no further than
@@ -282,8 +301,9 @@ impl Bolts {
             show(graph, *mesh, bolt);
         }
         self.hum(graph, index, true);
-        // The shot sounds where it leaves, once, and is gone.
-        if let Some((buffer, reach)) = &self.shot {
+        // The shot sounds where it leaves, once, and is gone: the rifle's, from the rifle.
+        let shot = if self.rifle { self.rifle_shot.as_ref().or(self.shot.as_ref()) } else { self.shot.as_ref() };
+        if let Some((buffer, reach)) = shot {
             SoundBuilder::new(
                 BaseBuilder::new().with_local_transform(
                     TransformBuilder::new().with_local_position(from).build(),
@@ -455,7 +475,11 @@ impl Player {
         }
         let shot = shot.map(|shot| self.aim_from_view(graph).unwrap_or(shot));
         if let Some((muzzle, direction)) = shot {
-            self.bolts.fire(graph, muzzle, direction);
+            if self.avatar.as_ref().is_some_and(|avatar| avatar.rifle_in_hand()) {
+                self.bolts.fire_rifle(graph, muzzle, direction);
+            } else {
+                self.bolts.fire(graph, muzzle, direction);
+            }
             self.make_noise(muzzle, noise::SHOT_NOISE);
         }
         // Each bolt on for another `dt`: what it hits, the droids hear, and the game is told.
@@ -571,8 +595,23 @@ impl Player {
         }
         if self.armed {
             self.keys.trigger = true;
+            self.keys.trigger_held = true;
         } else {
             self.armed = true;
+        }
+    }
+
+    /// Lets the trigger go: the rifle stops firing.
+    pub fn release_trigger(&mut self) {
+        self.keys.trigger_held = false;
+    }
+
+    /// Holding the trigger down with the rifle out keeps pulling it: the droid fires as often
+    /// as the rifle lets it (see [`Avatar::arm`](super::avatar::Avatar)).
+    pub(super) fn hold_trigger(&mut self) {
+        let rifle = self.avatar.as_ref().is_some_and(|avatar| avatar.rifle_in_hand());
+        if self.keys.trigger_held && self.armed && rifle && !self.confiscated {
+            self.keys.trigger = true;
         }
     }
 }

@@ -184,7 +184,7 @@ Pages.
 | Right mouse (hold) | Strafe: keep facing ahead whichever way you go; anything faster than a walk is a jog |
 | R                | Draw the pistol, or holster it                                |
 | X, mouse wheel   | Change to the rifle, or back to the pistol: the one out is put away and the other drawn |
-| Left mouse       | Draw the pistol; once it is drawn, fire                       |
+| Left mouse       | Draw the gun; once it is drawn, fire: the pistol a shot a click, the rifle as long as it is held, ten a second |
 | Right mouse, drawn | Raise the pistol to aim, rather than hold it at the ready   |
 | E                | Talk to the droid close by and in front of you, or use the computer in front of you |
 | H                | In Urbs, with security after you: put your hands up and go quietly, for a shorter sentence |

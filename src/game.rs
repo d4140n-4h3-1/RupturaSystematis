@@ -5224,6 +5224,11 @@ impl Plugin for MazeGame {
                 }
                 WindowEvent::MouseInput {
                     button: MouseButton::Left,
+                    state: ElementState::Released,
+                    ..
+                } => self.player.release_trigger(),
+                WindowEvent::MouseInput {
+                    button: MouseButton::Left,
                     state: ElementState::Pressed,
                     ..
                 } => {

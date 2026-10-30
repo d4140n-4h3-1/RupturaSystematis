@@ -72,6 +72,20 @@ mod tests {
     }
 
     #[test]
+    fn the_rifles_shot_is_made_and_is_shorter_and_deeper_than_the_pistols() {
+        let rifle = Sounds::load("data/sounds/rifle_formants.json").unwrap();
+        let pistol = Sounds::load("data/sounds/pistol_formants.json").unwrap();
+        let (shot, pistol_shot) = (&rifle.sounds["shot"], &pistol.sounds["shot"]);
+        let samples = synth::make(shot, rifle.sample_rate);
+        let peak = samples.iter().fold(0.0_f32, |p, s| p.max(s.abs()));
+        assert!(samples.iter().all(|s| s.is_finite()));
+        assert!((peak - shot.volume).abs() < 1e-4, "{peak}");
+        assert!(shot.length < pistol_shot.length, "short enough for ten a second over each other");
+        assert!(shot.pitch.at(0.0) < pistol_shot.pitch.at(0.0), "deeper");
+        assert!(rifle.sounds["hum"].looped && !shot.looped);
+    }
+
+    #[test]
     fn the_pistols_sounds_are_made_and_the_hum_goes_round_seamlessly() {
         let sounds = Sounds::load("data/sounds/pistol_formants.json").unwrap();
         for (name, sound) in &sounds.sounds {

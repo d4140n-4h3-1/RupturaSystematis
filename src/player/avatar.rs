@@ -357,6 +357,10 @@ const SWINGING_FOLLOW: f32 = 0.15;
 const PISTOL: &str = "pistol";
 /// The rifle in its right hand, as long as [`MOTION`] does not say otherwise.
 const RIFLE: &str = "rifle";
+/// How long after one shot the next can be fired, in seconds: the pistol a pull of the trigger
+/// at a time, at most five a second; the rifle, held, ten a second.
+const PISTOL_INTERVAL: f32 = 0.2;
+const RIFLE_INTERVAL: f32 = 0.1;
 /// How far up, down and to either side the rifle is brought round to where the camera looks, by
 /// the back, in degrees.
 const RIFLE_AIM_REACH: f32 = 60.0;
@@ -1233,6 +1237,8 @@ struct Pistol {
     shot_at: f32,
     /// Held in both hands at the ready too, as the rifle is, rather than in the right alone.
     two_handed: bool,
+    /// How long after one shot the next can be fired, in seconds.
+    interval: f32,
 }
 
 /// A gun the droid can hold, and what goes with it.
@@ -2452,6 +2458,7 @@ impl Avatar {
                             hide_after: frame_time(motion.hide_after_frame),
                             shot_at: frame_time(motion.shot_frame),
                             two_handed: k == 1,
+                            interval: [PISTOL_INTERVAL, RIFLE_INTERVAL][k],
                         })),
                         _ => None,
                     }
@@ -2879,6 +2886,11 @@ impl Avatar {
         }
     }
 
+    /// Whether the gun in hand, or to be drawn next, is the rifle.
+    pub(super) fn rifle_in_hand(&self) -> bool {
+        self.rifle_in_hand
+    }
+
     /// Whether the droid has a rifle.
     pub(super) fn has_rifle(&self) -> bool {
         self.gun_of(true).is_some()
@@ -2946,10 +2958,13 @@ impl Avatar {
         // Pulled at the ready, or on the way up or down, the shot waits for the pistol to be up.
         let waiting = matches!(self.arms, Arms::Ready | Arms::Raising | Arms::Lowering);
         self.queued |= going.trigger && waiting;
+        // Pulled again too soon after a shot, it fires as soon as the gun lets it.
+        let cooled = self.since_shot >= pistol.interval;
+        self.queued |= going.trigger && !cooled;
         let wants = Wants {
             out: going.armed,
             raised: going.raised,
-            trigger: going.trigger || self.queued,
+            trigger: (going.trigger || self.queued) && (cooled || waiting),
             ended,
             rested: self.since_shot >= READY_AFTER,
             can_ready: pistol.ready.is_some(),

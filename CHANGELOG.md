@@ -4,6 +4,10 @@ What changed in Ruptura Systematis, newest first. How to play it is in the [READ
 
 ## 29 October 2026
 
+- **The rifle fires faster, and sounds its own**: held down, it fires ten bolts a second, where
+  the pistol fires once a click, five a second at most. Its shot is its own, from
+  `data/sounds/rifle_formants.json`: a deep, short thump with a crack on top, where the pistol's
+  is a falling "pyew".
 - **The cyber rifle**, carried as well as the pistol: X or the mouse wheel changes from one to the
   other, the one out put away and the other drawn. The rifle is held in both hands, at the ready
   too, with walk, jog and run cycles of its own that keep both hands on it. In first person it

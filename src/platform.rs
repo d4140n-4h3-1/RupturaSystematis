@@ -53,6 +53,10 @@ const CARRIED: &[(&str, &str)] = &[
         include_str!("../data/sounds/pistol_formants.json"),
     ),
     (
+        "data/sounds/rifle_formants.json",
+        include_str!("../data/sounds/rifle_formants.json"),
+    ),
+    (
         "data/sounds/voice_formants.json",
         include_str!("../data/sounds/voice_formants.json"),
     ),

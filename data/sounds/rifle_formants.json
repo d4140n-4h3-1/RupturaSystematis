@@ -1,0 +1,178 @@
+{
+ "about": "The rifle's sounds, made from formants as the pistol's are (see pistol_formants.json for what each field means): its shot, heavier and shorter than the pistol's, for a gun that fires ten a second; the bolt hums as the pistol's does.",
+ "sample_rate": 44100,
+ "sounds": {
+  "shot": {
+   "about": "The rifle's bolt leaving the muzzle: a hard crack of noise over a deep, quickly falling buzz - a thump with a zap on top - its formants low and dropping fast, a short 'thoom' rather than the pistol's 'pyew'.",
+   "length": 0.26,
+   "looped": false,
+   "pitch": [
+    [
+     0.0,
+     300.0
+    ],
+    [
+     0.03,
+     150.0
+    ],
+    [
+     0.26,
+     48.0
+    ]
+   ],
+   "buzz": [
+    [
+     0.0,
+     1.0
+    ],
+    [
+     0.05,
+     0.9
+    ],
+    [
+     0.26,
+     0.5
+    ]
+   ],
+   "noise": [
+    [
+     0.0,
+     1.0
+    ],
+    [
+     0.012,
+     0.6
+    ],
+    [
+     0.06,
+     0.18
+    ],
+    [
+     0.26,
+     0.0
+    ]
+   ],
+   "loudness": [
+    [
+     0.0,
+     0.0
+    ],
+    [
+     0.002,
+     1.0
+    ],
+    [
+     0.03,
+     0.8
+    ],
+    [
+     0.1,
+     0.3
+    ],
+    [
+     0.26,
+     0.0
+    ]
+   ],
+   "formants": [
+    {
+     "frequency": [
+      [
+       0.0,
+       2200.0
+      ],
+      [
+       0.12,
+       700.0
+      ]
+     ],
+     "width": 320.0,
+     "gain": 0.9
+    },
+    {
+     "frequency": [
+      [
+       0.0,
+       1100.0
+      ],
+      [
+       0.15,
+       380.0
+      ]
+     ],
+     "width": 220.0,
+     "gain": 1.0
+    },
+    {
+     "frequency": [
+      [
+       0.0,
+       420.0
+      ],
+      [
+       0.26,
+       160.0
+      ]
+     ],
+     "width": 140.0,
+     "gain": 0.9
+    }
+   ],
+   "volume": 0.85,
+   "reach": 6.0
+  },
+  "hum": {
+   "about": "The bolt in flight: a low, steady buzz with two soft formants, an 'uh' on the edge of a hum, looped for as long as the bolt flies.",
+   "length": 1.0,
+   "looped": true,
+   "pitch": [
+    [
+     0.0,
+     110.0
+    ]
+   ],
+   "buzz": [
+    [
+     0.0,
+     1.0
+    ]
+   ],
+   "noise": [
+    [
+     0.0,
+     0.08
+    ]
+   ],
+   "loudness": [
+    [
+     0.0,
+     1.0
+    ]
+   ],
+   "formants": [
+    {
+     "frequency": [
+      [
+       0.0,
+       620.0
+      ]
+     ],
+     "width": 90.0,
+     "gain": 1.0
+    },
+    {
+     "frequency": [
+      [
+       0.0,
+       1150.0
+      ]
+     ],
+     "width": 140.0,
+     "gain": 0.5
+    }
+   ],
+   "volume": 0.45,
+   "reach": 1.5
+  }
+ }
+}

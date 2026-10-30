@@ -500,6 +500,7 @@ impl Player {
         self.place_head(graph, dt);
         let gait = self.gait();
         self.footfalls(self.feet(graph), horizontal.norm(), gait, dt);
+        self.hold_trigger();
         let keys = &self.keys;
         // Which way the body is going, from the way it faces: its left is +x.
         let local = rotation.inverse() * horizontal;

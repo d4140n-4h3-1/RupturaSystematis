@@ -39,6 +39,8 @@ pub(super) struct Keys {
     /// them, in seconds, so that one turn of it - many steps on a touchpad - changes them once.
     change_gun: bool,
     pub(super) since_wheel: f32,
+    /// Whether the left mouse button is held down, pulled with a gun out: the rifle keeps firing.
+    pub(super) trigger_held: bool,
     /// Whether the trigger has been pulled since the last update.
     pub(super) trigger: bool,
 }
