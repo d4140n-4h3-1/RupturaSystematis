@@ -1175,7 +1175,24 @@ struct PistolMotion {
     show_frame: u32,
     hide_after_frame: u32,
     shot_frame: u32,
+    /// Its own walk, jog and run, held at the ready, if it has them: see [`Gun::moving`].
+    #[serde(default)]
+    moving: Option<MovingClips>,
 }
+
+/// A gun's walk, jog and run, by name.
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+struct MovingClips {
+    walk: String,
+    jog: String,
+    run: String,
+}
+
+/// The cycles a gun's own walk, jog and run go with: [`CYCLES`]' walk, jog and run.
+const MOVING_WITH: [&str; 3] = ["droid_walk_cycle", "droid_run_cycle", "droid_running_cycle"];
+/// How long the upper body takes to go over to a gun's own walk, jog or run at the ready, or
+/// back to the ready held still, in seconds.
+const MOVING_FADE: f32 = 0.25;
 
 #[derive(Debug, Clone, PartialEq, serde::Deserialize)]
 struct PistolClips {
@@ -1231,6 +1248,10 @@ struct Gun {
     barrel_chain: Vec<Handle<Node>>,
     /// Its aims, if the droid has them.
     aims: Option<Aims>,
+    /// Its own walk, jog and run, each with the cycle it goes with, step for step: at the ready
+    /// on the move, the upper body is as it has it, both hands on the gun, rather than as the
+    /// ready held still has it.
+    moving: Vec<(Handle<Animation>, Handle<Animation>)>,
 }
 
 /// The pistol's animations for holding it at the ready.
@@ -1726,6 +1747,10 @@ pub struct Avatar {
     gun: Option<Gun>,
     stowed: Option<Gun>,
     rifle_in_hand: bool,
+    /// The gun's own walk, jog or run last gone over to at the ready, with the legs' cycle it
+    /// goes with, and how far over to it the upper body is, from 0 to 1: see [`Gun::moving`].
+    moving_with: Option<(Handle<Animation>, Handle<Animation>)>,
+    moving_weight: f32,
     arms: Arms,
     /// How far over to the pistol the upper body is, from 0 to 1.
     arms_weight: f32,
@@ -2364,6 +2389,8 @@ impl Avatar {
             skids.insert(name, skid);
         }
         // Each gun with all that goes with it; and only the pistol has aims, which are after.
+        let moving_with =
+            MOVING_WITH.map(|name| container.find_by_name_ref(name).map(|(handle, _)| handle));
         let loaded = [0, 1].map(|k| {
             let what = ["pistol", "rifle"][k];
             let pistol = match (guns[k].0, gun_nodes[k]) {
@@ -2401,8 +2428,19 @@ impl Avatar {
                             None
                         }
                     };
+                    let moving: Vec<(Handle<Animation>, Handle<Animation>)> = motion
+                        .moving
+                        .as_ref()
+                        .map(|clips| {
+                            [&clips.walk, &clips.jog, &clips.run]
+                                .into_iter()
+                                .zip(moving_with)
+                                .filter_map(|(clip, with)| Some((with?, find(clip, true)?)))
+                                .collect()
+                        })
+                        .unwrap_or_default();
                     match (draw, aim, fire, holster) {
-                        (Some(draw), Some(aim), Some(fire), Some(holster)) => Some(Pistol {
+                        (Some(draw), Some(aim), Some(fire), Some(holster)) => Some((moving, Pistol {
                             node,
                             muzzle,
                             draw,
@@ -2414,7 +2452,7 @@ impl Avatar {
                             hide_after: frame_time(motion.hide_after_frame),
                             shot_at: frame_time(motion.shot_frame),
                             two_handed: k == 1,
-                        }),
+                        })),
                         _ => None,
                     }
                 }
@@ -2425,8 +2463,9 @@ impl Avatar {
                     None
                 }
             };
-            pistol.map(|pistol| Gun {
+            pistol.map(|(moving, pistol)| Gun {
                 pistol,
+                moving,
                 spinning: std::mem::take(&mut dressed[k].0),
                 flash: dressed[k].1.take(),
                 barrel_chain: std::mem::take(&mut barrel_chains[k]),
@@ -2564,6 +2603,8 @@ impl Avatar {
             gun,
             stowed,
             rifle_in_hand: false,
+            moving_with: None,
+            moving_weight: 0.0,
             arms: Arms::Holstered,
             arms_weight: 0.0,
             arms_from: Default::default(),
@@ -2962,6 +3003,7 @@ impl Avatar {
                 }
             }
         }
+        self.move_with_gun(graph, dt);
         let show = match self.arms {
             Arms::Holstered => false,
             Arms::Drawing => into >= pistol.show_at,
@@ -2987,6 +3029,44 @@ impl Avatar {
         let free = if self.arms == Arms::Ready && !pistol.two_handed { 1.0 } else { 0.0 };
         let step = dt / LEFT_ARM_FADE;
         self.left_free += (free - self.left_free).clamp(-step, step);
+    }
+
+    /// At the ready on the move, with a gun that has a walk, jog and run of its own, goes over to
+    /// the upper body as the one for the cycle the legs are in has it, step for step with it, in
+    /// `arms_pose`; and back to the ready held still once it stops, or raises the gun.
+    fn move_with_gun(&mut self, graph: &mut Graph, dt: f32) {
+        let legs = self.playing.map(|index| self.cycles[index].animation);
+        let moving = self.gun.as_ref().and_then(|gun| {
+            gun.moving.iter().copied().find(|&(with, _)| Some(with) == legs)
+        });
+        let moving = moving.filter(|_| self.arms == Arms::Ready);
+        if moving.is_some() {
+            self.moving_with = moving;
+        }
+        let step = dt / MOVING_FADE;
+        let on = if moving.is_some() { 1.0 } else { 0.0 };
+        self.moving_weight += (on - self.moving_weight).clamp(-step, step);
+        let Some((with, clip)) = self.moving_with.filter(|_| self.moving_weight > 0.0) else {
+            return;
+        };
+        let Some(container) = self.container(graph) else {
+            return;
+        };
+        // As far through as the legs' cycle, which it was made from.
+        let legs = &container[with];
+        let through = (legs.time_position() - legs.time_slice().start) / legs.length().max(1.0e-6);
+        let animation = &mut container[clip];
+        let start = animation.time_slice().start;
+        animation.set_time_position(start + through.clamp(0.0, 1.0) * animation.length());
+        let mut pose = self.arms_pose.clone();
+        take_pose(animation, &mut pose);
+        let w = self.moving_weight;
+        let t = w * w * (3.0 - 2.0 * w);
+        for (bone, held) in self.arms_pose.iter_mut() {
+            if let Some(&moving) = pose.get(bone) {
+                *held = held.towards(moving, t);
+            }
+        }
     }
 
     /// Shows the pistol's screen, crosshair and all, while the pistol is `out`, and lets the
@@ -3197,7 +3277,13 @@ impl Avatar {
             let off = wrap(ahead - shoulders_yaw(left, right));
             twist_back(&mut target, &square.back, w * off);
             let face = place(&square.head, |bone| target[&bone]).rotation * square.face;
-            turn_bone(&mut target, &square.head, w * wrap(ahead - yaw_of(face)));
+            // By the neck, as the head's own turn below is: the head bone turned by itself would
+            // wring the chin, which is skinned to the neck as well.
+            let off = w * wrap(ahead - yaw_of(face));
+            match square.neck.is_empty() {
+                true => turn_bone(&mut target, &square.head, off),
+                false => twist_back(&mut target, &square.neck, off),
+            }
         }
         // The head turned towards whatever it is to look at, coming round over a moment.
         self.head_turn += (self.head_wanted - self.head_turn) * (1.0 - (-HEAD_TURN_RATE * dt).exp());
