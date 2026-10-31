@@ -15,7 +15,8 @@ What changed in Ruptura Systematis, newest first. How to play it is in the [READ
 - **The rifle's stock on the shoulder, and the left hand round the handguard**: aiming, the
   butt sits on the front of the right shoulder rather than in the chest by the collarbone; the
   left hand holds the handguard palm up, its fingers closed round it, where they stuck out flat,
-  and its thumb lies along the handguard's side rather than sticking out, walking and running too.
+  and its thumb lies along the handguard's side rather than sticking out, walking and running too,
+  and drawing and holstering it, where the left hand passed into the rifle on its way to it.
 - **The rifle is carried across the chest** at the ready, and on the move: its muzzle turned to
   the left and dipped, near parallel to the chest, rather than pointing straight ahead.
 
