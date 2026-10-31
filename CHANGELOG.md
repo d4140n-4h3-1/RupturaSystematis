@@ -4,8 +4,8 @@ What changed in Ruptura Systematis, newest first. How to play it is in the [READ
 
 ## 31 October 2026
 
-- **The left thumb on the rifle no longer bends backwards**: it lies straight along the left of
-  the handguard, pointing toward the muzzle, where its joints were bent the wrong way, its tip
+- **The left thumb on the rifle wraps round the handguard**: up its left side and curled over
+  the top, the fingers round the other side, where its joints were bent backwards, its tip
   sticking up over the top.
 
 ## 30 October 2026
