@@ -9,7 +9,8 @@ What changed in Ruptura Systematis, newest first. How to play it is in the [READ
   barracks, a three-floor command post, watchtowers at the compound's corners, rusting
   containers and wrecks, and all round it the forest - pines, broad-leaved trees, bushes and
   fallen trunks. Leaves hide you but stop nothing; trunks and logs are cover. The fog is the
-  engine's own, new: everything fades into grey-green with distance.
+  engine's own, new: everything fades into grey-green with distance, under an overcast sky's
+  even light, and nothing past where the fog is solid is drawn.
 - **Droids notice flying bolts, and fire blind**: a bolt flying by in front of a droid within
   4 m, or felt close by from any side, is noticed - in CAUTION and EVASION it searches where the
   bolt came from. Three in a few seconds from someone it can't see, and an armed droid - a

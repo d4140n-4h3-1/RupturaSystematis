@@ -31,6 +31,7 @@ Made for Ruptura Systematis (MazeGame/maze). The game puts the players down at t
 `spawn_1` to `spawn_16`, in the forest round the compound.
 """
 
+import bmesh
 import bpy
 import math
 import os
@@ -39,7 +40,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import br_town  # noqa: E402
-from br_town import add_box, add_block, marker, collection, material, building, flight, export_glb, \
+from br_town import add_box, add_block, marker, collection, material, building, flight, \
     FLOOR, SLAB, RAIL, PARAPET, STEP_RISE, STEP_RUN  # noqa: E402
 
 HALF = 100.0          # from the middle to the outer wall
@@ -54,6 +55,10 @@ TOWER = (4.5, FLOOR)  # a watchtower's platform side and height
 TREE_GAP = 3.2        # least distance between two trunks
 KEEP = 1.8            # walkable space kept round anything solid
 SPAWNS = 16
+# The model is cut into tiles this many meters square, each a mesh of its own for each of the
+# ground, the buildings, the cover and the leaves: so that the renderer can leave out what is
+# behind the camera or past the fog, and draw what is near before what is far.
+TILE = 56.0
 
 
 class Base:
@@ -85,8 +90,8 @@ class Base:
         self.n_lights = self.n_buildings = self.n_cover = 0
         self.keep_clear = []   # (x0, x1, y0, y1): buildings, stairs, the spawns
         self.solid = []        # (x, y, r): trunks and cover, kept apart
-        self.trunks = Mesh("Trunks", self.bark)
-        self.canopy = Mesh("Canopy", None, self.leaves)
+        self.trunks = Tiled("Trunks", [self.bark])
+        self.canopy = Tiled("Canopy", self.leaves)
         self.n_trees = self.n_logs = self.n_bushes = 0
 
     def light(self, x, y, ceiling):
@@ -121,10 +126,49 @@ class Mesh:
             mesh.materials.append(m)
         for poly, m in zip(mesh.polygons, self.face_mats):
             poly.material_index = m
+        # Every face turned outward: the game draws only the side a face is turned to, and
+        # these shapes are built up by hand.
+        bm = bmesh.new()
+        bm.from_mesh(mesh)
+        bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+        bm.to_mesh(mesh)
+        bm.free()
         mesh.update()
         o = bpy.data.objects.new(self.name, mesh)
         col.objects.link(o)
         return o
+
+
+def tile_of(x, y):
+    """Which of the map's tiles, TILE meters square, (x, y) is in."""
+    edge = HALF + BEYOND
+    last = int(2 * edge // TILE)
+    return (min(last, max(0, int((x + edge) // TILE))), min(last, max(0, int((y + edge) // TILE))))
+
+
+class Tiled:
+    """A Mesh for each tile: shapes go in the one for the tile they stand in."""
+
+    def __init__(self, name, mats):
+        self.name, self.mats, self.tiles = name, mats, {}
+        self.at = (0.0, 0.0)
+
+    def __getattr__(self, attr):
+        raise AttributeError(attr)
+
+    @property
+    def faces(self):
+        return [f for m in self.tiles.values() for f in m.faces]
+
+    def add(self, verts, faces, mat=0):
+        tile = tile_of(*self.at)
+        if tile not in self.tiles:
+            self.tiles[tile] = Mesh(f"{self.name}_{tile[0]}_{tile[1]}", None, self.mats)
+        self.tiles[tile].add(verts, faces, mat)
+
+    def build(self, col):
+        for m in self.tiles.values():
+            m.build(col)
 
 
 def ring(x, y, z, r, n, turn=0.0):
@@ -177,6 +221,7 @@ def blob(m, rng, x, y, z, rx, rz, mat):
 def tree(base, rng, x, y, solid=True):
     """A pine or a broad-leaved tree at (x, y): its trunk solid, its leaves not."""
     turn = rng.uniform(0, math.pi)
+    base.trunks.at = base.canopy.at = (x, y)
     if rng.random() < 0.65:
         height = rng.uniform(11.0, 19.0)
         r = rng.uniform(0.22, 0.38)
@@ -204,6 +249,7 @@ def tree(base, rng, x, y, solid=True):
 
 def bush(base, rng, x, y):
     size = rng.uniform(0.7, 1.4)
+    base.canopy.at = (x, y)
     blob(base.canopy, rng, x, y, size * 0.55, size, size * 0.7, rng.choice((1, 2)))
     base.n_bushes += 1
 
@@ -211,6 +257,7 @@ def bush(base, rng, x, y):
 def log(base, rng, x, y):
     """A fallen trunk lying on the ground: low cover, a little under waist height."""
     length, r = rng.uniform(5.0, 9.0), rng.uniform(0.32, 0.45)
+    base.trunks.at = (x, y)
     a = rng.uniform(0, math.pi)
     c, s = math.cos(a), math.sin(a)
     n = 7
@@ -418,8 +465,8 @@ def main():
     for i in range(SPAWNS):
         a = 2 * math.pi * (i + 0.5) / SPAWNS
         r = (COMPOUND + HALF) / 2
-        x = max(-HALF + 5, min(HALF - 5, r * 1.25 * math.cos(a)))
-        y = max(-HALF + 5, min(HALF - 5, r * 1.25 * math.sin(a)))
+        x = max(-HALF + 12, min(HALF - 12, r * 1.1 * math.cos(a)))
+        y = max(-HALF + 12, min(HALF - 12, r * 1.1 * math.sin(a)))
         marker(f"spawn_{i + 1}", x, y, 0.0, math.atan2(-y, -x))
         base.keep_clear.append((x - 2.5, x + 2.5, y - 2.5, y + 2.5))
 
@@ -481,7 +528,33 @@ def main():
           f"bushes={base.n_bushes} cover={base.n_cover} trunk tris~{len(base.trunks.faces)} "
           f"leaf faces={len(base.canopy.faces)} -> {out}")
     if glb:
-        export_glb(os.path.abspath(glb), [base.ground, base.struct, base.cover, base.foliage])
+        export_tiled(os.path.abspath(glb), [base.ground, base.struct, base.cover, base.foliage])
+
+
+def export_tiled(path, cols):
+    """Exports for the game with each collection's meshes joined tile by tile - by where the
+    middle of each one's bounds is - into `<collection>_<x>_<y>`: one mesh a tile and collection,
+    not one for the whole map, which would be drawn whole wherever the camera looked. The spawns
+    go as empties. Runs after the .blend is saved, which keeps every object separate."""
+    from mathutils import Vector
+    for col in cols:
+        groups = {}
+        for o in [o for o in col.objects if o.type == "MESH"]:
+            corners = [o.matrix_world @ Vector(c) for c in o.bound_box]
+            middle = sum(corners, Vector()) / 8
+            groups.setdefault(tile_of(middle.x, middle.y), []).append(o)
+        for (tx, ty), objs in sorted(groups.items()):
+            bpy.ops.object.select_all(action="DESELECT")
+            for o in objs:
+                o.select_set(True)
+            bpy.context.view_layer.objects.active = objs[0]
+            if len(objs) > 1:
+                bpy.ops.object.join()
+            objs[0].name = f"{col.name}_{tx}_{ty}"
+            bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
+    bpy.ops.export_scene.gltf(filepath=path, export_format="GLB", export_extras=True,
+                              export_cameras=False, export_lights=False)
+    print(f"[map] exported -> {path}")
 
 
 if __name__ == "__main__":

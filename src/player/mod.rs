@@ -394,6 +394,13 @@ impl Player {
             })
     }
 
+    /// Sets how far the camera sees, in meters: nothing further off is drawn.
+    pub fn set_view_distance(&self, graph: &mut Graph, meters: f32) {
+        if let Ok(camera) = graph.try_get_mut(self.camera) {
+            camera.projection_mut().set_z_far(meters);
+        }
+    }
+
     /// Where the camera is, in the world.
     pub fn camera_position(&self, graph: &Graph) -> Vector3<f32> {
         graph[self.camera].global_position()

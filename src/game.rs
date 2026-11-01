@@ -201,6 +201,13 @@ const EXIT_NOT_FAR: f32 = 60.0;
 /// The ambient light with the lights off: next to none, so that what the flashlight is not
 /// pointed at is as good as black.
 const DARK_AMBIENT: Color = Color::opaque(3, 3, 5);
+/// The ambient light on a foggy map: an overcast day, lit from all round by the grey sky, the
+/// sun behind the cloud only a little brighter.
+const FOG_AMBIENT: Color = Color::opaque(118, 124, 120);
+/// How far the camera sees, in meters: on a foggy map, only as far as the fog is all but solid
+/// (see [`ctf::FOG`]) - nothing further is drawn - and elsewhere the camera's own reach.
+const FOG_VIEW: f32 = 140.0;
+const VIEW: f32 = 2048.0;
 /// The credits the player starts with, before they have taken any.
 const STARTING_CREDITS: Credits = Credits::new(200, 0);
 /// How long the player is shown they were deleted before the next maze, in seconds.
@@ -953,6 +960,11 @@ impl MazeGame {
         ctf::map_at(&self.model_path).filter(|map| map.echoes).map(|_| formants::CITY_ECHO)
     }
 
+    /// Whether fog lies over the level (see [`ctf::Map::foggy`]).
+    fn foggy(&self) -> bool {
+        ctf::map_at(&self.model_path).is_some_and(|map| map.foggy)
+    }
+
     /// Whether it is night in the level (see [`ctf::Map::night`]).
     fn night(&self) -> bool {
         ctf::map_at(&self.model_path).is_some_and(|map| map.night)
@@ -977,7 +989,14 @@ impl MazeGame {
                 .ok()
         });
         let void = self.in_void();
-        scene.rendering_options.fog = ctf::map_at(&self.model_path).filter(|map| map.foggy).map(|_| ctf::FOG);
+        let foggy = self.foggy();
+        scene.rendering_options.fog = foggy.then_some(ctf::FOG);
+        scene.rendering_options.ambient_lighting_color = match (self.lights_off, foggy) {
+            (true, _) => DARK_AMBIENT,
+            (false, true) => FOG_AMBIENT,
+            (false, false) => AMBIENT,
+        };
+        self.player.set_view_distance(&mut scene.graph, if foggy { FOG_VIEW } else { VIEW });
         scene.set_skybox(Some(sky.unwrap_or_else(|| SkyBoxKind::built_in_skybox().clone())));
         let depth = if void { VOID_FLOOR } else { UNDER_FLOOR };
         scene.graph[self.under_floor]
@@ -1680,7 +1699,11 @@ impl MazeGame {
     fn apply_lights(&mut self, ctx: &mut PluginContext) {
         let on = !self.lights_off;
         let scene = &mut ctx.scenes[self.scene];
-        scene.rendering_options.ambient_lighting_color = if on { AMBIENT } else { DARK_AMBIENT };
+        scene.rendering_options.ambient_lighting_color = match (on, self.foggy()) {
+            (false, _) => DARK_AMBIENT,
+            (true, true) => FOG_AMBIENT,
+            (true, false) => AMBIENT,
+        };
         // No sun at night.
         let sun = on && !self.night();
         scene.graph[self.sun].set_visibility(sun);
