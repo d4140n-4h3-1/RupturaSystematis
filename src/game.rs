@@ -977,6 +977,7 @@ impl MazeGame {
                 .ok()
         });
         let void = self.in_void();
+        scene.rendering_options.fog = ctf::map_at(&self.model_path).filter(|map| map.foggy).map(|_| ctf::FOG);
         scene.set_skybox(Some(sky.unwrap_or_else(|| SkyBoxKind::built_in_skybox().clone())));
         let depth = if void { VOID_FLOOR } else { UNDER_FLOOR };
         scene.graph[self.under_floor]

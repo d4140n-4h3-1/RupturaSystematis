@@ -265,7 +265,7 @@ impl MainMenu {
              Capture the Flag: hack red's firewall, take their flag and bring it home,\n\
              with blue's droids and drone on your side, on the map of your choice.\n\
              Battle Royale: everyone against everyone inside a closing ring,\n\
-             on the Grid or in Nexus; the last one standing wins.\n\
+             on the Grid, in Nexus or in the Foggy Forest; the last one standing wins.\n\
              Heist: hack through the firewall doors to a bank's vault,\n\
              past its guards and drones, and get out with the loot.\n\
              Story: a whole city to cross, from its station to its tallest tower.",

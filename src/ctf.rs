@@ -31,7 +31,20 @@ pub struct Map {
     /// Models of their own played along with it, where they stand beside it - other cities,
     /// joined to this one by road - their lines of light and roads with them.
     pub alongside: &'static [&'static str],
+    /// Whether fog lies over it (see [`FOG`]).
+    pub foggy: bool,
 }
+
+/// The fog over a foggy map: grey-green, thick enough that a droid 40 m off is three parts
+/// gone, thinning a little higher up, and hiding the sky.
+pub const FOG: fyrox::scene::Fog = fyrox::scene::Fog {
+    color: fyrox::core::color::Color::opaque(150, 158, 152),
+    density: 0.035,
+    start: 3.0,
+    base_height: 0.0,
+    height_falloff: 0.03,
+    sky_opacity: 1.0,
+};
 
 /// The Grid: a city traced in light on a platform in the void.
 pub const GRID: Map = Map {
@@ -43,6 +56,7 @@ pub const GRID: Map = Map {
     night: true,
     echoes: true,
     alongside: &[],
+    foggy: false,
 };
 
 /// Nexus: a futuristic city traced in light, round a soaring spire, in the void.
@@ -55,10 +69,25 @@ pub const NEXUS: Map = Map {
     night: true,
     echoes: true,
     alongside: &[],
+    foggy: false,
 };
 
 /// The maps battle royale is played on, picked from in the main menu.
-pub const ROYALE_MAPS: [Map; 2] = [GRID, NEXUS];
+/// The Foggy Forest: an abandoned military base the forest has taken back, in fog.
+pub const FOREST: Map = Map {
+    name: "Foggy Forest",
+    path: "data/arena/br_forest.glb",
+    about: "An abandoned base the forest has taken back, in fog: hangars with their roofs fallen in, \
+            barracks, a command post, watchtowers, and trees everywhere.",
+    void: false,
+    open_sky: true,
+    night: false,
+    echoes: false,
+    alongside: &[],
+    foggy: true,
+};
+
+pub const ROYALE_MAPS: [Map; 3] = [GRID, NEXUS, FOREST];
 
 /// Aurum: a bank district, its vault behind three firewall doors.
 pub const AURUM: Map = Map {
@@ -70,6 +99,7 @@ pub const AURUM: Map = Map {
     night: true,
     echoes: true,
     alongside: &[],
+    foggy: false,
 };
 
 /// Cortex: a data quarter, its data core behind three firewall doors, guard towers round it.
@@ -82,6 +112,7 @@ pub const CORTEX: Map = Map {
     night: true,
     echoes: true,
     alongside: &[],
+    foggy: false,
 };
 
 /// Helix: a gene lab's campus, its vault up on a gallery behind three firewall doors.
@@ -94,6 +125,7 @@ pub const HELIX: Map = Map {
     night: true,
     echoes: true,
     alongside: &[],
+    foggy: false,
 };
 
 /// The districts heists are played in, picked from in the main menu (see [`crate::heist`]).
@@ -130,6 +162,7 @@ pub const URBS: Map = Map {
     night: true,
     echoes: true,
     alongside: &[FERRUM, CAELUM, CURIA, SUBURA],
+    foggy: false,
 };
 
 /// The places a story could be told in.
@@ -158,6 +191,7 @@ pub const MAPS: [Map; 4] = [
         night: false,
         echoes: false,
         alongside: &[],
+        foggy: false,
     },
     Map {
         name: "Balconies",
@@ -168,6 +202,7 @@ pub const MAPS: [Map; 4] = [
         night: false,
         echoes: false,
         alongside: &[],
+        foggy: false,
     },
     Map {
         name: "Hybrid",
@@ -178,6 +213,7 @@ pub const MAPS: [Map; 4] = [
         night: false,
         echoes: false,
         alongside: &[],
+        foggy: false,
     },
     Map {
         name: "Void",
@@ -188,6 +224,7 @@ pub const MAPS: [Map; 4] = [
         night: false,
         echoes: false,
         alongside: &[],
+        foggy: false,
     },
 ];
 

@@ -38,6 +38,10 @@ use fyrox::{
     },
 };
 
+/// What a model's meshes that are not solid are named, starting so: the leaves of trees and
+/// bushes, which hide whoever is in them but stop nothing, and have no floor on top to walk.
+pub const FOLIAGE: &str = "Foliage";
+
 /// How high the middle of a flag is over the floor its firewall stands on.
 const FLAG_MIDDLE: f32 = 2.0;
 /// What a model's empty is named to mark where the game puts something: a flag in its firewall,
@@ -248,10 +252,11 @@ impl Level {
         };
         scene.graph.update_hierarchical_data();
 
+        // Leaves are not solid (see [`FOLIAGE`]).
         let meshes: Vec<GeometrySource> = scene
             .graph
             .traverse_handle_iter(root)
-            .filter(|&h| scene.graph[h].is_mesh())
+            .filter(|&h| scene.graph[h].is_mesh() && !scene.graph[h].name().starts_with(FOLIAGE))
             .map(GeometrySource)
             .collect();
         Log::info(format!("Maze: {} meshes", meshes.len()));

@@ -63,7 +63,7 @@ what you do.
 | ----------------- | ---------------------------------------------------------------------------- |
 | **Story**         | Cross Urbs and the cities round it: rob, hide, get arrested, break out.      |
 | **Heist**         | Break into a district of a city floating in the void: Aurum, Cortex or Helix. |
-| **Battle Royale** | Last droid standing on the Grid or in Nexus, cities traced in light.         |
+| **Battle Royale** | Last droid standing on the Grid, in Nexus, or in the fog of the Foggy Forest. |
 | **Capture the Flag** | Hack red's firewall, take their flag and bring it home, with allies at your side. |
 | **Maze**          | A new random maze each round, built from tiles: find the way out.            |
 
@@ -141,7 +141,7 @@ It opens on the main menu, to pick which game to play:
 
 - **Story**: Urbs and the cities round it.
 - **Heist**: break into Aurum, Cortex or Helix.
-- **Battle Royale**: the Grid or Nexus.
+- **Battle Royale**: the Grid, Nexus, or the Foggy Forest - an abandoned base overgrown with trees, in fog.
 - **Maze**: find the way out of a new random maze each round.
 - **Capture the Flag**: you are blue. Pick a map - Lanes (`data/arena/ctf_map.glb`) or
   Balconies (`data/arena/ctf_balconies.glb`), Escape going back - then hack the computer in red's
