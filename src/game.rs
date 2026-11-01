@@ -45,7 +45,7 @@ use crate::{
     level::Level,
     menu::{Choice, Game, MainMenu, PauseMenu, Start},
     platform,
-    player::{set_body_glow, Player, DROID_MODEL},
+    player::{set_body_glow, Player, DROID_MODEL, SHOT_NOISE},
     survey,
     tiles::{self, Measured, Prefabs},
 };
@@ -4504,6 +4504,7 @@ impl MazeGame {
         // Ways looked for only where there is one to be had (see [`Inhabitants::can_reach`]).
         let inhabitants = &self.inhabitants;
         let reachable = |to: Vector3<f32>| inhabitants.can_reach((grid, *origin), to);
+        let mut fired = Vec::new();
         for (n, drone) in self.drones.iter_mut().enumerate() {
             let target = targets[n];
             let doing = drone.update(graph, (grid, *origin), &target, &reachable, rng, ctx.dt, live);
@@ -4511,7 +4512,13 @@ impl MazeGame {
             // At its target's middle, wherever they are as it fires.
             if let (Some((from, colour)), Some(shots)) = (doing.fired, self.shots.as_mut()) {
                 shots.fire(graph, from, target.middle, colour, drone.collider());
+                fired.push(from);
             }
+        }
+        // Its shot heard, as the player's are, by the droids searching or wary: they run to where
+        // it was fired from and search from there.
+        for from in fired {
+            self.inhabitants.hear((grid, *origin), from, SHOT_NOISE);
         }
         for &(n, said) in &says {
             Log::info(format!("Drone {n}: {said}"));

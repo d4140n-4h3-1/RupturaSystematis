@@ -1,7 +1,8 @@
 //! What the player makes heard, for the droids hunting them to hear (see
-//! [`crate::inhabitants`]): footfalls jogging, running and sprinting, landing from a fall, and the pistol
-//! - its shot where it is fired, and its bolt where it hits, which can draw a droid away from
-//! the player. Walking, crouched or crawling, the player makes no sound.
+//! [`crate::inhabitants`]): footfalls jogging, running and sprinting, landing from a fall, and the gun
+//! - its shot where it is fired, heard furthest of all, and its bolt where it hits, which can draw a
+//! droid away from the player. A drone's shots are heard too (see [`SHOT_NOISE`]). Walking, crouched
+//! or crawling, the player makes no sound.
 //!
 //! Each noise is where it is made and how far off it carries, in meters along the corridors.
 
@@ -16,8 +17,10 @@ const SPRINT_NOISE: f32 = 10.0;
 /// in meters per second, for it to make any.
 const LANDING_NOISE: f32 = 6.0;
 const LOUD_LANDING: f32 = 3.0;
-/// How far off the pistol's shot carries, and a bolt hitting something, in meters.
-pub(super) const SHOT_NOISE: f32 = 12.0;
+/// How far off a gunshot carries - the pistol's, the rifle's, a drone's - and a bolt hitting
+/// something, in meters. A shot is the loudest thing in the maze: those searching for the player,
+/// or wary of them still, hear it from well down the corridors.
+pub const SHOT_NOISE: f32 = 30.0;
 pub(super) const IMPACT_NOISE: f32 = 8.0;
 /// How often footfalls are heard, in seconds: about a step's time.
 const FOOTFALL: f32 = 0.3;
@@ -93,6 +96,25 @@ mod tests {
         assert!(sprint > run && run > jog && jog > 0.0);
         assert_eq!(footfall(Posture::Crouching, Gait::Sprinting), 0.0);
         assert_eq!(footfall(Posture::Crawling, Gait::Jogging), 0.0);
+    }
+
+    #[test]
+    fn a_shot_is_heard_from_further_down_the_corridors_than_anything_else() {
+        use hydroxus_ai::{grid::WalkGrid, hearing::Heard};
+        let loudest = [SPRINT_NOISE, LANDING_NOISE, IMPACT_NOISE].into_iter().fold(0.0, f32::max);
+        assert!(SHOT_NOISE > 2.0 * loudest);
+        // A corridor 40 m long and 4 m wide; the one listening down the middle of it, 25 m from
+        // where the noise is made.
+        let mut grid = WalkGrid::new(80, 8, 0.5);
+        for x in 0..80 {
+            for z in 0..8 {
+                grid.set(x, z, true);
+            }
+        }
+        let ground = (&grid, Vector3::zeros());
+        let (at, listener) = (Vector3::new(0.25, 0.0, 2.25), Vector3::new(25.25, 0.0, 2.25));
+        assert!(Heard::at(ground, at, SHOT_NOISE).unwrap().by(ground, listener), "a shot");
+        assert!(!Heard::at(ground, at, SPRINT_NOISE).unwrap().by(ground, listener), "a sprint");
     }
 
     #[test]

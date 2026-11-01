@@ -2,6 +2,13 @@
 
 What changed in Ruptura Systematis, newest first. How to play it is in the [README](README.md).
 
+## 1 November 2026
+
+- **Gunshots are heard in CAUTION and EVASION**: a droid searching for you, or wary of you
+  still, hears a shot from 30 m down the corridors, where it heard one from 12 m, no further
+  than a sprint; and hears a drone's shots too, not only yours. It runs to where the shot was
+  fired and searches from there.
+
 ## 31 October 2026
 
 - **The left thumb on the rifle wraps round the handguard**: up its left side and curled

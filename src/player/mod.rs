@@ -64,6 +64,7 @@ mod lean;
 mod movement;
 mod noise;
 pub mod pistol;
+pub use noise::SHOT_NOISE;
 pub use pistol::PISTOL_SOUNDS;
 pub mod posture;
 mod talk;

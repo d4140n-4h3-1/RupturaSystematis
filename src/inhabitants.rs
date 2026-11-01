@@ -55,7 +55,8 @@
 //! Alert, and a bolt from the pistol has it search where the shot came from.
 //!
 //! Out of Alert, it also listens (see [`Inhabitants::hear`]): a noise that carries as far as it
-//! is, along the corridors, has it run to where the noise was and search from there.
+//! is, along the corridors, has it run to where the noise was and search from there. A gunshot -
+//! the player's, or a drone's - carries furthest (see [`crate::player::SHOT_NOISE`]).
 //!
 //! A sentry that sees another sentry after the player goes after them too (see
 //! [`Inhabitants::join_chases`]), calm or not: the one it sees shows it where the player is. It
