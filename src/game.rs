@@ -1999,10 +1999,8 @@ impl MazeGame {
                 // Through its own side, the droid that fired among them.
                 let own: Vec<Handle<Collider>> = self
                     .inhabitants
-                    .standing()
+                    .firing_as(side)
                     .into_iter()
-                    .filter(|d| d.1 == Some(side))
-                    .map(|d| d.4)
                     .chain(self.drones.iter().filter(|d| d.side() == Some(side)).map(Drone::collider))
                     .collect();
                 let strikes = bolts.fly(graph, ctx.dt, |graph, from, way, reach| first_hit(graph, from, way, reach, &own));
@@ -2677,6 +2675,10 @@ impl MazeGame {
                     }
                 };
                 self.side_bolts[n].1.fire(graph, from, way);
+                // Heard, as the player's shots are, by those searching or wary.
+                if let Some((grid, origin)) = &self.level.grid {
+                    self.inhabitants.hear((grid, *origin), from, SHOT_NOISE);
+                }
             }
         }
         for (n, alert) in alerts {

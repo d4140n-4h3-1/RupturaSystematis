@@ -25,7 +25,8 @@ what you do.
 
 - **Stealth, as in Metal Gear.** Sentries see only what is in front of them, and they hear your
   footsteps. In CAUTION and EVASION a gunshot, yours or a drone's, brings them from 30 m down
-  the corridors. They go from CAUTION to ALERT to EVASION, search where they last saw you, call each
+  the corridors, and they notice bolts flying past; keep shooting at them unseen and they fire
+  blind, wildly, back where the bolts come from, as in Fallout 4. They go from CAUTION to ALERT to EVASION, search where they last saw you, call each
   other in, and cut you off. In the dark they see a third as far.
 - **Talk, as in Fallout 3.** Each droid has its own lines, spoken aloud in System Latin by a voice
   synthesised from formants. Its mood colours the panel, its eyes and its voice. Pass a Speech

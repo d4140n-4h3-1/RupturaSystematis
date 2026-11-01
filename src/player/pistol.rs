@@ -136,6 +136,17 @@ pub struct Pass {
 }
 
 impl Pass {
+    /// How near the bolt came to `point`, in meters, if it was nearest it in this stretch of its
+    /// flight: once a bolt, however many frames it is in flight near it.
+    pub fn closest(&self, point: Vector3<f32>) -> Option<(f32, Vector3<f32>)> {
+        let along = self.end - self.start;
+        let t = (point - self.start).dot(&along) / along.norm_squared().max(1.0e-12);
+        (0.0..1.0).contains(&t).then(|| {
+            let at = self.start + along * t;
+            ((at - point).norm(), at)
+        })
+    }
+
     /// How near it went to `point`, in meters.
     pub fn nearest(&self, point: Vector3<f32>) -> f32 {
         let along = self.end - self.start;
@@ -729,6 +740,22 @@ impl Player {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_bolt_is_nearest_a_point_in_only_one_stretch_of_its_flight() {
+        let point = Vector3::new(1.0, 0.0, 5.0);
+        let stretches: Vec<Pass> = (0..10)
+            .map(|k| Pass {
+                fired_at: Vector3::zeros(),
+                start: Vector3::new(0.0, 0.0, k as f32),
+                end: Vector3::new(0.0, 0.0, k as f32 + 1.0),
+            })
+            .collect();
+        let nearest: Vec<_> = stretches.iter().filter_map(|pass| pass.closest(point)).collect();
+        assert_eq!(nearest.len(), 1);
+        assert!((nearest[0].0 - 1.0).abs() < 1.0e-5);
+        assert!((nearest[0].1 - Vector3::new(0.0, 0.0, 5.0)).norm() < 1.0e-5);
+    }
 
     #[test]
     fn a_pass_says_how_near_it_went() {

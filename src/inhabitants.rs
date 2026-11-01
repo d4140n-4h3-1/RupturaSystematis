@@ -56,7 +56,11 @@
 //!
 //! Out of Alert, it also listens (see [`Inhabitants::hear`]): a noise that carries as far as it
 //! is, along the corridors, has it run to where the noise was and search from there. A gunshot -
-//! the player's, or a drone's - carries furthest (see [`crate::player::SHOT_NOISE`]).
+//! the player's, or a drone's - carries furthest (see [`crate::player::SHOT_NOISE`]). It notices
+//! bolts flying by, too: in front of it within [`NOTICE_BOLT`], or felt close by, anywhere, and
+//! searches where they came from. An armed one - a sentry, or one on a side - that keeps noticing
+//! them without seeing who is firing fires blind back where they come from, wildly, as Fallout's
+//! do (see [`BLIND_AFTER`]); a sentry of the maze's with security's bolts, which hurt the player.
 //!
 //! A sentry that sees another sentry after the player goes after them too (see
 //! [`Inhabitants::join_chases`]), calm or not: the one it sees shows it where the player is. It
@@ -101,7 +105,7 @@ use hydroxus_ai::{
     pace::{pace, sprints},
     route::{plan_avoiding, spot_on_any_floor_near},
     search::SearchMap,
-    sight::Sight,
+    sight::{Sight, Stance},
     steer::{make_way, step_aside},
     threat::{pointed_at, stage_after, CALM},
     trip::{self, Doing, Trip},
@@ -265,6 +269,18 @@ const FIRE_EVERY: (f32, f32) = (0.7, 1.3);
 const GANG_ENGAGE: f32 = 6.0;
 const GANG_FIRE_EVERY: (f32, f32) = (0.45, 0.9);
 const SPREAD: f32 = 0.55;
+/// A bolt flying by is noticed within [`NOTICE_BOLT`] meters, if it is in front of the droid -
+/// or felt, within [`NEAR_MISS`], wherever. Noticing [`BLIND_AFTER`] of them within
+/// [`BLIND_MEMORY`] seconds of each other, from someone it cannot see, an armed droid - a sentry,
+/// or one on a side - fires blind back where they came from, as Fallout's do: for [`BLIND_FOR`]
+/// seconds, as often as [`BLIND_FIRE_EVERY`] says, each shot anywhere within [`BLIND_WIDE`]
+/// meters of there, across and half as much up and down.
+const NOTICE_BOLT: f32 = 4.0;
+const BLIND_AFTER: u8 = 3;
+const BLIND_MEMORY: f32 = 4.0;
+const BLIND_FOR: f32 = 3.0;
+const BLIND_FIRE_EVERY: (f32, f32) = (0.15, 0.6);
+const BLIND_WIDE: f32 = 3.0;
 const FIRE_CONE: f32 = 0.3;
 /// How high over the player's feet a droid aims.
 const PLAYER_CHEST: f32 = 1.0;
@@ -473,6 +489,12 @@ struct Inhabitant {
     foe: Option<Foe>,
     foe_unseen: f32,
     shot_from: Option<(Vector3<f32>, f32)>,
+    /// Bolts it has noticed lately, flying at it from someone it does not see, and how long until
+    /// it forgets them, in seconds; and firing blind back, where they came from, for how long
+    /// more (see [`BLIND_AFTER`]).
+    unseen_bolts: u8,
+    unseen_left: f32,
+    blind: Option<(Vector3<f32>, f32)>,
     /// How long it has left speaking to the player, its head turned to them, in seconds.
     speaking: f32,
     /// How long before it can fire again, and before it puts its pistol away, in seconds; and
@@ -544,6 +566,8 @@ impl Inhabitant {
         self.unaimed = 0.0;
         self.no_way = false;
         self.shot_from = None;
+        self.unseen_bolts = 0;
+        self.blind = None;
         self.cover = None;
         self.witness = None;
         // Posed where it is now on the next update, however far off: it is as long since it was
@@ -2344,6 +2368,9 @@ impl Inhabitants {
             foe: None,
             foe_unseen: 0.0,
             shot_from: None,
+            unseen_bolts: 0,
+            unseen_left: 0.0,
+            blind: None,
             speaking: 0.0,
             reload: 0.0,
             armed_left: 0.0,
@@ -2597,6 +2624,16 @@ impl Inhabitants {
     /// The side of the `n`th droid, in capture the flag.
     pub fn side(&self, n: usize) -> Option<Side> {
         self.droids.get(n).and_then(|droid| droid.side)
+    }
+
+    /// The colliders of the droids whose bolts are `side`'s: those on it, and - for security's -
+    /// the maze's sentries too, firing blind; through whom its bolts fly.
+    pub fn firing_as(&self, side: Side) -> Vec<Handle<Collider>> {
+        self.droids
+            .iter()
+            .filter(|droid| droid.side.or(droid.sentry.then_some(Side::Security)) == Some(side))
+            .map(|droid| droid.collider)
+            .collect()
     }
 
     /// Each droid standing, as a target for a drone: which it is, its side, its feet, the middle
@@ -2858,6 +2895,19 @@ impl Inhabitants {
             if sees_foe || droid.shot_from.is_some_and(|(_, left)| left <= 0.0) {
                 droid.shot_from = None;
             }
+            // Bolts from someone unseen forgotten in a while; firing blind, until it is done, or
+            // sees who it is firing at.
+            droid.unseen_left = (droid.unseen_left - dt).max(0.0);
+            if droid.unseen_left == 0.0 {
+                droid.unseen_bolts = 0;
+            }
+            if let Some((_, left)) = droid.blind.as_mut() {
+                *left -= dt;
+            }
+            let sees_them = if droid.side.is_some() { sees_foe } else { droid.sees_player };
+            if sees_them || droid.down || droid.blind.is_some_and(|(_, left)| left <= 0.0) {
+                droid.blind = None;
+            }
             if foe.is_some() && droid.foe.is_none() {
                 engaged.push(me);
                 if matches!(foe, Some(Foe::Rival(_))) {
@@ -2903,12 +2953,16 @@ impl Inhabitants {
                 _ => None,
             }
             .filter(|&at| flat(at - droid.feet).norm() < FIRE_RANGE);
+            // Firing blind, at where the bolts came from, give or take a good deal.
+            let blind = droid.blind.filter(|_| target.is_none()).map(|(from, _)| from);
+            let target = target.or(blind);
             let gang = droid.side == Some(Side::Gang);
             let engage = if gang { GANG_ENGAGE } else { ENGAGE };
-            let standing_to_shoot = target.is_some_and(|at| flat(at - droid.feet).norm() < engage);
+            let standing_to_shoot = blind.is_some() || target.is_some_and(|at| flat(at - droid.feet).norm() < engage);
             if target.is_some() {
                 droid.armed_left = ARMED_FOR;
-                droid.aimed_at = target;
+                // Firing blind, each shot somewhere else about there (below).
+                droid.aimed_at = if blind.is_some() { droid.aimed_at.or(target) } else { target };
             }
             droid.resting = (droid.resting - dt).max(0.0);
             droid.windup = (droid.windup - dt).max(0.0);
@@ -3548,7 +3602,22 @@ impl Inhabitants {
             });
             let trigger = facing_them.is_some() && droid.reload == 0.0 && !droid.down;
             if trigger {
-                droid.reload = between(rng, if gang { GANG_FIRE_EVERY } else { FIRE_EVERY });
+                droid.reload = between(
+                    rng,
+                    match (blind.is_some(), gang) {
+                        (true, _) => BLIND_FIRE_EVERY,
+                        (false, true) => GANG_FIRE_EVERY,
+                        (false, false) => FIRE_EVERY,
+                    },
+                );
+                if let Some(from) = blind {
+                    let wide = Vector3::new(
+                        between(rng, (-BLIND_WIDE, BLIND_WIDE)),
+                        between(rng, (-0.5 * BLIND_WIDE, 0.5 * BLIND_WIDE)),
+                        between(rng, (-BLIND_WIDE, BLIND_WIDE)),
+                    );
+                    droid.aimed_at = Some(from + wide);
+                }
             }
             // Its body is never turned - only the model's root is, by the heading - so the way to
             // them is in the world's terms, as the heading is, not ahead of where it faces.
@@ -3595,7 +3664,9 @@ impl Inhabitants {
                 droid.unposed = 0.0;
             }
             // A shot leaves the muzzle as the pistol fires, at what it aimed at, give or take.
-            if let (Some((from, _)), Some(at), Some(side)) = (droid.avatar.shot(), droid.aimed_at, droid.side) {
+            // A sentry of the maze's firing blind fires security's bolts.
+            let firing_as = droid.side.or(droid.sentry.then_some(Side::Security));
+            if let (Some((from, _)), Some(at), Some(side)) = (droid.avatar.shot(), droid.aimed_at, firing_as) {
                 let wide = SPREAD * (at - from).norm() / 10.0;
                 let miss = Vector3::new(
                     between(rng, (-wide, wide)),
@@ -4223,7 +4294,11 @@ impl Inhabitants {
         loudness: f32,
     ) {
         let listening = |droid: &Inhabitant| {
-            !droid.down && droid.hunts_player() && matches!(droid.alert, Some(Alert::Evasion | Alert::Caution))
+            // Firing blind, it is too busy to - and would only hear its own.
+            !droid.down
+                && droid.hunts_player()
+                && matches!(droid.alert, Some(Alert::Evasion | Alert::Caution))
+                && droid.blind.is_none()
         };
         if !self.droids.iter().any(listening) {
             return;
@@ -4278,10 +4353,37 @@ impl Inhabitants {
                 continue;
             }
             let chest = droid.feet + Vector3::new(0.0, CHEST, 0.0);
-            let Some(pass) = passes.iter().find(|pass| pass.nearest(chest) <= NEAR_MISS) else {
+            // A bolt flying by in front of it, or felt going close by: noticed once a bolt.
+            let noticed = passes.iter().find(|pass| {
+                pass.closest(chest).is_some_and(|(near, at)| {
+                    near <= NEAR_MISS
+                        || near <= NOTICE_BOLT
+                            && Sight::default().could_see(droid.alert, droid.feet, droid.heading, at, Stance::Standing, false)
+                })
+            });
+            if let Some(pass) = noticed {
+                // From someone it does not see: it keeps count, and armed, after enough, fires blind.
+                let sees_them = match droid.side {
+                    Some(_) => droid.foe.is_some() && droid.foe_unseen == 0.0,
+                    None => droid.sees_player,
+                };
+                let armed = droid.side.is_some() || (droid.sentry && droid.alert.is_some() && droid.hunts_player());
+                if !sees_them && armed {
+                    droid.unseen_bolts = droid.unseen_bolts.saturating_add(1);
+                    droid.unseen_left = BLIND_MEMORY;
+                    if droid.unseen_bolts >= BLIND_AFTER {
+                        droid.blind = Some((pass.fired_at, BLIND_FOR));
+                    }
+                }
+            }
+            let near = passes.iter().find(|pass| pass.nearest(chest) <= NEAR_MISS);
+            if near.is_some() {
+                missed.push(n);
+            }
+            // Searching, or wary, it notices one going by further off too, as one on a side does.
+            let Some(pass) = near.or(noticed.filter(|_| droid.alert.is_some() || droid.side.is_some())) else {
                 continue;
             };
-            missed.push(n);
             if droid.alert == Some(Alert::Alert) {
                 continue;
             }

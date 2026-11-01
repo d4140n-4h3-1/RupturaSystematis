@@ -4,6 +4,11 @@ What changed in Ruptura Systematis, newest first. How to play it is in the [READ
 
 ## 1 November 2026
 
+- **Droids notice flying bolts, and fire blind**: a bolt flying by in front of a droid within
+  4 m, or felt close by from any side, is noticed - in CAUTION and EVASION it searches where the
+  bolt came from. Three in a few seconds from someone it can't see, and an armed droid - a
+  sentry, or one in a battle - stands and fires wildly back that way for a few seconds, as in
+  Fallout 4; a sentry's bolts hurt you. Droids' shots are heard as yours are.
 - **Gunshots are heard in CAUTION and EVASION**: a droid searching for you, or wary of you
   still, hears a shot from 30 m down the corridors, where it heard one from 12 m, no further
   than a sprint; and hears a drone's shots too, not only yours. It runs to where the shot was
