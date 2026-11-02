@@ -12,7 +12,7 @@
 //!   patrols as before. It sees in front of it as a sentry that is not on Alert does - less far
 //!   the lower the player is, and with the lights off.
 //! - **Alert**: it can see the player. It comes on to [`ENGAGE`] from them, keeps facing them and
-//!   fires every [`FIRE_EVERY`] seconds - the quadcopter twice as often - while it can see them (see [`crate::drone_shot`]), each
+//!   fires every [`FIRE_EVERY`] seconds - the quadcopter three times as often - while it can see them (see [`crate::drone_shot`]), each
 //!   shot hurting them where it hits. Losing them, it searches.
 //!
 //! [`HITS`] bolts from the pistol bring it down: it sputters, its rings break into four pieces
@@ -228,7 +228,8 @@ impl Kind {
     }
 
     /// How much each of its shots hurts, as a part of the drone's; and how often it fires on
-    /// Alert, in seconds: the quadcopter's hurt half as much, twice as often.
+    /// Alert, in seconds: the quadcopter's hurt half as much, three times as often - half as much
+    /// again over time.
     pub const fn shot_damage(self) -> f32 {
         match self {
             Kind::Security => 1.0,
@@ -239,7 +240,7 @@ impl Kind {
     const fn fire_every(self) -> f32 {
         match self {
             Kind::Security => FIRE_EVERY,
-            Kind::Quad => FIRE_EVERY / 2.0,
+            Kind::Quad => FIRE_EVERY / 3.0,
         }
     }
 
@@ -1502,9 +1503,11 @@ mod tests {
         assert!(quad.acceleration > security.acceleration && quad.turn_rate > security.turn_rate);
         // Hostile, it outruns a running droid.
         assert!(quad.hurry > 3.5);
-        // Its shots hurt half as much, twice as often: as much over time.
+        // Its shots hurt half as much, three times as often: half as much again over time.
         assert_eq!(Kind::Quad.shot_damage(), 0.5 * Kind::Security.shot_damage());
-        assert_eq!(Kind::Quad.fire_every(), 0.5 * Kind::Security.fire_every());
+        assert_eq!(Kind::Quad.fire_every(), 0.5);
+        let over_time = |kind: Kind| kind.shot_damage() / kind.fire_every();
+        assert!((over_time(Kind::Quad) / over_time(Kind::Security) - 1.5).abs() < 1.0e-4);
         assert_eq!(Kind::Quad.model(), QUAD_MODEL);
     }
 
