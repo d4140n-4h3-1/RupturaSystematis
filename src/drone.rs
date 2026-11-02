@@ -66,7 +66,7 @@ use fyrox::{
         animation::{Animation, AnimationPlayer},
         base::BaseBuilder,
         transform::TransformBuilder,
-        collider::{BitMask, Collider, ColliderBuilder, ColliderShape, InteractionGroups},
+        collider::{BitMask, Collider, ColliderBuilder, ColliderShape, InteractionGroups, QueryFilterFlags},
         graph::{
             physics::{geometry::Ball, QueryFilter, RayCastOptions},
             Graph,
@@ -253,6 +253,12 @@ impl Kind {
         }
     }
 
+    /// Whether it flies free, at any height, through the air (see [`flight`]), rather than
+    /// hovering its height over the floor along the walk grid's routes.
+    const fn flies_free(self) -> bool {
+        matches!(self, Kind::Quad)
+    }
+
     const fn flight(self) -> Flight {
         match self {
             Kind::Security => FLIGHT,
@@ -315,6 +321,15 @@ const SLEW: f32 = 2.0;
 /// to rest, still for the physics, as a fallen droid is.
 const WRECK_STILL: (f32, f32) = (0.05, 0.1);
 const WRECK_SETTLES: f32 = 0.5;
+/// Flying free (see [`flight`]): how far it keeps from anything solid on its way, in meters - its
+/// rotors' guards reach 0.69 m out; how far up it looks for a way over what is in its way, and in
+/// steps of how much; how many cuts it tries across the corners of a way along the floor; and
+/// how far from anything solid its body has to stay as it flies, or it stops and finds another
+/// way - its body's ball, so as to get along a corridor narrower than its guards.
+const FLIGHT_CLEARANCE: f32 = 0.75;
+const CLIMB: f32 = 80.0;
+const CLIMB_STEP: f32 = 1.5;
+const SHORTCUTS: usize = 40;
 /// How near anyone it comes, flying, in meters between its body and theirs.
 const CLEARANCE: f32 = 0.05;
 /// How near a bolt has to fly past its body to be taken as shot at, in meters.
@@ -1135,9 +1150,20 @@ impl Drone {
     ) -> Option<&'static str> {
         // A way to `to`, if there is any: none looked for where there is none to be had (see
         // [`ROUTE_REACH`]).
-        let route_to = |to: Vector3<f32>| match reachable(to) {
+        let ground = |to: Vector3<f32>| match reachable(to) {
             true => inhabitants::route_to((grid, origin), self.at - Vector3::new(0.0, HOVER, 0.0), to, ROUTE_REACH),
             false => Vec::new(),
+        };
+        // Flying free, through the air to its height over `to`: there whether there is a way
+        // along the floor or not.
+        let route_to = |to: Vector3<f32>| match self.kind.flies_free() {
+            true => flight(graph, self.hull, self.at, to + Vector3::new(0.0, HOVER, 0.0), || ground(to)),
+            false => ground(to),
+        };
+        // A trip along the floor, or flying free, through the air to its height over the end of it.
+        let lift = |route: Vec<Vector3<f32>>| match (self.kind.flies_free(), route.first()) {
+            (true, Some(&end)) => flight(graph, self.hull, self.at, end + Vector3::new(0.0, HOVER, 0.0), || route),
+            _ => route,
         };
         // On a side, it watches all the while.
         let hostile = matches!(self.state, State::Alert | State::Search { .. }) || self.side.is_some();
@@ -1159,9 +1185,9 @@ impl Drone {
                         self.route = match self.post {
                             // On a side, round its flag.
                             Some(post) => inhabitants::spot_near((grid, origin), post, POST_REACH, rng)
-                                .map(route_to)
+                                .map(&route_to)
                                 .unwrap_or_default(),
-                            None => inhabitants::plan((grid, origin), under, TRIP, rng),
+                            None => lift(inhabitants::plan((grid, origin), under, TRIP, rng)),
                         };
                         self.resting = inhabitants::between(rng, REST);
                     }
@@ -1187,7 +1213,12 @@ impl Drone {
                 let to = flat(player.feet - under);
                 self.heading = to.x.atan2(to.z);
                 self.replan -= dt;
-                if to.norm() <= ENGAGE {
+                // Flying free, as near as the crow flies to its height over them.
+                let near = match self.kind.flies_free() {
+                    true => (player.feet + Vector3::new(0.0, HOVER, 0.0) - self.at).norm(),
+                    false => to.norm(),
+                };
+                if near <= ENGAGE {
                     self.route.clear();
                 } else if self.replan <= 0.0 || self.route.is_empty() && !self.no_way {
                     self.replan = REPLAN;
@@ -1219,7 +1250,7 @@ impl Drone {
                     if self.scanning <= 0.0 {
                         self.scanning = 0.0;
                         self.searched += 1;
-                        self.route = inhabitants::plan((grid, origin), under, SEARCH_TRIP, rng);
+                        self.route = lift(inhabitants::plan((grid, origin), under, SEARCH_TRIP, rng));
                     }
                 } else if self.route.is_empty() {
                     if self.searched == 0 && flat(self.lost_at - under).norm() > REACHED {
@@ -1245,10 +1276,17 @@ impl Drone {
             return;
         }
         let under = self.at - Vector3::new(0.0, HOVER, 0.0);
+        // Flying free, its route is through the air, up and down as well as along; otherwise
+        // along the floor under it.
+        let free = self.kind.flies_free();
+        let toward = |next: Vector3<f32>| match free {
+            true => next - self.at,
+            false => flat(next - under),
+        };
         // Past the points it has got near, the last one only once it is there.
         while let Some(&next) = self.route.last() {
             let near = if self.route.len() == 1 { ARRIVED } else { REACHED };
-            if flat(next - under).norm() > near {
+            if toward(next).norm() > near {
                 break;
             }
             self.route.pop();
@@ -1258,7 +1296,7 @@ impl Drone {
         let top = if hurry { flight.hurry } else { flight.patrol };
         let (way, wanted) = match self.route.last() {
             Some(&next) => {
-                let to = flat(next - under);
+                let to = toward(next);
                 let distance = to.norm();
                 // Slowing down for the end of its route.
                 let wanted = match self.route.len() {
@@ -1280,14 +1318,25 @@ impl Drone {
                 let to = flat(player.feet - under);
                 (to.norm() > 1.0e-3).then(|| to.x.atan2(to.z))
             }
-            _ => (self.speed > 0.1).then(|| way.x.atan2(way.z)),
+            // Not turning as it rises or drops straight up or down.
+            _ => (self.speed > 0.1 && flat(way).norm() > 0.3).then(|| way.x.atan2(way.z)),
         };
         if let Some(facing) = facing {
             let turn = wrap(facing - self.heading);
             self.heading = wrap(self.heading + turn.clamp(-flight.turn_rate * dt, flight.turn_rate * dt));
         }
-        // Hovering over the floor where it is, if there is floor there.
-        if let Some((x, z)) = survey::cell_at(grid, origin, next).filter(|&(x, z)| grid.is_walkable(x, z)) {
+        // Hovering over the floor where it is, if there is floor there - unless it flies free, at
+        // the height its route has. Flying free, it never flies into anything solid: something in
+        // its way after all - something moved there, or a way along the floor too tight to fly -
+        // it stops, and finds another way.
+        if free {
+            if !clear(graph, self.hull, self.at, next, BODY_RADIUS) {
+                self.speed = 0.0;
+                self.route.clear();
+                self.replan = 0.0;
+                return;
+            }
+        } else if let Some((x, z)) = survey::cell_at(grid, origin, next).filter(|&(x, z)| grid.is_walkable(x, z)) {
             let height = grid.floor(x, z) + HOVER;
             next.y += (height - next.y) * (1.0 - (-FLOOR_EASING * dt).exp());
         }
@@ -1388,6 +1437,105 @@ fn wreck(graph: &mut Graph, at: Vector3<f32>, heading: f32, speed: f32, away: Ve
     .build(graph)
     .to_base();
     (body, collider)
+}
+
+/// Whether a ball `radius` across its middle could fly from `from` to `to` without touching
+/// anything solid that stays where it is - the maze, the city - past the body `hull`. Not the
+/// characters, whom a drone looks out for as it flies (see [`blocked`]), nor anything that moves:
+/// other drones, trains and lifts, the fallen.
+fn clear(graph: &Graph, hull: Handle<Node>, from: Vector3<f32>, to: Vector3<f32>, radius: f32) -> bool {
+    let way = to - from;
+    if way.norm() < 1.0e-4 {
+        return true;
+    }
+    graph
+        .physics
+        .cast_shape(
+            graph,
+            &Ball::new(radius),
+            &Isometry3::translation(from.x, from.y, from.z),
+            &way,
+            1.0,
+            false,
+            QueryFilter {
+                flags: QueryFilterFlags::EXCLUDE_KINEMATIC | QueryFilterFlags::EXCLUDE_DYNAMIC | QueryFilterFlags::EXCLUDE_SENSORS,
+                exclude_rigid_body: Some(hull),
+                predicate: Some(&|_, collider: &Collider| collider.collision_groups().memberships.0 != CHARACTERS),
+                ..Default::default()
+            },
+        )
+        .is_none()
+}
+
+/// How far a drone whose body is `hull` could rise from `at`, up to `most`, keeping
+/// [`FLIGHT_CLEARANCE`] from anything solid.
+fn headroom(graph: &Graph, hull: Handle<Node>, at: Vector3<f32>, most: f32) -> f32 {
+    let (mut low, mut high) = (0.0, most);
+    if clear(graph, hull, at, at + Vector3::new(0.0, most, 0.0), FLIGHT_CLEARANCE) {
+        return most;
+    }
+    // Halving the way to whatever is overhead.
+    for _ in 0..8 {
+        let middle = (low + high) / 2.0;
+        match clear(graph, hull, at, at + Vector3::new(0.0, middle, 0.0), FLIGHT_CLEARANCE) {
+            true => low = middle,
+            false => high = middle,
+        }
+    }
+    low
+}
+
+/// The way a quadcopter whose body is `hull` flies from `from` to `to`, through the air at any
+/// height, as a route: points in the air, the last one first, keeping [`FLIGHT_CLEARANCE`] from
+/// anything solid. Straight there, if nothing is in the way. If something is - a wall, a building
+/// - up as little as it can, over it and down on the other side: as long as there is nothing
+/// overhead, up to [`CLIMB`] above the higher of the two. Under a roof, along its `ground` route -
+/// along the floor, the last point first, as the walk grid has it - at its height over the floor,
+/// its corners cut where they can be. Empty if there is no way: none overhead, and none along the
+/// floor.
+fn flight(
+    graph: &Graph,
+    hull: Handle<Node>,
+    from: Vector3<f32>,
+    to: Vector3<f32>,
+    ground: impl FnOnce() -> Vec<Vector3<f32>>,
+) -> Vec<Vector3<f32>> {
+    if clear(graph, hull, from, to, FLIGHT_CLEARANCE) {
+        return vec![to];
+    }
+    // As high as it can rise at either end, and the lowest it can cross between at that height.
+    let top = (from.y + headroom(graph, hull, from, CLIMB)).min(to.y + headroom(graph, hull, to, CLIMB));
+    let mut height = from.y.max(to.y) + CLIMB_STEP;
+    while height <= top {
+        let (up, over) = (Vector3::new(from.x, height, from.z), Vector3::new(to.x, height, to.z));
+        if clear(graph, hull, up, over, FLIGHT_CLEARANCE) {
+            return vec![to, over, up];
+        }
+        height += CLIMB_STEP;
+    }
+    // Along the floor, first point first, cutting straight across to the furthest point it can.
+    let along: Vec<Vector3<f32>> = ground().into_iter().rev().map(|at| at + Vector3::new(0.0, HOVER, 0.0)).collect();
+    let mut way = Vec::with_capacity(along.len());
+    let (mut at, mut next, mut tries) = (from, 0, 0);
+    while next < along.len() {
+        let mut furthest = next;
+        while furthest + 1 < along.len() && tries < SHORTCUTS {
+            tries += 1;
+            if !clear(graph, hull, at, along[furthest + 1], FLIGHT_CLEARANCE) {
+                break;
+            }
+            furthest += 1;
+        }
+        way.push(along[furthest]);
+        at = along[furthest];
+        next = furthest + 1;
+        if tries >= SHORTCUTS {
+            way.extend_from_slice(&along[next..]);
+            break;
+        }
+    }
+    way.reverse();
+    way
 }
 
 /// Whether the drone whose body is `hull`, its middle at `at`, would run into anyone - the player
@@ -1660,6 +1808,83 @@ mod tests {
             // On its back is as low as it goes.
             assert!(lowest > CORE_HALF.1 + CORE_AT - 0.04, "it went through the floor: {lowest}");
         }
+    }
+
+    /// A scene of solid boxes, each its middle and its half-extents, as the physics has them.
+    fn boxes(walls: &[(Vector3<f32>, Vector3<f32>)]) -> Graph {
+        use fyrox::core::algebra::Vector2;
+        let mut graph = Graph::new();
+        for &(at, half) in walls {
+            let wall = ColliderBuilder::new(BaseBuilder::new()).with_shape(ColliderShape::cuboid(half.x, half.y, half.z)).build(&mut graph);
+            RigidBodyBuilder::new(
+                BaseBuilder::new()
+                    .with_local_transform(TransformBuilder::new().with_local_position(at).build())
+                    .with_child(wall),
+            )
+            .with_body_type(RigidBodyType::Static)
+            .build(&mut graph);
+        }
+        // The physics has its colliders by the second update.
+        for _ in 0..2 {
+            graph.update(Vector2::new(800.0, 600.0), 1.0 / 60.0, Default::default());
+        }
+        graph
+    }
+
+    /// Whether every leg of `route` - from `from`, the last point first - is clear.
+    fn flown(graph: &Graph, from: Vector3<f32>, route: &[Vector3<f32>]) -> bool {
+        let mut at = from;
+        route.iter().rev().all(|&next| {
+            let leg = clear(graph, Handle::NONE, at, next, BODY_RADIUS);
+            at = next;
+            leg
+        })
+    }
+
+    #[test]
+    fn a_quadcopter_flies_straight_there_over_what_is_in_its_way_or_along_the_floor_under_a_roof() {
+        let floor = (Vector3::new(0.0, -0.1, 0.0), Vector3::new(30.0, 0.1, 30.0));
+        let (from, to) = (Vector3::new(0.0, HOVER, -8.0), Vector3::new(0.0, HOVER, 8.0));
+        let nowhere = || -> Vec<Vector3<f32>> { panic!("no need of a way along the floor") };
+        // Nothing in the way: straight there.
+        let graph = boxes(&[floor]);
+        assert_eq!(flight(&graph, Handle::NONE, from, to, nowhere), vec![to]);
+        // A wall 5 m high across the way: up, over it with room to spare, and down.
+        let wall = (Vector3::new(0.0, 2.5, 0.0), Vector3::new(20.0, 2.5, 0.2));
+        let graph = boxes(&[floor, wall]);
+        let route = flight(&graph, Handle::NONE, from, to, nowhere);
+        assert_eq!(route.len(), 3, "{route:?}");
+        assert_eq!(route[0], to);
+        assert!(route[1].y > 5.0 + FLIGHT_CLEARANCE && route[1].y < 5.0 + FLIGHT_CLEARANCE + CLIMB_STEP + 0.01, "{route:?}");
+        assert!(flown(&graph, from, &route));
+        // A player up on a roof, with no way up to it along the floor: up onto it.
+        let roof = (Vector3::new(0.0, 4.0, 8.0), Vector3::new(3.0, 4.0, 3.0));
+        let graph = boxes(&[floor, roof]);
+        let on_it = Vector3::new(0.0, 8.0 + HOVER, 8.0);
+        let route = flight(&graph, Handle::NONE, from, on_it, nowhere);
+        assert_eq!(route.first(), Some(&on_it));
+        assert!(flown(&graph, from, &route), "{route:?}");
+        // Under a roof 3 m up, the wall with a doorway at one end: along the floor, through it.
+        let ceiling = (Vector3::new(0.0, 3.1, 0.0), Vector3::new(30.0, 0.1, 30.0));
+        let wall = (Vector3::new(-2.0, 1.5, 0.0), Vector3::new(18.0, 1.5, 0.2));
+        let graph = boxes(&[floor, ceiling, wall]);
+        let door = Vector3::new(18.0, 0.0, 0.0);
+        // As the walk grid has it: along the floor a step at a time, the last point first.
+        let steps: Vec<Vector3<f32>> = (0..=36)
+            .map(|k| k as f32 / 36.0 * 2.0)
+            .map(|t| match t < 1.0 {
+                true => (from - Vector3::new(0.0, HOVER, 0.0)).lerp(&door, t),
+                false => door.lerp(&(to - Vector3::new(0.0, HOVER, 0.0)), t - 1.0),
+            })
+            .rev()
+            .collect();
+        let route = flight(&graph, Handle::NONE, from, to, || steps.clone());
+        assert!(flown(&graph, from, &route), "{route:?}");
+        // The wall ends 16 m along: the doorway is past it.
+        assert!(route.iter().any(|at| at.x > 16.0 && at.z.abs() < 1.0), "not through the doorway: {route:?}");
+        // Its corners cut: far fewer points than the steps along the floor.
+        assert!(route.len() <= 8 && route.len() < steps.len() / 4, "{route:?}");
+        assert_eq!(route.first().map(|at| (at - to).norm() < 1.0e-3), Some(true));
     }
 
     #[test]
