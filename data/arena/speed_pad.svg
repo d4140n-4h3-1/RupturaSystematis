@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- A speed pad's panel on the race tracks (race_circuit.py), seen from above, the way it kicks up
+     the image: across the road 256 px, along it 512; its rails lit. The chevrons over it, which
+     blink one at a time, are speed_pad_chevron.svg. The engine scales what a surface gives off by
+     its colour, so the glow is wherever the image is bright. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="512" viewBox="0 0 256 512">
+  <defs>
+    <filter id="bloom" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="7" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <rect width="256" height="512" fill="#0b0d12"/>
+  <g fill="#ffb21a" filter="url(#bloom)">
+    <rect x="10" y="12" width="10" height="488" rx="4"/>
+    <rect x="236" y="12" width="10" height="488" rx="4"/>
+  </g>
+</svg>

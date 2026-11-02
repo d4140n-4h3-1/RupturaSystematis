@@ -25,6 +25,16 @@ outside edge up and the inside left where the middle line is, so that no edge di
 ground. Kerbs, red and white, run along both edges. Where the road is up off the ground
 it is a deck on pillars, none of them standing on the road below.
 
+Speed pads lie on the road at PADS - out of the corners, onto the straights and the viaduct, to
+one side of the road so that taking one is a choice of line: each 8 m long and PAD_WIDTH across,
+a dark panel lit down its sides (speed_pad.png) and three amber chevrons on it, each its own mesh,
+SpeedPadChevron1 (the hindmost) to SpeedPadChevron3, and material, for the game to light one at a
+time (speed_pad_chevron.png). The images are drawn as .svg beside this script; turn them into the
+.pngs with
+
+    rsvg-convert -w 256 -h 512 speed_pad.svg -o speed_pad.png
+    rsvg-convert -w 256 -h 192 speed_pad_chevron.svg -o speed_pad_chevron.png
+
 Builds a track's .glb for the game (and a .blend to look it over, wherever --out puts it), the
 Circuit unless --track says otherwise:
 
@@ -34,7 +44,8 @@ Circuit unless --track says otherwise:
 Made for Ruptura Systematis (MazeGame/maze), whose race mode (src/race.rs) reads its empties:
 `race_start` on the start line, its +x the way round; `checkpoint_1` to `checkpoint_N`, every
 CHECKPOINT_EVERY meters round the middle of the road, in order, the last just before the line;
-and `race_grid_1` to `race_grid_8`, the grid behind the line, two by two.
+`race_grid_1` to `race_grid_8`, the grid behind the line, two by two; and `race_pad_1` on, the
+middle of each speed pad, its +x the way it kicks.
 """
 
 import math
@@ -72,6 +83,18 @@ WAYPOINTS = [
     (-190.0, -6.0, 0.0),
 ]
 TUNNEL = (15.6, 17.4)       # from where to where, in waypoints, the road goes through the tunnel
+# The speed pads: where along the road, in waypoints, and across it, from the left edge (0) to the
+# right (1).
+PADS = [
+    (1.15, 0.7),            # down the straight, past the viaduct
+    (5.5, 0.3),             # out of the hairpin
+    (12.3, 0.35),           # over the straight, on the viaduct
+    (19.75, 0.65),          # out of the last corner, short of the grid
+]
+PAD_LENGTH = 8.0
+PAD_WIDTH = 5.2
+PAD_CHEVRONS = 3
+PAD_CHEVRON_SPAN = (0.06, 0.94, 0.88)   # the chevrons' run along the pad, back to front, and across it
 
 ROAD = 16.0                 # the road's width
 STEP = 2.0                  # how far apart the road's sections are along it
@@ -122,6 +145,14 @@ TRACKS = {
             (-360.0, -20.0, 0.0),
         ],
         "TUNNEL": (20.3, 22.3),
+        "PADS": [
+            (1.4, 0.3),
+            (3.1, 0.7),
+            (7.4, 0.35),
+            (16.4, 0.65),
+            (23.0, 0.35),
+            (26.2, 0.65),
+        ],
         "ROAD": 24.0,
         "TUNNEL_HEIGHT": 8.0,
         "MONOLITHS": 320,
@@ -180,6 +211,23 @@ class Mats:
         self.cyan = glow("RaceGlowCyan", CYAN, 6.0)
         self.magenta = glow("RaceGlowMagenta", MAGENTA, 6.0)
         self.white = glow("RaceGlowWhite", WHITE, 4.0)
+        self.pad = pad_material("RaceSpeedPad", "speed_pad.png")
+        self.chevrons = [pad_material(f"RaceSpeedPadChevron{k + 1}", "speed_pad_chevron.png") for k in range(PAD_CHEVRONS)]
+
+
+def pad_material(name, picture):
+    """A speed pad's: `picture`, beside this script, both its colour and what it gives off."""
+    m = material(name, (1.0, 1.0, 1.0), roughness=0.4, metallic=0.0)
+    nodes, links = m.node_tree.nodes, m.node_tree.links
+    image = bpy.data.images.get(picture) or bpy.data.images.load(os.path.join(os.path.dirname(os.path.abspath(__file__)), picture))
+    image.pack()
+    tex = nodes.new("ShaderNodeTexImage")
+    tex.image = image
+    bsdf = nodes["Principled BSDF"]
+    links.new(tex.outputs["Color"], bsdf.inputs["Base Color"])
+    links.new(tex.outputs["Color"], bsdf.inputs["Emission Color"])
+    bsdf.inputs["Emission Strength"].default_value = 5.0
+    return m
 
 
 class Builder:
@@ -488,6 +536,67 @@ def build_start(secs, m):
     return start.finish()
 
 
+def pad_sections(secs):
+    """Each pad's middle section, and how far across the road its middle is."""
+    out = []
+    for frac, t in PADS:
+        i = min(range(len(secs)), key=lambda j: abs(secs[j].fraction - frac))
+        out.append((i, t))
+    return out
+
+
+def build_pads(secs, m):
+    """The speed pads, laid on the road, following it and banked as it is: each a panel a little up
+    off it, its image's top the way it kicks, and its chevrons a little further up, in a row along
+    it, the hindmost first - each chevron of every pad in one mesh, SpeedPadChevron1 on."""
+    n = len(secs)
+    half = int(PAD_LENGTH / STEP / 2)
+    w = PAD_WIDTH / ROAD / 2
+    pads = [([secs[(i + k) % n] for k in range(-half, half + 1)], t) for i, t in pad_sections(secs)]
+
+    def at(rows, v, u, t, lift):
+        """The point `v` along the pad (0 back, 1 front) and `u` across it (0 left, 1 right)."""
+        x = v * (len(rows) - 1)
+        k = min(int(x), len(rows) - 2)
+        across = t - w + 2 * w * u
+        return rows[k].across(across, lift).lerp(rows[k + 1].across(across, lift), x - k)
+
+    def mesh(name, mat, patches):
+        """One object of `patches`: each (rows, t, v0, v1, u0, u1, lift), its picture across it."""
+        bm = bmesh.new()
+        uv = bm.loops.layers.uv.new("UVMap")
+        for rows, t, v0, v1, u0, u1, lift in patches:
+            # Cut along, so that it follows the road as it climbs and banks.
+            cuts = max(1, round((v1 - v0) * (len(rows) - 1)))
+            for c in range(cuts):
+                a, b = v0 + (v1 - v0) * c / cuts, v0 + (v1 - v0) * (c + 1) / cuts
+                pa, pb = c / cuts, (c + 1) / cuts
+                corners = [(a, u0, 0.0, pa), (a, u1, 1.0, pa), (b, u1, 1.0, pb), (b, u0, 0.0, pb)]
+                face = bm.faces.new([bm.verts.new(at(rows, v, u, t, lift)) for v, u, _, _ in corners])
+                for loop, (_, _, tu, tv) in zip(face.loops, corners):
+                    loop[uv].uv = (tu, tv)
+        for face in bm.faces:
+            face.normal_update()
+            if face.normal.z < 0:
+                face.normal_flip()
+        data = bpy.data.meshes.new(name)
+        bm.to_mesh(data)
+        bm.free()
+        data.materials.append(mat)
+        obj = bpy.data.objects.new(name, data)
+        bpy.context.scene.collection.objects.link(obj)
+        return obj
+
+    objs = [mesh("SpeedPads", m.pad, [(rows, t, 0.0, 1.0, 0.0, 1.0, 0.03) for rows, t in pads])]
+    back, front, wide = PAD_CHEVRON_SPAN
+    u0, u1 = 0.5 - wide / 2, 0.5 + wide / 2
+    for k in range(PAD_CHEVRONS):
+        v0 = back + (front - back) * k / PAD_CHEVRONS
+        v1 = back + (front - back) * (k + 1) / PAD_CHEVRONS
+        objs.append(mesh(f"SpeedPadChevron{k + 1}", m.chevrons[k], [(rows, t, v0, v1, u0, u1, 0.05) for rows, t in pads]))
+    return objs
+
+
 def far_from_track(secs, x, y, clearance):
     return all((Vector((x, y)) - s.centre.xy).length > ROAD / 2 + clearance for s in secs[::3])
 
@@ -576,6 +685,9 @@ def place_markers(secs):
         n = len(secs)
         s = secs[(-int(back / STEP)) % n]
         marker(f"race_grid_{k + 1}", s.centre + s.right * across, math.atan2(s.flat.y, s.flat.x))
+    for k, (i, t) in enumerate(pad_sections(secs)):
+        s = secs[i]
+        marker(f"race_pad_{k + 1}", s.across(t), math.atan2(s.flat.y, s.flat.x))
     return count
 
 
@@ -596,6 +708,7 @@ def main():
     objs.append(build_pillars(secs, m))
     objs += build_tunnel(secs, m)
     objs.append(build_start(secs, m))
+    objs += build_pads(secs, m)
     objs += build_scenery(secs, m, bounds)
     objs.append(build_ground(m, bounds))
     checkpoints = place_markers(secs)

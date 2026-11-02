@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- One of a speed pad's three chevrons (race_circuit.py), pointing up the image, the way the pad
+     kicks: laid over the panel (speed_pad.svg) a third of the pad each, lit one at a time by the
+     game (src/race.rs, PadLights). -->
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="192" viewBox="0 0 256 192">
+  <defs>
+    <filter id="bloom" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="7" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <linearGradient id="fade" x1="0" y1="1" x2="0" y2="0">
+      <stop offset="0" stop-color="#ff8a00"/>
+      <stop offset="1" stop-color="#ffe680"/>
+    </linearGradient>
+  </defs>
+  <rect width="256" height="192" fill="#0b0d12"/>
+  <path d="M128 26 L240 126 L240 170 L128 70 L16 170 L16 126 Z" fill="url(#fade)" filter="url(#bloom)"/>
+</svg>

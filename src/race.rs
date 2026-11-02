@@ -10,7 +10,9 @@
 //! The bike hovers [`HOVER`] over whatever is under it, tilting with the road as it banks and
 //! climbs, leaning into its turns. W goes, S brakes and then backs up, A and D steer, Shift boosts
 //! for as long as the boost lasts ([`BOOST_FOR`] seconds, filling again over [`BOOST_REFILL`]),
-//! and R puts the bike back on the track at the last checkpoint passed. Off the end of a crest it
+//! and R puts the bike back on the track at the last checkpoint passed. Speed pads on the road
+//! (`race_pad_N`, amber chevrons lit one at a time from the back, [`PadLights`]) kick a bike over
+//! one up to [`PAD_SPEED`] and hold it there for [`PAD_FOR`] seconds. Off the end of a crest it
 //! flies, falling, until it is over the road again. It cannot go through the walls: it glances off
 //! them, losing speed by how square on it hits.
 //!
@@ -22,16 +24,19 @@ use crate::level::Marker;
 use fyrox::{
     core::{
         algebra::{Point3, UnitQuaternion, Vector3},
+        color::Color,
         log::Log,
         pool::Handle,
     },
     graph::SceneGraph,
     keyboard::KeyCode,
+    material::{MaterialProperty, MaterialResource},
     resource::model::{ModelResource, ModelResourceExtension},
     scene::{
         animation::AnimationPlayer,
         base::BaseBuilder,
         collider::Collider,
+        mesh::Mesh,
         graph::{physics::RayCastOptions, Graph},
         node::Node,
         pivot::PivotBuilder,
@@ -75,6 +80,25 @@ const GRAVITY: f32 = 9.81;
 /// How long the boost lasts, full, and how long it takes to fill again from empty, in seconds.
 pub const BOOST_FOR: f32 = 3.0;
 pub const BOOST_REFILL: f32 = 12.0;
+/// A speed pad: how fast a bike crossing one is kicked up to - by [`PAD_KICK`] at the most - and
+/// for how long, in seconds, it is held up to that before it bleeds back down to its top speed.
+pub const PAD_SPEED: f32 = 56.0;
+const PAD_KICK: f32 = 16.0;
+pub const PAD_FOR: f32 = 1.2;
+/// How far a pad reaches from its middle, along the road and across it, and up and down; and how
+/// nearly the bike has to be pointing its way for it to count.
+const PAD_HALF: (f32, f32) = (4.0, 2.6);
+const PAD_HEIGHT: f32 = 2.0;
+const PAD_FACING: f32 = 0.3;
+/// How far ahead a droid sees a speed pad and makes for it, and how far off its line it goes to.
+const PAD_SEEN: f32 = 45.0;
+const PAD_DETOUR: f32 = 6.0;
+/// How many chevrons a pad has, each its own mesh in the track (`SpeedPadChevron1`, the hindmost,
+/// on: see `data/arena/race_circuit.py`); how long each is lit, in seconds, before the next one on
+/// is; and how bright an unlit one's colour is, of a lit one's.
+const PAD_CHEVRONS: usize = 3;
+const CHEVRON_LIT: f32 = 0.12;
+const CHEVRON_DARK: f32 = 0.3;
 /// How far from its middle the bike keeps off a wall: to either side, and ahead or behind.
 const RADIUS: f32 = 0.6;
 const HALF_LENGTH: f32 = 1.3;
@@ -118,6 +142,8 @@ pub struct Track {
     pub gates: Vec<Vector3<f32>>,
     /// Where the bikes line up, and which way they face, from the front of the grid back.
     pub grid: Vec<(Vector3<f32>, f32)>,
+    /// The speed pads: the middle of each, and the way it kicks along the ground (length 1).
+    pub pads: Vec<(Vector3<f32>, Vector3<f32>)>,
 }
 
 impl Track {
@@ -144,7 +170,25 @@ impl Track {
         if grid.is_empty() {
             grid.push((start, ahead));
         }
-        Some(Self { start, gates, grid })
+        // A pad's +x is the way it kicks: the marker's yaw is measured from it (see `level`).
+        let pads = markers
+            .iter()
+            .filter(|m| m.name.strip_prefix("race_pad_").is_some_and(|n| n.parse::<u32>().is_ok()))
+            .map(|m| (m.position, Vector3::new(m.yaw.cos(), 0.0, -m.yaw.sin())))
+            .collect();
+        Some(Self { start, gates, grid, pads })
+    }
+
+    /// The speed pad under a bike at `at` pointing `ahead`, if it is on one and going its way.
+    pub fn pad_under(&self, at: Vector3<f32>, ahead: Vector3<f32>) -> Option<usize> {
+        self.pads.iter().position(|&(middle, way)| {
+            let to = at - middle;
+            let across = Vector3::new(way.z, 0.0, -way.x);
+            to.dot(&way).abs() < PAD_HALF.0
+                && to.dot(&across).abs() < PAD_HALF.1
+                && to.y.abs() < PAD_HEIGHT
+                && ahead.dot(&way) > PAD_FACING
+        })
     }
 
     /// Whether `at` is at gate `n`: near its middle, at its height.
@@ -261,6 +305,8 @@ pub struct Handling {
     pub boost: f32,
     /// How far it is leaning into its turn right now, in radians: left positive.
     pub lean: f32,
+    /// How long it is held up to [`PAD_SPEED`] yet, off a speed pad, in seconds.
+    pub surge: f32,
 }
 
 impl Handling {
@@ -273,6 +319,7 @@ impl Handling {
             grounded: true,
             boost: 1.0,
             lean: 0.0,
+            surge: 0.0,
         }
     }
 
@@ -284,6 +331,15 @@ impl Handling {
     /// How fast it is going the way it points, in meters per second: backing up, less than 0.
     pub fn speed(&self) -> f32 {
         self.velocity.dot(&self.ahead())
+    }
+
+    /// Over a speed pad: kicked up towards [`PAD_SPEED`] the way it points, and held there a while.
+    pub fn surge(&mut self) {
+        let ahead = self.ahead();
+        let along = self.velocity.dot(&ahead);
+        let kicked = (along + PAD_KICK).min(PAD_SPEED).max(along);
+        self.velocity += ahead * (kicked - along);
+        self.surge = PAD_FOR;
     }
 
     /// Moves it on `dt` seconds as `controls` ask, `cast` saying what a ray from a point, along a
@@ -323,7 +379,12 @@ impl Handling {
         } else {
             (self.boost + dt / BOOST_REFILL).min(1.0)
         };
-        let (top, accel) = if boosting { (BOOST_SPEED, BOOST_ACCEL) } else { (TOP_SPEED, ACCEL) };
+        let (mut top, accel) = if boosting { (BOOST_SPEED, BOOST_ACCEL) } else { (TOP_SPEED, ACCEL) };
+        // Off a speed pad, nothing holds it back from what the pad gave it a while.
+        if self.surge > 0.0 {
+            self.surge = (self.surge - dt).max(0.0);
+            top = top.max(PAD_SPEED);
+        }
 
         if self.grounded {
             let throttle = controls.throttle.clamp(-1.0, 1.0);
@@ -559,6 +620,8 @@ pub struct Racer {
     pace: f32,
     /// When it crossed the line for the last time, on the race's clock.
     pub finished: Option<f32>,
+    /// The speed pad it is over, if any: each pad kicks once as it is crossed.
+    on_pad: Option<usize>,
     /// Where it started on the grid, and which way it faced: where it goes back to, put back on
     /// the track before it has passed a gate.
     grid: (Vector3<f32>, f32),
@@ -575,6 +638,7 @@ impl Racer {
             line,
             pace,
             finished: None,
+            on_pad: None,
         }
     }
 
@@ -618,6 +682,96 @@ impl Racer {
     }
 }
 
+/// Which of a pad's chevrons is lit, `clock` seconds on: one at a time, from the hindmost to the
+/// front, and round again.
+pub fn lit_chevron(clock: f32) -> usize {
+    (clock.max(0.0) / CHEVRON_LIT) as usize % PAD_CHEVRONS
+}
+
+/// The speed pads' chevrons, lit one at a time: a material of its own for each of the pads'
+/// chevrons - the hindmost of every pad sharing one - and how brightly it glows lit.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct PadLights {
+    chevrons: Vec<(MaterialResource, MaterialProperty)>,
+    clock: f32,
+    lit: Option<usize>,
+}
+
+impl PadLights {
+    /// The chevrons of the track in `graph`, each given its own copy of its material.
+    pub fn claim(graph: &mut Graph) -> Self {
+        let mut chevrons = Vec::new();
+        for k in 1..=PAD_CHEVRONS {
+            let name = format!("SpeedPadChevron{k}");
+            let nodes: Vec<Handle<Node>> =
+                graph.pair_iter().filter(|(_, node)| node.name() == name).map(|(handle, _)| handle).collect();
+            let mut copy: Option<(MaterialResource, MaterialProperty)> = None;
+            for node in nodes {
+                let Some(mesh) = graph[node].cast_mut::<Mesh>() else {
+                    continue;
+                };
+                for surface in mesh.surfaces_mut() {
+                    if copy.is_none() {
+                        let original = surface.material().clone();
+                        let state = original.state();
+                        let Some(material) = state.data_ref() else {
+                            continue;
+                        };
+                        let Some(strength) = crate::fixtures::glow_strength(material) else {
+                            continue;
+                        };
+                        copy = Some((MaterialResource::new_embedded(material.clone()), strength));
+                    }
+                    if let Some((material, _)) = &copy {
+                        surface.set_material(material.clone());
+                    }
+                }
+            }
+            match copy {
+                Some(copy) => chevrons.push(copy),
+                None => break,
+            }
+        }
+        Log::info(format!("Race: {} speed pad chevrons to light", chevrons.len()));
+        if chevrons.len() != PAD_CHEVRONS && !chevrons.is_empty() {
+            Log::warn(format!("Race: the speed pads have {} glowing chevrons, not {PAD_CHEVRONS}", chevrons.len()));
+        }
+        Self { chevrons, clock: 0.0, lit: None }
+    }
+
+    /// The chevrons on `dt` seconds: the one lit now glowing, the others dark.
+    pub fn update(&mut self, dt: f32) {
+        self.clock += dt;
+        let lit = lit_chevron(self.clock);
+        if self.lit != Some(lit) {
+            self.light(|k| k == lit);
+            self.lit = Some(lit);
+        }
+    }
+
+    /// Every chevron lit, as they were before the race: for the next race to find them glowing.
+    pub fn restore(&mut self) {
+        self.light(|_| true);
+        self.lit = None;
+    }
+
+    /// Lights the chevrons that `on` says, the others dark.
+    fn light(&self, on: impl Fn(usize) -> bool) {
+        for (k, (material, strength)) in self.chevrons.iter().enumerate() {
+            let on = on(k);
+            let glow = match strength {
+                MaterialProperty::Vector3(_) if !on => MaterialProperty::Vector3(Vector3::zeros()),
+                MaterialProperty::Float(_) if !on => MaterialProperty::Float(0.0),
+                other => other.clone(),
+            };
+            let shade = if on { 1.0 } else { CHEVRON_DARK };
+            let mut material = material.data_ref();
+            material.set_property(crate::fixtures::EMISSION_STRENGTH, glow);
+            material.set_property("diffuseColor", Color::from(Vector3::repeat(shade)));
+        }
+    }
+}
+
 /// A race under way.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Race {
@@ -633,6 +787,8 @@ pub struct Race {
     /// along with it, so that only its swing round after the bike's turns lags.
     eye: Vector3<f32>,
     target: Vector3<f32>,
+    /// The speed pads' chevrons, blinking.
+    lights: PadLights,
 }
 
 impl Race {
@@ -655,6 +811,7 @@ impl Race {
             autopilot,
             eye: eye - at,
             target: target - at,
+            lights: PadLights::default(),
         }
     }
 
@@ -666,10 +823,12 @@ impl Race {
             racer.bike = Some(build_bike(scene, model, rider));
             racer.place(&mut scene.graph, 0.0);
         }
+        self.lights = PadLights::claim(&mut scene.graph);
     }
 
     /// Takes the bikes out of the scene.
     pub fn remove(&mut self, graph: &mut Graph) {
+        self.lights.restore();
         for racer in &mut self.racers {
             if let Some(bike) = racer.bike.take() {
                 graph.remove_node(bike.root);
@@ -741,6 +900,24 @@ impl Race {
             }
             let mut cast = |from: Vector3<f32>, way: Vector3<f32>, reach: f32| first_hit(graph, from, way, reach, skip);
             racer.handling.step(controls, dt, &mut cast);
+            let pad = if racer.handling.grounded {
+                self.track.pad_under(racer.handling.position, racer.handling.ahead())
+            } else {
+                None
+            };
+            if let Some(on) = pad.filter(|_| pad != racer.on_pad) {
+                let before = racer.handling.speed();
+                racer.handling.surge();
+                if n == 0 {
+                    Log::info(format!(
+                        "Race: speed pad {}, {:.0} to {:.0} km/h",
+                        on + 1,
+                        before * 3.6,
+                        racer.handling.speed() * 3.6
+                    ));
+                }
+            }
+            racer.on_pad = pad;
             // Fallen off the world - or a droid stuck, a long way off its way round: back on the
             // track.
             if racer.handling.position.y < self.track.start.y - 40.0 {
@@ -768,6 +945,7 @@ impl Race {
             }
         }
         bump(&mut self.racers);
+        self.lights.update(dt);
         self.follow(graph, dt, skip);
         for racer in &self.racers {
             racer.place(graph, self.time);
@@ -957,7 +1135,23 @@ pub fn autopilot(handling: &Handling, track: &Track, progress: &Progress, line: 
     // Through the next gate towards the one after, a little, the nearer it is.
     let to_near = Vector3::new(near_on.x - handling.position.x, 0.0, near_on.z - handling.position.z).norm();
     let blend = (1.0 - to_near / 25.0).clamp(0.0, 1.0);
-    let aim = near_on + (far_on - near_on).try_normalize(1e-5).unwrap_or_default() * 8.0 * blend;
+    let mut aim = near_on + (far_on - near_on).try_normalize(1e-5).unwrap_or_default() * 8.0 * blend;
+    // A speed pad just ahead, not far off its line and pointing its way: over it.
+    let heading = handling.ahead();
+    let side = Vector3::new(heading.z, 0.0, -heading.x);
+    let pad = track
+        .pads
+        .iter()
+        .filter(|&&(at, way)| {
+            let to = at - handling.position;
+            let front = to.dot(&heading);
+            front > PAD_HALF.0 && front < PAD_SEEN && to.dot(&side).abs() < PAD_DETOUR && to.y.abs() < PAD_HEIGHT * 2.0 && way.dot(&heading) > 0.8
+        })
+        .min_by(|a, b| (a.0 - handling.position).norm().total_cmp(&(b.0 - handling.position).norm()));
+    if let Some(&(at, way)) = pad {
+        // Through its middle along it, rather than across it.
+        aim = at + way * PAD_HALF.0;
+    }
     let off = wrap(yaw_towards(handling.position, aim) - handling.yaw);
     // How sharp the way on turns at the next gate, and at the one after it, as the bike nears
     // each: slow enough for the sharper, in time to make it.
@@ -1214,6 +1408,73 @@ mod tests {
             assert!(bike.position.y >= HOVER - 1e-3);
         }
         assert!(flew && bike.grounded && (bike.position.y - HOVER).abs() < 1e-3, "{:?}", bike.position);
+    }
+
+    #[test]
+    fn a_speed_pad_kicks_a_bike_going_its_way_once_and_holds_it_there_a_while() {
+        // A pad half way up the square's first side, kicking along +z: its marker's +x is +z.
+        let mut markers = vec![
+            marker("race_start", 0.0, 0.0),
+            marker("checkpoint_1", 0.0, 100.0),
+            marker("checkpoint_2", 100.0, 100.0),
+        ];
+        markers.push(Marker { yaw: -std::f32::consts::FRAC_PI_2, ..marker("race_pad_1", 0.0, 50.0) });
+        let track = Track::from_markers(&markers).unwrap();
+        assert_eq!(track.pads.len(), 1);
+        assert!((track.pads[0].1 - Vector3::z()).norm() < 1e-5, "{:?}", track.pads[0].1);
+        assert_eq!(track.pad_under(Vector3::new(1.0, 0.0, 52.0), Vector3::z()), Some(0));
+        // Off it, or going the other way over it, nothing.
+        assert_eq!(track.pad_under(Vector3::new(4.0, 0.0, 50.0), Vector3::z()), None);
+        assert_eq!(track.pad_under(Vector3::new(0.0, 0.0, 50.0), -Vector3::z()), None);
+        assert_eq!(track.pad_under(Vector3::new(0.0, 10.0, 50.0), Vector3::z()), None);
+
+        // Raced over: flat out it comes off the pad well over its top speed, and it keeps most of
+        // that for a while after.
+        let mut race = Race::new(track, false, 0);
+        race.countdown = 0.0;
+        let mut cast = road(100.0);
+        let racer = &mut race.racers[0];
+        racer.handling = Handling::new(Vector3::new(0.0, HOVER, 30.0), 0.0);
+        racer.handling.velocity = Vector3::z() * TOP_SPEED;
+        let go = Controls { throttle: 1.0, ..Default::default() };
+        let mut kicks = 0;
+        for _ in 0..30 {
+            racer.handling.step(go, 1.0 / 60.0, &mut cast);
+            let pad = race.track.pad_under(racer.handling.position, racer.handling.ahead());
+            if pad.is_some() && pad != racer.on_pad {
+                racer.handling.surge();
+                kicks += 1;
+            }
+            racer.on_pad = pad;
+        }
+        assert_eq!(kicks, 1);
+        assert!(racer.handling.speed() > PAD_SPEED - 2.0, "{}", racer.handling.speed());
+        run(&mut racer.handling, go, PAD_FOR * 0.5, &mut cast);
+        assert!(racer.handling.speed() > TOP_SPEED + 10.0, "{}", racer.handling.speed());
+        // And then it bleeds back down to its top speed.
+        run(&mut racer.handling, go, 6.0, &mut cast);
+        assert!((racer.handling.speed() - TOP_SPEED).abs() < 2.0, "{}", racer.handling.speed());
+    }
+
+    #[test]
+    fn a_pads_chevrons_light_one_at_a_time_from_the_back() {
+        let lit: Vec<usize> = (0..7).map(|k| lit_chevron((k as f32 + 0.5) * CHEVRON_LIT)).collect();
+        assert_eq!(lit, vec![0, 1, 2, 0, 1, 2, 0]);
+    }
+
+    #[test]
+    fn a_droid_makes_for_a_speed_pad_just_ahead_of_it() {
+        let mut markers = vec![marker("race_start", 0.0, 0.0), marker("checkpoint_1", 0.0, 200.0)];
+        markers.push(Marker { yaw: -std::f32::consts::FRAC_PI_2, ..marker("race_pad_1", 4.0, 40.0) });
+        let track = Track::from_markers(&markers).unwrap();
+        let progress = Progress::new();
+        let bike = Handling::new(Vector3::new(0.0, HOVER, 10.0), 0.0);
+        // Left is +x: it steers left, for the pad, not straight on for the checkpoint.
+        assert!(autopilot(&bike, &track, &progress, 0.0, 1.0).steer > 0.1);
+        // Too far off its line, it goes for the checkpoint as if there were no pad.
+        let plain = Track { pads: Vec::new(), ..track.clone() };
+        let far = Handling::new(Vector3::new(-8.0, HOVER, 10.0), 0.0);
+        assert_eq!(autopilot(&far, &track, &progress, 0.0, 1.0), autopilot(&far, &plain, &progress, 0.0, 1.0));
     }
 
     #[test]
