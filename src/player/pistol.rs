@@ -331,6 +331,13 @@ impl Bolts {
         self.rifle = false;
     }
 
+    /// As [`Bolts::fire_for`], but with the rifle's shot: blue, where the pistol's is green.
+    pub fn fire_rifle_for(&mut self, graph: &mut Graph, from: Vector3<f32>, direction: Vector3<f32>, range: f32, lands: bool) {
+        self.rifle = true;
+        self.fire_for(graph, from, direction, range, lands);
+        self.rifle = false;
+    }
+
     /// Fires a bolt from `from` along `direction`, one meter long, that flies no further than
     /// `range` - and there, if it `lands`, glows as if it had hit something.
     pub fn fire_for(

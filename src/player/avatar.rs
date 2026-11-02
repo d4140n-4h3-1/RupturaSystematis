@@ -2894,12 +2894,12 @@ impl Avatar {
     }
 
     /// Whether the gun in hand, or to be drawn next, is the rifle.
-    pub(super) fn rifle_in_hand(&self) -> bool {
+    pub(crate) fn rifle_in_hand(&self) -> bool {
         self.rifle_in_hand
     }
 
     /// How many shots the droid has fired, all told, counted as each is let go.
-    pub(super) fn fired(&self) -> u32 {
+    pub(crate) fn fired(&self) -> u32 {
         self.fired
     }
 

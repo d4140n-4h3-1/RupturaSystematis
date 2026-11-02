@@ -118,7 +118,7 @@ use crate::{
     player::{
         avatar::{self, Avatar, Going},
         breath,
-        pistol::{self, Pass},
+        pistol::{self, FireMode, Pass},
         posture::{Gait, Posture},
         Strike,
     },
@@ -269,11 +269,25 @@ const FIRE_EVERY: (f32, f32) = (0.7, 1.3);
 const GANG_ENGAGE: f32 = 6.0;
 const GANG_FIRE_EVERY: (f32, f32) = (0.45, 0.9);
 const SPREAD: f32 = 0.55;
-/// A droid carries a pistol or a rifle, picked at random (see [`Inhabitant::rifle`]): with the
-/// rifle it fires [`RIFLE_PACE`] as long between shots, as the player's rifle fires twice as fast
-/// as their pistol, and [`RIFLE_SPREAD`] times as wide.
-const RIFLE_PACE: f32 = 0.5;
+/// A droid carries a pistol or a rifle, picked at random (see [`Inhabitant::rifle`]). A rifle
+/// fires its shots [`RIFLE_SPREAD`] times as wide, in bursts: three-round, as most of them are set
+/// to, or a long string on full auto - [`AUTO_BURST`] shots - for the few set to it (see
+/// [`fire_mode`]); as fast as the rifle fires, and then as long a pause as a pistol's between
+/// shots, give or take.
 const RIFLE_SPREAD: f32 = 1.5;
+const BURST_SHOTS: u8 = 3;
+const AUTO_BURST: u8 = 8;
+
+/// How the rifle of the droid numbered `code` fires: three-round bursts, as most droids' are, or
+/// - rarely, one rifle in nine - full auto. By its number, as its gun is (see
+/// [`Inhabitants::spawn_one`]): drawing nothing from the round's random numbers.
+fn fire_mode(code: u32) -> FireMode {
+    if code % 20 == 17 {
+        FireMode::Auto
+    } else {
+        FireMode::Burst
+    }
+}
 /// A bolt flying by is noticed within [`NOTICE_BOLT`] meters, if it is in front of the droid -
 /// or felt, within [`NEAR_MISS`], wherever. Noticing [`BLIND_AFTER`] of them within
 /// [`BLIND_MEMORY`] seconds of each other, from someone it cannot see, an armed droid - a sentry,
@@ -513,6 +527,11 @@ struct Inhabitant {
     /// recharges as the player's does (see [`pistol::MAGAZINE`]).
     rifle: bool,
     rounds: u32,
+    /// How its rifle fires (see [`fire_mode`]); how many shots of the burst under way are left to
+    /// fire; and how many shots its droid had fired as of the last frame, to count them off.
+    fire_mode: FireMode,
+    burst_left: u8,
+    fired_seen: u32,
     /// The droid it walks about with, if it is one of a pair, as an index; and whether it leads
     /// the way, or keeps beside the other.
     partner: Option<usize>,
@@ -2328,8 +2347,9 @@ impl Inhabitants {
             scene.graph.remove_node(body);
             return false;
         };
-        // Its number, and its gun by it: odd, a rifle - as random as the number, and drawing
-        // nothing more from `rng`, so that whatever else is picked with it is as it was.
+        // Its number, and its gun by it: odd, a rifle, set as `fire_mode` says - as random as the
+        // number, and drawing nothing more from `rng`, so that whatever else is picked with it is
+        // as it was.
         let code = 10 + rng.below(90) as u32;
         self.droids.push(Inhabitant {
             body,
@@ -2348,6 +2368,9 @@ impl Inhabitants {
             code,
             rifle: code % 2 == 1,
             rounds: pistol::MAGAZINE,
+            fire_mode: fire_mode(code),
+            burst_left: 0,
+            fired_seen: 0,
             looks_hostile: false,
             talking: false,
             with: None,
@@ -3616,24 +3639,37 @@ impl Inhabitants {
                     - std::f32::consts::PI;
                 (off.abs() < FIRE_CONE).then_some(at)
             });
-            let trigger = facing_them.is_some() && droid.reload == 0.0 && !droid.down;
-            if trigger {
-                let pace = if droid.rifle { RIFLE_PACE } else { 1.0 };
-                droid.reload = pace
-                    * between(
-                        rng,
-                        match (blind.is_some(), gang) {
-                            (true, _) => BLIND_FIRE_EVERY,
-                            (false, true) => GANG_FIRE_EVERY,
-                            (false, false) => FIRE_EVERY,
-                        },
-                    );
-                // The rifle's last shot in the magazine: it recharges before it fires again.
+            // The shots its rifle has fired since the last frame, off its burst and out of its
+            // magazine; the last in the magazine, it recharges before it fires again.
+            let fired = droid.avatar.fired();
+            let went_off = fired.wrapping_sub(droid.fired_seen);
+            droid.fired_seen = fired;
+            if droid.rifle && went_off > 0 {
+                droid.burst_left = droid.burst_left.saturating_sub(went_off.min(u8::MAX as u32) as u8);
+                droid.rounds = droid.rounds.saturating_sub(went_off);
+                if droid.rounds == 0 {
+                    (droid.reload, droid.rounds, droid.burst_left) = (pistol::RECHARGE, pistol::MAGAZINE, 0);
+                }
+            }
+            let start = facing_them.is_some() && droid.reload == 0.0 && droid.burst_left == 0 && !droid.down;
+            // A burst under way keeps the trigger pulled - the rifle firing as fast as it does -
+            // while it still faces them.
+            let trigger = !droid.down && facing_them.is_some() && (start || droid.burst_left > 0);
+            if start {
+                droid.reload = between(
+                    rng,
+                    match (blind.is_some(), gang) {
+                        (true, _) => BLIND_FIRE_EVERY,
+                        (false, true) => GANG_FIRE_EVERY,
+                        (false, false) => FIRE_EVERY,
+                    },
+                );
                 if droid.rifle {
-                    droid.rounds = droid.rounds.saturating_sub(1);
-                    if droid.rounds == 0 {
-                        (droid.reload, droid.rounds) = (pistol::RECHARGE, pistol::MAGAZINE);
-                    }
+                    droid.burst_left = match droid.fire_mode {
+                        FireMode::Auto => AUTO_BURST,
+                        FireMode::Burst => BURST_SHOTS,
+                        FireMode::Semi => 1,
+                    };
                 }
                 if let Some(from) = blind {
                     let wide = Vector3::new(
@@ -4774,6 +4810,18 @@ fn within_talking(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn droids_rifles_fire_three_round_bursts_and_full_auto_is_rare() {
+        // Every number a droid can be given: odd ones carry the rifle.
+        let rifles: Vec<u32> = (10..100).filter(|code| code % 2 == 1).collect();
+        let auto = rifles.iter().filter(|&&code| fire_mode(code) == FireMode::Auto).count();
+        let burst = rifles.iter().filter(|&&code| fire_mode(code) == FireMode::Burst).count();
+        assert_eq!(auto + burst, rifles.len(), "a rifle is on burst or full auto, nothing else");
+        assert!(auto > 0 && auto * 8 <= rifles.len(), "full auto is rare: {auto} of {}", rifles.len());
+        // A pistol's number never says full auto, whatever it would make of it.
+        assert!((10..100).filter(|code| code % 2 == 0).all(|code| fire_mode(code) == FireMode::Burst));
+    }
 
     #[test]
     fn a_witness_knows_who_shot_only_if_it_saw_them_near_enough() {

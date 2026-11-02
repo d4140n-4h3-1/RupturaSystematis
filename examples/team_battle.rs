@@ -5,10 +5,10 @@
 //! in the full deform droid's, `data/droid_full_deform.glb`, with every one of the game's droid's
 //! animations: walking with no enemy about, jogging to one, running for cover and sprinting when
 //! falling back hurt - skidding as they stop and turn - strafing and crouch-strafing while they
-//! face a target, a jump now and then as they break for cover, the pistol drawn, raised, aimed up,
-//! down and to the side at the target and fired - a glowing green bolt from its muzzle, the
-//! game's own (see `maze::player::pistol`), which does its harm when it gets there - and
-//! holstered once the fighting is over. Shot
+//! face a target, a jump now and then as they break for cover, the gun drawn, raised, aimed up,
+//! down and to the side at the target and fired - a glowing bolt from its muzzle, the game's own
+//! (see `maze::player::pistol`), green from a pistol and blue from a rifle, which does its harm
+//! when it gets there - and holstered once the fighting is over. Shot
 //! down, a droid falls limp, knocked back by the shot, and may lose what it was hit in; it comes
 //! back as a new droid. They cross the arena along the walk grid, see only in front
 //! of them (hydroxus-ai's sight), and fight from cover: a crouched droid behind a low block is out
@@ -17,6 +17,12 @@
 //! of it to shoot. Hurt, a droid
 //! falls back to cover further from the enemy. The dead come back at their own end of the arena
 //! a few seconds later, and the first team to reach the kill limit wins the match.
+//!
+//! Each droid picks its own gun each time it comes back (see `TeamBattle::pick_gun`): one holding
+//! the line mostly the rifle, for its reach, and one going round the side mostly the pistol, each
+//! after its own liking. A rifle fires three-round bursts, or - for one in ten - long strings on
+//! full auto, out of a magazine that recharges once it is empty, as the game's droids' do; its
+//! shots lose little with range, but each does less harm than a pistol's.
 //!
 //! Each side fights as a team: it picks its targets - whoever is shooting at it, hurt, or out in
 //! the open before whoever is merely nearest - takes cover from every enemy it knows of, not
@@ -79,7 +85,7 @@ use maze::{
     dismember,
     player::{
         avatar::{Avatar, Going, Wall},
-        pistol::{Bolts, BOLT_SPEED},
+        pistol::{self, Bolts, FireMode, BOLT_SPEED},
         posture::{Gait, Posture},
     },
     ragdoll::{self, Ragdoll},
@@ -132,6 +138,19 @@ const CHEST_CROUCHED: f32 = 0.65;
 const HEALTH: f32 = 100.0;
 const DAMAGE: (f32, f32) = (9.0, 16.0);
 const FIRE_INTERVAL: f32 = 0.16;
+/// The rifle: how long between the shots of a burst, as fast as it fires; how many shots a
+/// burst is, three-round and on full auto; how long the pause after one, as many times
+/// `FIRE_INTERVAL`; how many in ten droids set theirs to full auto; how much less harm each shot
+/// does than a pistol's; and how far it carries before a shot is no likelier to hit than a
+/// pistol's at its last, against the pistol's.
+const RIFLE_GAP: f32 = 0.1;
+const BURST_SHOTS: u8 = 3;
+const AUTO_BURST: u8 = 8;
+const BURST_PAUSE: (f32, f32) = (2.0, 3.5);
+const AUTO_CHANCE: f32 = 0.1;
+const RIFLE_HARM: f32 = 0.75;
+const RIFLE_REACH: f32 = 110.0;
+const PISTOL_REACH: f32 = 70.0;
 const RESPAWN_TIME: f32 = 5.0;
 /// Hurt this badly, a droid falls back instead of pushing on.
 const RETREAT_HEALTH: f32 = 35.0;
@@ -240,6 +259,15 @@ struct Droid {
     retreating: bool,
     /// Whether it pulled the trigger this frame, and the shot it is waiting to fire.
     fired: bool,
+    /// The gun it picked this life: a rifle, or the pistol; how the rifle fires; how many shots
+    /// of the burst under way are left; and how many are left in its magazine.
+    rifle: bool,
+    fire_mode: FireMode,
+    burst_left: u8,
+    rounds: u32,
+    /// How much it likes the rifle, from 0 to 1, all its lives: it picks its gun by that and what
+    /// it is to do.
+    likes_rifle: f32,
     pending: Option<Shot>,
     /// How far its pistol's barrel has been pointing above and to the left of where it asked it
     /// to aim, in radians, as its last shots have shown: it asks that much the other way.
@@ -875,6 +903,7 @@ impl Battle {
             return None;
         };
         avatar.set_eyes(Some(team.color()));
+        let likes_rifle = self.random((0.0, 1.0));
         Some(Droid {
             team,
             root,
@@ -884,6 +913,11 @@ impl Battle {
             gait: Gait::Jogging,
             retreating: false,
             fired: false,
+            rifle: false,
+            fire_mode: FireMode::Burst,
+            burst_left: 0,
+            rounds: pistol::MAGAZINE,
+            likes_rifle,
             pending: None,
             aim_bias: (0.0, 0.0),
             target_at: None,
@@ -945,6 +979,23 @@ impl Battle {
             3 => Some(-1.0),
             _ => None,
         };
+        self.pick_gun(i);
+    }
+
+    /// Droid `i` picks its gun for the life it is starting, as it likes and for what it is to do:
+    /// holding the line, the rifle for its reach, unless it much prefers the pistol; going round
+    /// the side, the pistol, light and quick, unless it much prefers the rifle. A rifle it sets to
+    /// three-round bursts - or, now and then, to full auto - fully charged.
+    fn pick_gun(&mut self, i: usize) {
+        let auto = self.random((0.0, 1.0)) < AUTO_CHANCE;
+        let droid = &mut self.droids[i];
+        droid.rifle = match droid.flank {
+            None => droid.likes_rifle > 0.25,
+            Some(_) => droid.likes_rifle > 0.8,
+        };
+        droid.fire_mode = if auto { FireMode::Auto } else { FireMode::Burst };
+        droid.burst_left = 0;
+        droid.rounds = pistol::MAGAZINE;
     }
 
     // ------------------------------------------------------------------ the AI
@@ -1511,9 +1562,14 @@ impl Battle {
         let (j, keeping_down) = match (self.droids[i].target, self.droids[i].suppress_at) {
             (Some(j), _) => (j, None),
             (None, Some((j, at))) => (j, Some(at)),
-            (None, None) => return,
+            (None, None) => {
+                // Nothing to fire at: a burst under way stops.
+                self.droids[i].burst_left = 0;
+                return;
+            }
         };
-        if self.droids[i].reload > 0.0 || self.droids[i].crouched || !self.droids[j].alive() {
+        // Not while its last shot has yet to leave the gun: each bolt goes as the gun fires.
+        if self.droids[i].reload > 0.0 || self.droids[i].crouched || !self.droids[j].alive() || self.droids[i].pending.is_some() {
             return;
         }
         let (from, to) = (
@@ -1525,10 +1581,35 @@ impl Battle {
         if !facing {
             return;
         }
-        self.droids[i].reload = FIRE_INTERVAL * self.random((0.8, 1.6));
+        // The pistol, a shot at a time; the rifle, a burst at a time, as fast as it fires, out of
+        // its magazine, a pause after each - and, the magazine empty, as long as it takes to
+        // charge again.
+        let pause = FIRE_INTERVAL * self.random(BURST_PAUSE);
+        let pistol_reload = FIRE_INTERVAL * self.random((0.8, 1.6));
+        let droid = &mut self.droids[i];
+        let rifle = droid.rifle;
+        if rifle {
+            if droid.burst_left == 0 {
+                droid.burst_left = if droid.fire_mode == FireMode::Auto { AUTO_BURST } else { BURST_SHOTS };
+            }
+            droid.burst_left -= 1;
+            droid.rounds = droid.rounds.saturating_sub(1);
+            droid.reload = if droid.rounds == 0 {
+                droid.rounds = pistol::MAGAZINE;
+                droid.burst_left = 0;
+                pistol::RECHARGE
+            } else if droid.burst_left > 0 {
+                RIFLE_GAP
+            } else {
+                pause
+            };
+        } else {
+            droid.reload = pistol_reload;
+        }
         let distance = (to - from).norm();
         let moving = !self.droids[i].route.is_empty();
-        let mut chance = 0.75 - distance / 70.0;
+        let reach = if rifle { RIFLE_REACH } else { PISTOL_REACH };
+        let mut chance = 0.75 - distance / reach;
         if moving {
             chance *= 0.5;
         }
@@ -1548,7 +1629,7 @@ impl Battle {
         };
         // It pulls the trigger; the bolt leaves when the pistol fires (see `fire_bolts`), and
         // does its harm when it gets there (see `bolts_arrive`).
-        let damage = self.random(DAMAGE);
+        let damage = self.random(DAMAGE) * if rifle { RIFLE_HARM } else { 1.0 };
         self.droids[i].fired = true;
         self.droids[i].pending = Some(Shot { target: j, end, hits: hit, damage, waited: 0.0 });
     }
@@ -1612,7 +1693,11 @@ impl Battle {
             match landing {
                 Some((way, length)) => {
                     // Onto them, glowing there as it lands.
-                    bolts.fire_for(graph, from, way, length, true);
+                    if self.droids[i].rifle {
+                        bolts.fire_rifle_for(graph, from, way, length, true);
+                    } else {
+                        bolts.fire_for(graph, from, way, length, true);
+                    }
                     self.arrivals.push(Arrival {
                         shooter: i,
                         target: shot.target,
@@ -1628,7 +1713,11 @@ impl Battle {
                     let wide = (shot.end - from).try_normalize(1.0e-3).map_or(Vector3::zeros(), |w| w - aimed);
                     let wide = if shot.hits { Vector3::zeros() } else { wide };
                     let way = (pointing + wide).try_normalize(1.0e-3).unwrap_or(pointing);
-                    bolts.fire(graph, from, way);
+                    if self.droids[i].rifle {
+                        bolts.fire_rifle(graph, from, way);
+                    } else {
+                        bolts.fire(graph, from, way);
+                    }
                     // Anyone it passes or lands near keeps their head down a moment.
                     let reach = Self::blocked(graph, from, from + way * 100.0).unwrap_or(100.0);
                     let team = self.droids[i].team;
@@ -1913,7 +2002,7 @@ impl Battle {
                 raised: raised && tall.is_none_or(|(_, _, out)| out),
                 look,
                 way,
-                rifle: false,
+                rifle: droid.rifle,
             };
             droid.avatar.animate(graph, going, dt);
         }
