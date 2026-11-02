@@ -200,7 +200,7 @@ const VOICE_SPREAD: f32 = 0.06;
 /// it not far off; any further is far.
 const EXIT_NEAR: f32 = 25.0;
 const EXIT_NOT_FAR: f32 = 60.0;
-/// The ambient light on a race track: out in the open by day, lit from all round by the sky.
+/// The ambient light on a race track by day: out in the open, lit from all round by the sky.
 const DAY_AMBIENT: Color = Color::opaque(92, 100, 116);
 /// The ambient light with the lights off: next to none, so that what the flashlight is not
 /// pointed at is as good as black.
@@ -1048,7 +1048,7 @@ impl MazeGame {
         scene.rendering_options.ambient_lighting_color = match (self.lights_off, foggy) {
             (true, _) => DARK_AMBIENT,
             (false, true) => FOG_AMBIENT,
-            (false, false) if self.raced() => DAY_AMBIENT,
+            (false, false) if self.raced() && !self.night() => DAY_AMBIENT,
             (false, false) => AMBIENT,
         };
         self.player.set_view_distance(&mut scene.graph, if foggy { FOG_VIEW } else { VIEW });
@@ -1434,11 +1434,18 @@ impl MazeGame {
             Log::err(format!("Could not load {}; there is no race", race::BIKE_MODEL));
             return;
         };
+        // The riders glowing their own colours at night, as droids do, or they are lost in the dark.
+        self.light_up_droids();
+        let glow = if self.night() { DROID_GLOW } else { 0.0 };
+        for model in self.rival_models.iter().filter(|model| model.is_ok()) {
+            set_body_glow(model, glow);
+        }
         let scene = &mut ctx.scenes[self.scene];
         let mut race = Race::new(track, platform::var("MAZE_RACE_AUTOPILOT").is_some(), race::RIVALS.len());
         let rivals: Vec<Option<ModelResource>> =
             self.rival_models.iter().map(|model| model.is_ok().then(|| model.clone())).collect();
-        race.spawn(scene, &bike, self.droid_model.as_ref(), &rivals);
+        let night = self.night();
+        race.spawn(scene, &bike, self.droid_model.as_ref(), &rivals, night);
         self.player.set_riding(&mut scene.graph, true);
         let (at, eye, target) = race.view();
         self.player.carry(&mut scene.graph, at, eye, target);
@@ -1931,7 +1938,7 @@ impl MazeGame {
         scene.rendering_options.ambient_lighting_color = match (on, self.foggy()) {
             (false, _) => DARK_AMBIENT,
             (true, true) => FOG_AMBIENT,
-            (true, false) if self.raced() => DAY_AMBIENT,
+            (true, false) if self.raced() && !self.night() => DAY_AMBIENT,
             (true, false) => AMBIENT,
         };
         // No sun at night.

@@ -553,6 +553,21 @@ pub const RIVALS: [(&str, &str, f32, f32); 4] = [
     ("Green", "data/droid_explorer.glb", 0.0, 0.94),
     ("Blue", "data/droid_security.glb", -1.5, 1.0),
 ];
+/// The colour each racer's bike glows at night, the player's first: a colour of its own, apart
+/// from every rider's (cyan, red, orange, green and blue) and every other bike's, so that bike and
+/// rider read apart and each bike stands out - magenta, yellow, violet, ice white and lime.
+pub const COLOURS: [Color; 5] = [
+    Color::opaque(255, 20, 190),
+    Color::opaque(255, 215, 0),
+    Color::opaque(140, 40, 255),
+    Color::opaque(200, 235, 255),
+    Color::opaque(170, 255, 0),
+];
+/// How brightly a bike's hull glows its colour at night, as a share of the colour itself.
+const HULL_GLOW: f32 = 0.6;
+/// How bright a colour has to be to be the hull's: the rest of the bike is dark.
+const HULL_BRIGHT: u32 = 150;
+
 /// Which place on the grid the player starts from, from the front: behind the droids' front row.
 const PLAYER_GRID: usize = 3;
 /// How close two bikes come before they bump, side by side, in meters; and how much of what they
@@ -816,11 +831,23 @@ impl Race {
     }
 
     /// Puts the bikes into `scene` from their `model`: the player's with the droid on it from
-    /// `droid`, and each droid's with its own from `rivals`, as far as they have loaded.
-    pub fn spawn(&mut self, scene: &mut Scene, model: &ModelResource, droid: Option<&ModelResource>, rivals: &[Option<ModelResource>]) {
+    /// `droid`, and each droid's with its own from `rivals`, as far as they have loaded; at
+    /// `night`, each glowing its rider's colour.
+    pub fn spawn(
+        &mut self,
+        scene: &mut Scene,
+        model: &ModelResource,
+        droid: Option<&ModelResource>,
+        rivals: &[Option<ModelResource>],
+        night: bool,
+    ) {
         for (n, racer) in self.racers.iter_mut().enumerate() {
             let rider = if n == 0 { droid } else { rivals.get(n - 1).and_then(Option::as_ref) };
-            racer.bike = Some(build_bike(scene, model, rider));
+            let bike = build_bike(scene, model, rider);
+            if night {
+                light_up_bike(&mut scene.graph, bike.root, COLOURS[n % COLOURS.len()]);
+            }
+            racer.bike = Some(bike);
             racer.place(&mut scene.graph, 0.0);
         }
         self.lights = PadLights::claim(&mut scene.graph);
@@ -1065,6 +1092,55 @@ pub(crate) fn build_bike(scene: &mut Scene, model: &ModelResource, droid: Option
         .local_transform_mut()
         .set_scale(Vector3::repeat(crate::player::DROID_SCALE));
     Bike { root, rider }
+}
+
+/// Has the bike under `root` glow `colour`, as a light cycle does: its pale hull, and the lines of
+/// light along it that are cyan as it was made, each given its own copy of their materials.
+fn light_up_bike(graph: &mut Graph, root: Handle<Node>, colour: Color) {
+    let nodes: Vec<Handle<Node>> = graph.traverse_handle_iter(root).collect();
+    let mut copies: Vec<(u64, Option<MaterialResource>)> = Vec::new();
+    for node in nodes {
+        let Some(mesh) = graph[node].cast_mut::<Mesh>() else {
+            continue;
+        };
+        for surface in mesh.surfaces_mut() {
+            let original = surface.material().clone();
+            let key = original.key();
+            let copy = match copies.iter().find(|(had, _)| *had == key) {
+                Some((_, copy)) => copy.clone(),
+                None => {
+                    let copy = recoloured(&original, colour);
+                    copies.push((key, copy.clone()));
+                    copy
+                }
+            };
+            if let Some(copy) = copy {
+                surface.set_material(copy);
+            }
+        }
+    }
+}
+
+/// A copy of `original` glowing `colour`, if it is the bike's hull or one of its cyan lines of
+/// light; nothing, if it is neither.
+fn recoloured(original: &MaterialResource, colour: Color) -> Option<MaterialResource> {
+    let state = original.state();
+    let material = state.data_ref()?;
+    let Some(MaterialProperty::Color(was)) = crate::fixtures::property(material, "diffuseColor") else {
+        return None;
+    };
+    let glowing = crate::fixtures::glow_strength(material).is_some();
+    let cyan = was.b as i32 > was.r as i32 + 100 && was.g as i32 > was.r as i32 + 100;
+    let pale = was.r as u32 + was.g as u32 + was.b as u32 > HULL_BRIGHT * 3;
+    if !(glowing && cyan) && (glowing || !pale) {
+        return None;
+    }
+    let mut copy = material.clone();
+    copy.set_property("diffuseColor", Color::from_rgba(colour.r, colour.g, colour.b, was.a));
+    if !glowing {
+        copy.set_property(crate::fixtures::EMISSION_STRENGTH, Vector3::repeat(HULL_GLOW));
+    }
+    Some(MaterialResource::new_embedded(copy))
 }
 
 /// How far racer `n` pulls out of its line to get by a bike just ahead of it in `bikes` (where each

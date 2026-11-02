@@ -278,7 +278,7 @@ impl MainMenu {
              Heist: hack through the firewall doors to a bank's vault,\n\
              past its guards and drones, and get out with the loot.\n\
              Story: a whole city to cross, from its station to its tallest tower.\n\
-             Race: three laps of the Circuit or the Grand Circuit on a hover bike, against four droids.",
+             Race: three laps of the Circuit, the Grand Circuit or Lumen on a hover bike, against four droids.",
         )
         .with_font_size(16.0.into())
         .with_horizontal_text_alignment(HorizontalAlignment::Center)

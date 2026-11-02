@@ -25,6 +25,9 @@ outside edge up and the inside left where the middle line is, so that no edge di
 ground. Kerbs, red and white, run along both edges. Where the road is up off the ground
 it is a deck on pillars, none of them standing on the road below.
 
+Lumen (`lumen`) is a night track through a city traced in light: its layout and its city are in
+race_lumen.py, beside this script, which this builds round the same road.
+
 Speed pads lie on the road at PADS - out of the corners, onto the straights and the viaduct, to
 one side of the road so that taking one is a choice of line: each 8 m long and PAD_WIDTH across,
 a dark panel lit down its sides (speed_pad.png) and three amber chevrons on it, each its own mesh,
@@ -40,6 +43,7 @@ Circuit unless --track says otherwise:
 
     blender -b --python data/arena/race_circuit.py -- --out ~/Documents/blender/map/race_circuit.blend --glb data/arena/race_circuit.glb
     blender -b --python data/arena/race_circuit.py -- --track grand --out ~/Documents/blender/map/race_grand.blend --glb data/arena/race_grand.glb
+    blender -b --python data/arena/race_circuit.py -- --track lumen --out ~/Documents/blender/map/race_lumen.blend --glb data/arena/race_lumen.glb
 
 Made for Ruptura Systematis (MazeGame/maze), whose race mode (src/race.rs) reads its empties:
 `race_start` on the start line, its +x the way round; `checkpoint_1` to `checkpoint_N`, every
@@ -56,6 +60,9 @@ import sys
 import bmesh
 import bpy
 from mathutils import Vector
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import race_lumen  # noqa: E402
 
 # The road's middle line, round the way it is raced: (x, y, height). A closed loop, smoothed
 # through these (see `centre_line`). The viaduct crosses the straight at about (-42, 0).
@@ -110,6 +117,7 @@ GROUND_MARGIN = 140.0       # how far the ground goes out past the track
 MONOLITHS = 140
 LIGHT_TOWERS = 14
 STAND_LENGTH = 58.0         # the grandstand's length along the straight
+NIGHT = False               # a city at night round it (race_lumen.py), rather than open country
 
 # The layouts: what each changes from the Circuit's measures above.
 TRACKS = {
@@ -159,6 +167,7 @@ TRACKS = {
         "LIGHT_TOWERS": 28,
         "STAND_LENGTH": 90.0,
     },
+    "lumen": race_lumen.LAYOUT,
 }
 
 ASPHALT = (0.14, 0.145, 0.16)
@@ -697,6 +706,8 @@ def main():
     globals().update(TRACKS[track])
     bpy.ops.wm.read_factory_settings(use_empty=True)
     m = Mats()
+    if NIGHT:
+        race_lumen.night_materials(sys.modules[__name__], m)
     secs = sections()
     length = len(secs) * STEP
     xs = [s.centre.x for s in secs]
@@ -709,8 +720,11 @@ def main():
     objs += build_tunnel(secs, m)
     objs.append(build_start(secs, m))
     objs += build_pads(secs, m)
-    objs += build_scenery(secs, m, bounds)
-    objs.append(build_ground(m, bounds))
+    if NIGHT:
+        objs += race_lumen.build(sys.modules[__name__], secs, m, bounds, glb)
+    else:
+        objs += build_scenery(secs, m, bounds)
+        objs.append(build_ground(m, bounds))
     checkpoints = place_markers(secs)
     highest = max(s.centre.z for s in secs)
     banked = max(abs(s.bank) for s in secs)

@@ -197,7 +197,22 @@ pub const GRAND_CIRCUIT: Map = Map {
     foggy: false,
 };
 
-pub const RACE_MAPS: [Map; 2] = [CIRCUIT, GRAND_CIRCUIT];
+/// Lumen: a race track at night through a city traced in light (see `data/arena/race_lumen.py`).
+pub const LUMEN: Map = Map {
+    name: "Lumen",
+    path: "data/arena/race_lumen.glb",
+    about: "At night, through a city traced in light, 1.7 km round: down the Boulevard, a turn and a \
+            half up the Helix round the Spire, the skyway back over the Boulevard, and down through \
+            the Arcology.",
+    void: true,
+    open_sky: true,
+    night: true,
+    echoes: false,
+    alongside: &[],
+    foggy: false,
+};
+
+pub const RACE_MAPS: [Map; 3] = [CIRCUIT, GRAND_CIRCUIT, LUMEN];
 
 /// The sky round a map in the void, each face of it.
 pub const VOID_SKY: &str = "data/skybox.png";
