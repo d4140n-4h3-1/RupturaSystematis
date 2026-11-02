@@ -57,8 +57,8 @@ at floor k; lift_<n>_gate_<k> the gate before the shaft at each floor, open whil
 there). They have a stream of chance of their own, and each is built where a tower would have
 stood, which is built out of sight, so the rest of the city is as it was.
 
-Windows are lit or dark at random, warm in homes and cool in offices. Streets have dashed lines,
-crossings at every junction, lamps, trees and parked light cycles. Every building with corners has
+Windows are lit or dark at random, warm in homes and cool in offices. Streets have dashed lines
+down the middle and between their two lanes each way, crossings at every junction, lamps, trees and parked light cycles. Every building with corners has
 them lit, in its own colour (a bank's in gold). Every coloured line of light
 near the ground glows and is written to story_urbs.glow.json for the game to light with; those
 higher up only glow. Where the roads and their crossings are is written to story_urbs.roads.json,
@@ -97,6 +97,7 @@ from br_nexus import Nexus, Frame, WORLD, octagon, polygon, RISE, RUN, DECK  # n
 
 PITCH = 64.0            # from one street's middle to the next
 STREET = 16.0           # a street's width, kerb to kerb
+LANE = 4.0              # a lane's width: two each way, either side of the middle line
 BLOCKS = 14             # blocks each way
 SIDEWALK = 3.0          # round the edge of each block
 KERB = 0.12             # how high a block's pavement stands: less than a step
@@ -1921,7 +1922,8 @@ def ground(m):
 
 
 def streets(m, rng):
-    """Dashed lines down the middle of every street, crossings at the junctions."""
+    """Dashed lines down the middle of every street, and between the two lanes each way either side
+    of it, LANE out; crossings at the junctions."""
     cy, cw, _ = CANAL
     lines_at = [k * PITCH for k in range(-BLOCKS // 2 + 1, BLOCKS // 2)]
     ring = HALF - STREET / 2
@@ -1931,12 +1933,13 @@ def streets(m, rng):
             while t < HALF - 2.0:
                 near_junction = any(abs(t - j) < STREET / 2 + 2 for j in lines_at + [-ring, ring])
                 if not near_junction and not (horizontal is False and cy - cw / 2 - 1 < t < cy + cw / 2 + 1):
-                    if horizontal and not (abs(c - cy) < 9):
-                        m.line(Vector((t, c, 0.004)), Vector((t + 3.0, c, 0.004)), m.marking, width=0.15,
-                               height=0.008, light=False)
-                    elif not horizontal:
-                        m.line(Vector((c, t, 0.004)), Vector((c, t + 3.0, 0.004)), m.marking, width=0.15,
-                               height=0.008, light=False)
+                    for across, width in ((0.0, 0.15), (-LANE, 0.1), (LANE, 0.1)):
+                        if horizontal and not (abs(c - cy) < 9):
+                            m.line(Vector((t, c + across, 0.004)), Vector((t + 3.0, c + across, 0.004)), m.marking,
+                                   width=width, height=0.008, light=False)
+                        elif not horizontal:
+                            m.line(Vector((c + across, t, 0.004)), Vector((c + across, t + 3.0, 0.004)), m.marking,
+                                   width=width, height=0.008, light=False)
                 t += 6.0
     # Crossings: stripes across each street at each side of each junction.
     for jx in lines_at + [-ring, ring]:

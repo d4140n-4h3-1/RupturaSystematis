@@ -65,6 +65,12 @@ impl RoadPlan {
         self
     }
 
+    /// Every street's rectangle, kerb to kerb, `[x0, z0, x1, z1]`: for the traffic to drive (see
+    /// [`crate::traffic`]).
+    pub fn roads(&self) -> &[[f32; 4]] {
+        &self.roads
+    }
+
     /// Which cells of `grid`, whose corner is at `origin`, are road to keep off.
     pub fn on(&self, grid: &WalkGrid, origin: Vector3<f32>) -> Roads {
         let mut road = vec![false; grid.width * grid.rows()];

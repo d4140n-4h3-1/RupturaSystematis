@@ -541,9 +541,9 @@ struct Keys {
 /// A bike in the scene: its root, which goes where the handling says, the bike under it, and
 /// the droid riding it.
 #[derive(Debug, Clone, PartialEq)]
-struct Bike {
-    root: Handle<Node>,
-    rider: Option<Handle<Node>>,
+pub(crate) struct Bike {
+    pub root: Handle<Node>,
+    pub rider: Option<Handle<Node>>,
 }
 
 /// One of those racing: the player's, first, or a droid's.
@@ -857,7 +857,7 @@ impl Race {
 }
 
 /// A bike in `scene` from its `model`, with the droid on it from `droid`, if there is one.
-fn build_bike(scene: &mut Scene, model: &ModelResource, droid: Option<&ModelResource>) -> Bike {
+pub(crate) fn build_bike(scene: &mut Scene, model: &ModelResource, droid: Option<&ModelResource>) -> Bike {
     let bike = model.instantiate(scene);
     let rider = droid.map(|droid| droid.instantiate(scene));
     let graph = &mut scene.graph;
@@ -988,7 +988,7 @@ pub fn autopilot(handling: &Handling, track: &Track, progress: &Progress, line: 
 }
 
 /// The first thing a ray from `from` along `way` meets within `reach`, but `skip`.
-fn first_hit(graph: &Graph, from: Vector3<f32>, way: Vector3<f32>, reach: f32, skip: Handle<Collider>) -> Option<Hit> {
+pub(crate) fn first_hit(graph: &Graph, from: Vector3<f32>, way: Vector3<f32>, reach: f32, skip: Handle<Collider>) -> Option<Hit> {
     let mut hits = Vec::new();
     graph.physics.cast_ray(
         RayCastOptions {

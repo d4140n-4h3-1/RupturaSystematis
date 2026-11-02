@@ -15,6 +15,7 @@ use crate::{
     ctf::{self, Bases, Side, MAPS, PLAYERS},
     royale::{self, RingNews, RingPosts, Royale, Who},
     race::{self, Race, RaceNews, Track},
+    traffic::{self, Network, Traffic},
     firewall::{self, Firewalls},
     drone::{self, Drone, DroneLines, Kind, State, Target, DRONE_LINES, DRONE_MODEL, QUAD_MODEL, URBS_DRONE_LINES},
     drone_shot::{Shots, SHOT_MODEL},
@@ -635,6 +636,14 @@ pub struct MazeGame {
     #[visit(skip)]
     #[reflect(hidden)]
     race_result: String,
+    /// In the story, the bikes going about the streets and the stop lights at the main junctions
+    /// (see [`traffic`]); and the stop lights' model.
+    #[visit(skip)]
+    #[reflect(hidden)]
+    traffic: Option<Traffic>,
+    #[visit(skip)]
+    #[reflect(hidden)]
+    stop_light_model: Option<ModelResource>,
     #[visit(skip)]
     #[reflect(hidden)]
     race_best: Option<f32>,
@@ -929,6 +938,7 @@ impl MazeGame {
         self.drone_model = Some(resources.request::<Model>(DRONE_MODEL));
         self.quad_model = Some(resources.request::<Model>(QUAD_MODEL));
         self.bike_model = Some(resources.request::<Model>(race::BIKE_MODEL));
+        self.stop_light_model = Some(resources.request::<Model>(traffic::STOP_LIGHT_MODEL));
         self.rival_models = race::RIVALS.iter().map(|&(_, model, _, _)| resources.request::<Model>(model)).collect();
         self.shot_model = Some(resources.request::<Model>(SHOT_MODEL));
         self.heart_model = Some(resources.request::<Model>(HEART_MODEL));
@@ -1090,6 +1100,9 @@ impl MazeGame {
         if let Some(mut race) = self.race.take() {
             race.remove(&mut ctx.scenes[self.scene].graph);
         }
+        if let Some(mut traffic) = self.traffic.take() {
+            traffic.remove(&mut ctx.scenes[self.scene].graph);
+        }
         self.player.set_riding(&mut ctx.scenes[self.scene].graph, false);
         self.ctf = None;
         self.royale = None;
@@ -1162,6 +1175,9 @@ impl MazeGame {
         // be seen again.
         if let Some(mut race) = self.race.take() {
             race.remove(&mut ctx.scenes[self.scene].graph);
+        }
+        if let Some(mut traffic) = self.traffic.take() {
+            traffic.remove(&mut ctx.scenes[self.scene].graph);
         }
         self.player.set_riding(&mut ctx.scenes[self.scene].graph, false);
         if let Ok(exit) = ctx.scenes[self.scene].graph.try_get_mut(self.exit) {
@@ -1326,6 +1342,7 @@ impl MazeGame {
         self.start_race(ctx);
         self.story = story.is_some();
         if self.story {
+            self.start_traffic(ctx);
             self.hud.show_note("Story: off the train at the station. Find the way to Summa, the tallest tower.".to_string());
         }
     }
@@ -1360,6 +1377,51 @@ impl MazeGame {
         self.level.lockers.reset(&mut ctx.scenes[self.scene].graph);
         self.phase = Phase::Playing;
         self.set_banner(ctx, "");
+    }
+
+    /// The story's streets brought to life (see [`traffic`]): its roads looked over for what can be
+    /// driven and where stop lights fit, and bikes put down on them, away from the player.
+    fn start_traffic(&mut self, ctx: &mut PluginContext) {
+        let Some(plan) = self.road_plan.as_ref() else {
+            return;
+        };
+        let Some(bike) = self.bike_model.clone().filter(|model| model.is_ok()) else {
+            Log::err(format!("Could not load {}; no traffic", race::BIKE_MODEL));
+            return;
+        };
+        let mut network = Network::from_roads(plan.roads());
+        let skip = self.player.collider();
+        // Made (and seeded, as MAZE_SEED says) first.
+        self.rng();
+        let Some(rng) = self.rng.as_mut() else {
+            return;
+        };
+        let mut pick = || rng.below(1 << 16) as f32 / (1 << 16) as f32;
+        let scene = &mut ctx.scenes[self.scene];
+        let graph = &scene.graph;
+        let mut cast = |from: Vector3<f32>, way: Vector3<f32>, reach: f32| race::first_hit(graph, from, way, reach, skip);
+        let started = std::time::Instant::now();
+        network.survey(&mut cast, &mut || pick() * traffic::CYCLE);
+        Log::info(format!(
+            "Traffic: {} junctions, {} of {} lanes drivable, looked over in {:.1} s",
+            network.junctions.len(),
+            network.links.iter().map(|l| l.lanes.iter().filter(|&&ok| ok).count()).sum::<usize>(),
+            network.links.len() * 2,
+            started.elapsed().as_secs_f32()
+        ));
+        let player = self.player.feet(&scene.graph);
+        let mut traffic = Traffic::new(network, traffic::BIKES, player, &mut pick);
+        // Ridden by droids of every kind about the city.
+        let riders: Vec<ModelResource> = self
+            .droid_model
+            .iter()
+            .chain(self.rival_models.iter())
+            .filter(|model| model.is_ok())
+            .cloned()
+            .collect();
+        let signal = self.stop_light_model.as_ref().filter(|model| model.is_ok());
+        traffic.spawn(scene, &bike, &riders, signal);
+        self.traffic = Some(traffic);
     }
 
     /// A map marking a start line and checkpoints is raced (see [`race`]): the player on the bike
@@ -5185,6 +5247,16 @@ impl Plugin for MazeGame {
             self.set_up_train(ctx);
             for train in &mut self.trains {
                 train.update(&mut ctx.scenes[self.scene].graph, ctx.dt);
+            }
+            if let Some(traffic) = self.traffic.as_mut() {
+                // Stopping for the player and every droid on their feet.
+                let graph = &mut ctx.scenes[self.scene].graph;
+                let player = self.player.feet(graph);
+                let people: Vec<Vector3<f32>> = std::iter::once(player)
+                    .chain(self.inhabitants.standing().into_iter().map(|(_, _, feet, _, _)| feet))
+                    .collect();
+                traffic.step(ctx.dt, &people);
+                traffic.place(&mut ctx.scenes[self.scene], player, ctx.dt);
             }
         }
         match self.phase {
