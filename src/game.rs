@@ -29,7 +29,7 @@ use crate::{
         screen::{self, DialogueScreen, Pointer, Subtitles},
         Bark, Conversation, Facts, Mood, Provoked, Script, CTF_SCRIPT, HEIST_SCRIPT, ROYALE_SCRIPT, SCRIPT, URBS_SCRIPT,
     },
-    formants::{self, chirps::Chirps, speech::Voices, synth, Load, DRONE_VOICE, VOICES},
+    formants::{self, chirps::Chirps, speech::Voices, synth, Load, DRONE_VOICE, QUAD_VOICE, VOICES},
     generate::Maze,
     glow::GlowLights,
     escape::{self, Passing},
@@ -729,6 +729,10 @@ pub struct MazeGame {
     #[visit(skip)]
     #[reflect(hidden)]
     drone_voice: Option<(Chirps, DroneLines)>,
+    /// The quadcopters' own voice, saying the drones' lines; theirs if it is missing.
+    #[visit(skip)]
+    #[reflect(hidden)]
+    quad_voice: Option<Chirps>,
     #[visit(skip)]
     #[reflect(hidden)]
     drone_said: usize,
@@ -4576,6 +4580,10 @@ impl MazeGame {
         // Speaking as things happen to it, in beeps made in the background, from its body: one
         // line at a time, the latest.
         if let (Some(&(n, name)), Some((chirps, lines))) = (says.last(), &self.drone_voice) {
+            let chirps = match self.drones.get(n).map(Drone::kind) {
+                Some(Kind::Quad) => self.quad_voice.as_ref().unwrap_or(chirps),
+                _ => chirps,
+            };
             if let Some(said) = lines.line(name, self.drone_said) {
                 self.drone_said += 1;
                 let sound = chirps.say(&said.says, 1.0);
@@ -4588,6 +4596,11 @@ impl MazeGame {
         if let (Some(Making(receiver, reach)), Some((chirps, _))) =
             (&self.drone_saying, &self.drone_voice)
         {
+            // Both voices are made at the same rate, but as made by whichever it was.
+            let chirps = match self.drones.get(self.drone_speaking).map(Drone::kind) {
+                Some(Kind::Quad) => self.quad_voice.as_ref().unwrap_or(chirps),
+                _ => chirps,
+            };
             match receiver.try_recv() {
                 Ok(samples) => {
                     let body = self.drones.get(self.drone_speaking).map(|drone| drone.body());
@@ -4939,6 +4952,9 @@ impl Plugin for MazeGame {
         self.drone_voice = Chirps::load(DRONE_VOICE)
             .and_then(|chirps| Ok((chirps, DroneLines::load(DRONE_LINES)?)))
             .inspect_err(|error| Log::err(format!("Maze: the drones are silent: {error}")))
+            .ok();
+        self.quad_voice = Chirps::load(QUAD_VOICE)
+            .inspect_err(|error| Log::err(format!("Maze: the quadcopters speak as the drones: {error}")))
             .ok();
         self.menu = PauseMenu::build(ctx.user_interfaces.first_mut(), "Start again");
         // Over the pause menu. With a model to play from MAZE_MODEL, straight into the maze.

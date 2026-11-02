@@ -65,6 +65,7 @@ use fyrox::{
     scene::{
         animation::{Animation, AnimationPlayer},
         base::BaseBuilder,
+        transform::TransformBuilder,
         collider::{BitMask, Collider, ColliderBuilder, ColliderShape, InteractionGroups},
         graph::{
             physics::{geometry::Ball, QueryFilter, RayCastOptions},
@@ -176,7 +177,10 @@ pub enum Kind {
     /// beside it. Its animations are the drone's, named `quad_` where the drone's are `drone_`,
     /// and its glow, the arm strips' and the eye's, goes along with them as the drone's does. Its
     /// shots leave from `quad_muzzle`, at the end of its barrels, and its lamp is at `quad_eye`,
-    /// in front of its eye: both on the gimbal, which the animations turn.
+    /// in front of its eye: both on the gimbal, which the animations turn. Brought down, it is
+    /// not its death that drops it, but the physics: it falls, tumbling, bounces and comes to
+    /// rest wherever it comes to rest, as a fallen droid does (see [`Drone::fall`]), while its
+    /// death runs its rotors down, swings its gimbal limp and puts its glow out.
     Quad,
 }
 
@@ -245,6 +249,38 @@ const ROUTE_REACH: f32 = 400.0;
 pub const HITS: u32 = 3;
 /// Its body: a ball this big across its middle, in meters.
 const BODY_RADIUS: f32 = 0.3;
+/// The quadcopter's wreck, which falls under physics, in meters from where it hovers from: a
+/// thin disc out to its rotors' guards, as high as they are, and a box about its body, from its
+/// skids up to the top of its hump, the heavier, the guards being light (see [`RIM_DENSITY`]). So
+/// it comes to rest flat, on its skids or on its back: on its side it stands on the rim of the
+/// disc, its weight well off to one side of it, and tips over. One shape, a box or a drum, stands
+/// on its side as steadily as on its skids, and stays there.
+const RIM_RADIUS: f32 = 0.66;
+const RIM_HALF_HEIGHT: f32 = 0.03;
+const RIM_AT: f32 = 0.084;
+const CORE_HALF: (f32, f32, f32) = (0.2, 0.207, 0.3);
+const CORE_AT: f32 = -0.078;
+/// How heavy the guards are for their size, as a part of the body's.
+const RIM_DENSITY: f32 = 0.3;
+/// How it grips and how it bounces, each the average of its own and what it hits: the floor's are
+/// nothing, so on the floor it is half as rough and bouncy as this.
+const WRECK_FRICTION: f32 = 1.0;
+const WRECK_BOUNCE: f32 = 0.25;
+/// How quickly its turning dies away, as a part each second: the physics has nothing to slow a
+/// drum rolling on its edge, which would go on down the corridor as a coin would on glass; slowed,
+/// it stops rolling, and tips over.
+const WRECK_DAMPING: f32 = 1.5;
+/// How hard the bolt that brings it down knocks it on, away from whoever fired, in meters per
+/// second, and up; how fast that tips it over away from them, in radians a second, and how fast
+/// it slews round.
+const KNOCK: f32 = 1.5;
+const KNOCK_UP: f32 = 0.8;
+const TUMBLE: f32 = 4.0;
+const SLEW: f32 = 2.0;
+/// Barely moving - in meters and radians a second - for this long, in seconds, the wreck is laid
+/// to rest, still for the physics, as a fallen droid is.
+const WRECK_STILL: (f32, f32) = (0.05, 0.1);
+const WRECK_SETTLES: f32 = 0.5;
 /// How near anyone it comes, flying, in meters between its body and theirs.
 const CLEARANCE: f32 = 0.05;
 /// How near a bolt has to fly past its body to be taken as shot at, in meters.
@@ -422,6 +458,12 @@ pub struct Drone {
     no_way: bool,
     /// How many of the pistol's bolts have hit it.
     hits: u32,
+    /// Brought down, a quadcopter falls under physics (see [`Drone::fall`]): while its body is
+    /// falling, for how long it has barely moved, in seconds; None while it flies, and once it
+    /// has come to rest.
+    falling: Option<f32>,
+    /// Whether its body is the wreck's, not the ball it flies in.
+    wrecked: bool,
     /// In capture the flag, its side, and where it patrols round: its side's flag. On a side,
     /// it watches all the while, patrolling too, and what it goes after is whichever of the other
     /// side the game shows it (see [`crate::ctf`]).
@@ -522,6 +564,8 @@ impl Drone {
             replan: 0.0,
             no_way: false,
             hits: 0,
+            falling: None,
+            wrecked: false,
             side: None,
             post: None,
         };
@@ -628,6 +672,12 @@ impl Drone {
         self.resting = inhabitants::between(rng, REST);
         self.scanning = 0.0;
         self.hits = 0;
+        // A wreck's body is no good for flying in: it gets its ball back.
+        if self.wrecked && graph.is_valid_handle(self.hull) {
+            graph.remove_node(self.hull);
+        }
+        self.wrecked = false;
+        self.falling = None;
         if !graph.is_valid_handle(self.hull) {
             (self.hull, self.collider) = hull(graph);
         }
@@ -664,6 +714,8 @@ impl Drone {
     /// again.
     pub fn hide(&mut self, graph: &mut Graph) {
         self.placed = false;
+        self.wrecked = false;
+        self.falling = None;
         self.state = State::Patrol;
         self.route.clear();
         graph[self.root].set_visibility(false);
@@ -776,8 +828,12 @@ impl Drone {
         if self.hits >= HITS {
             self.state = State::Down;
             self.route.clear();
+            // Its body goes down with it (see `update`), and lies on the floor as solid as ever:
+            // the drone's as its death has it, the quadcopter's falling.
+            if self.kind == Kind::Quad {
+                self.fall(graph, from);
+            }
             self.speed = 0.0;
-            // Its body goes down with it (see `update`), and lies on the floor as solid as ever.
             self.play(graph, DEATH);
             return Some(true);
         }
@@ -785,6 +841,43 @@ impl Drone {
             self.search(from);
         }
         Some(false)
+    }
+
+    /// Drops it out of the air, brought down by a bolt fired from `from`: its ball is swapped for
+    /// a body the shape of it, which falls under physics - going on as it was flying, knocked on
+    /// away from whoever fired and tipping over away from them - and tumbles, bounces and slides
+    /// to wherever it comes to rest; the model goes along with it (see [`Drone::follow_wreck`]).
+    fn fall(&mut self, graph: &mut Graph, from: Vector3<f32>) {
+        if graph.is_valid_handle(self.hull) {
+            graph.remove_node(self.hull);
+        }
+        let away = flat(self.at - from).try_normalize(1.0e-4).unwrap_or_else(Vector3::z);
+        (self.hull, self.collider) = wreck(graph, self.at, self.heading, self.speed, away);
+        self.wrecked = true;
+        self.falling = Some(0.0);
+    }
+
+    /// Puts the model where its falling wreck is, and lays the wreck to rest once it has barely
+    /// moved for a while.
+    fn follow_wreck(&mut self, graph: &mut Graph, dt: f32) {
+        let Ok(body) = graph.try_get_mut_of_type::<RigidBody>(self.hull) else {
+            return;
+        };
+        // Its own place, which the physics sets: it has no parent.
+        let (at, rotation) = (**body.local_transform().position(), **body.local_transform().rotation());
+        let still = body.lin_vel().norm() < WRECK_STILL.0 && body.ang_vel().norm() < WRECK_STILL.1;
+        if let Some(stilled) = self.falling.as_mut() {
+            *stilled = if still { *stilled + dt } else { 0.0 };
+            if *stilled >= WRECK_SETTLES {
+                body.set_body_type(RigidBodyType::Static);
+                self.falling = None;
+            }
+        }
+        self.at = at;
+        graph[self.root]
+            .local_transform_mut()
+            .set_position(at)
+            .set_rotation(rotation);
     }
 
     /// Searches from `at`, going there first.
@@ -891,7 +984,10 @@ impl Drone {
             self.since += dt;
             doing.says = self.think(graph, (grid, origin), player, reachable, rng, dt);
             self.fly(graph, (grid, origin), player, dt);
-            self.pose(graph);
+            match self.wrecked {
+                true => self.follow_wreck(graph, dt),
+                false => self.pose(graph),
+            }
             // Its body goes where the animations take it: bobbing as it hovers, and down to the
             // floor when it is shot down. As of the last frame, which is as near as matters.
             let at = match self.state {
@@ -901,7 +997,7 @@ impl Drone {
             // Moved by hand, it would push anyone in its way with no end of force - down through
             // the floor, even, settling or falling onto them. So it never moves into anyone: it
             // stays put until they are out of the way.
-            if graph.is_valid_handle(self.hull) {
+            if graph.is_valid_handle(self.hull) && !self.wrecked {
                 let from = graph[self.hull].global_position();
                 if !blocked(graph, self.hull, from, at - from) {
                     if let Ok(hull) = graph.try_get_mut_of_type::<RigidBody>(self.hull) {
@@ -1181,6 +1277,47 @@ fn hull(graph: &mut Graph) -> (Handle<Node>, Handle<Collider>) {
     (body, collider)
 }
 
+/// The quadcopter's wreck: a body the shape of it, where it hovers `at`, facing `heading`, which
+/// falls under physics - going on at `speed` the way it faces, knocked on along the level `away`
+/// and up, and tipping over that way as it slews round. The body, and the box about its body.
+fn wreck(graph: &mut Graph, at: Vector3<f32>, heading: f32, speed: f32, away: Vector3<f32>) -> (Handle<Node>, Handle<Collider>) {
+    let ahead = Vector3::new(heading.sin(), 0.0, heading.cos());
+    let part = |graph: &mut Graph, shape, y: f32, density: f32| -> Handle<Collider> {
+        ColliderBuilder::new(BaseBuilder::new().with_local_transform(
+            TransformBuilder::new().with_local_position(Vector3::new(0.0, y, 0.0)).build(),
+        ))
+        .with_shape(shape)
+        .with_density(Some(density))
+        .with_friction(WRECK_FRICTION)
+        .with_restitution(WRECK_BOUNCE)
+        .with_collision_groups(InteractionGroups::new(BitMask(!CHARACTERS), BitMask(u32::MAX)))
+        .build(graph)
+    };
+    let (x, y, z) = CORE_HALF;
+    let collider = part(graph, ColliderShape::cuboid(x, y, z), CORE_AT, 1.0);
+    let rim = part(graph, ColliderShape::cylinder(RIM_HALF_HEIGHT, RIM_RADIUS), RIM_AT, RIM_DENSITY);
+    let body = RigidBodyBuilder::new(
+        BaseBuilder::new()
+            .with_local_transform(
+                TransformBuilder::new()
+                    .with_local_position(at)
+                    .with_local_rotation(UnitQuaternion::from_axis_angle(&Vector3::y_axis(), heading))
+                    .build(),
+            )
+            .with_child(collider)
+            .with_child(rim),
+    )
+    .with_body_type(RigidBodyType::Dynamic)
+    .with_ccd_enabled(true)
+    .with_ang_damping(WRECK_DAMPING)
+    .with_lin_vel(ahead * speed + away * KNOCK + Vector3::y() * KNOCK_UP)
+    // About the level line square to the way it was knocked: its top goes over away.
+    .with_ang_vel(Vector3::y().cross(&away) * TUMBLE + Vector3::y() * SLEW)
+    .build(graph)
+    .to_base();
+    (body, collider)
+}
+
 /// Whether the drone whose body is `hull`, its middle at `at`, would run into anyone - the player
 /// or a droid - going `step`, or come nearer them than [`CLEARANCE`]. Going away from someone it
 /// touches is never blocked, so it can always get clear.
@@ -1403,6 +1540,49 @@ mod tests {
         // Over a crouching or crawling head it passes, and the maze is not someone.
         assert!(!blocked(&graph, body, Vector3::new(-0.6, 2.4, 0.0), toward));
         assert!(!blocked(&graph, body, Vector3::new(0.0, HOVER, 2.55), Vector3::new(0.0, 0.0, 0.05)));
+    }
+
+    #[test]
+    fn a_downed_quadcopter_tumbles_down_and_comes_to_rest_flat_on_the_floor() {
+        use fyrox::core::algebra::Vector2;
+        let dt = 1.0 / 60.0;
+        // Knocked every which way, still or flying flat out, facing any way.
+        let falls = (0..24).map(|k| {
+            let a = k as f32 * 0.55;
+            (a * 2.3, if k % 2 == 0 { 0.0 } else { QUAD_FLIGHT.hurry }, Vector3::new(a.sin(), 0.0, a.cos()))
+        });
+        for (heading, speed, away) in falls {
+            let mut graph = Graph::new();
+            let floor = ColliderBuilder::new(BaseBuilder::new()).with_shape(ColliderShape::cuboid(30.0, 0.1, 30.0)).build(&mut graph);
+            RigidBodyBuilder::new(
+                BaseBuilder::new()
+                    .with_local_transform(TransformBuilder::new().with_local_position(Vector3::new(0.0, -0.1, 0.0)).build())
+                    .with_child(floor),
+            )
+            .with_body_type(RigidBodyType::Static)
+            .build(&mut graph);
+            let (body, _) = wreck(&mut graph, Vector3::new(0.0, HOVER, 0.0), heading, speed, away);
+            let (mut tipped, mut lowest) = (0.0_f32, f32::MAX);
+            for _ in 0..600 {
+                graph.update(Vector2::new(800.0, 600.0), dt, Default::default());
+                let body = &graph[body];
+                let up = body.local_transform().rotation().transform_vector(&Vector3::y());
+                tipped = tipped.max(up.y.abs().acos());
+                lowest = lowest.min(body.local_transform().position().y);
+            }
+            let body = graph.try_get_of_type::<RigidBody>(body).unwrap();
+            let up = body.local_transform().rotation().transform_vector(&Vector3::y());
+            let at = **body.local_transform().position();
+            // It tumbled, and lies flat, on its skids or on its back, still, on the floor.
+            assert!(body.lin_vel().norm() < 0.05 && body.ang_vel().norm() < 0.1, "still moving: at {}, {} m/s, {} rad/s, up {up}", at.transpose(), body.lin_vel().transpose(), body.ang_vel().transpose());
+            assert!(tipped > 0.5, "it fell without tumbling: {tipped}");
+            assert!(up.y.abs() > 0.98, "it rests on its side: up {up}");
+            // On its skids, or on its back on the top of its hump.
+            let resting = if up.y > 0.0 { CORE_HALF.1 - CORE_AT } else { CORE_HALF.1 + CORE_AT };
+            assert!((at.y - resting).abs() < 0.03, "at {at}, not on the floor: {resting}");
+            // On its back is as low as it goes.
+            assert!(lowest > CORE_HALF.1 + CORE_AT - 0.04, "it went through the floor: {lowest}");
+        }
     }
 
     #[test]

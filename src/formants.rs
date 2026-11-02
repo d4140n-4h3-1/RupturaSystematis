@@ -14,6 +14,8 @@ use synth::Echo;
 pub const VOICES: &str = "data/sounds/voice_formants.json";
 /// Where the drones' voice comes from.
 pub const DRONE_VOICE: &str = "data/sounds/drone_voice.json";
+/// Where the quadcopters' voice comes from: quicker and higher than the drones'.
+pub const QUAD_VOICE: &str = "data/sounds/quad_voice.json";
 
 /// The echo of a city of tall buildings in the void: a quarter of a second off the far walls,
 /// back three or four times before it fades.
@@ -180,5 +182,16 @@ mod tests {
         let chirps = Chirps::load(DRONE_VOICE).expect("the drones' voice");
         let samples = synth::make(&chirps.say("Intrusor detectum. Sta.", 1.0), chirps.sample_rate);
         assert!(samples.iter().any(|s| s.abs() > 0.1), "silent");
+    }
+
+    #[test]
+    fn the_quadcopters_voice_is_heard_and_is_quicker_and_higher_than_the_drones() {
+        let (drone, quad) = (Chirps::load(DRONE_VOICE).unwrap(), Chirps::load(QUAD_VOICE).expect("the quadcopters' voice"));
+        let line = "Intrusor detectum. Sta.";
+        let (said, quick) = (synth::make(&drone.say(line, 1.0), drone.sample_rate), synth::make(&quad.say(line, 1.0), quad.sample_rate));
+        assert!(quick.iter().any(|s| s.abs() > 0.1), "silent");
+        assert!(quick.len() < said.len() * 3 / 4, "{} against {}", quick.len(), said.len());
+        let highest = |chirps: &Chirps| chirps.notes.values().copied().fold(0.0, f32::max);
+        assert!(highest(&quad) > 1.5 * highest(&drone));
     }
 }

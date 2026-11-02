@@ -1,0 +1,20 @@
+{
+  "about": "The quadcopters' voice: System Latin said as the drones say it (see data/sounds/drone_voice.json for what everything here means), but quicker, higher and sharper, as a smaller, faster machine: its vowels an octave and more up the scale and half as long, its hum a reedy whine, its buzz a harsher rasp, its clicks crisper, and the gaps between letters and words tighter, so that a line runs off it in a rattle.",
+  "sample_rate": 44100,
+  "notes": {
+    "a": 1319.0,
+    "e": 1760.0,
+    "i": 2093.0,
+    "o": 988.0,
+    "u": 784.0,
+    "y": 1568.0
+  },
+  "beep": 0.032,
+  "hum": { "pitch": 165.0, "formant": 660.0, "length": 0.04, "noise": 0.05 },
+  "buzz": { "pitch": 110.0, "formant": 3600.0, "length": 0.035, "noise": 0.65 },
+  "click": { "pitch": 180.0, "formant": 5200.0, "length": 0.008, "noise": 1.0 },
+  "gaps": { "letter": 0.006, "word": 0.05, "stop": 0.18 },
+  "rise": 0.8,
+  "volume": 0.5,
+  "reach": 6.0
+}
