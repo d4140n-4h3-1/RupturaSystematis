@@ -73,6 +73,8 @@ mod view;
 mod viewmodel;
 
 pub use avatar::{set_body_glow, DROID_MODEL};
+/// How much the droid's model is scaled, played: anything posed with it in Blender goes with it.
+pub(crate) use avatar::SCALE as DROID_SCALE;
 use avatar::{heading, Avatar, Going};
 use fyrox::{
     core::{
@@ -87,7 +89,7 @@ use fyrox::{
         graph::{physics::RayCastOptions, Graph},
         light::{spot::SpotLightBuilder, BaseLightBuilder},
         node::Node,
-        rigidbody::{RigidBody, RigidBodyBuilder},
+        rigidbody::{RigidBody, RigidBodyBuilder, RigidBodyType},
         sound::listener::ListenerBuilder,
         transform::TransformBuilder,
     },
@@ -219,6 +221,8 @@ pub struct Player {
     /// Who the player is talking to, and how far in to them the camera is.
     talk: talk::Talk,
     keys: Keys,
+    /// Whether the player is on the race's bike, which carries them (see [`Player::set_riding`]).
+    riding: bool,
 }
 
 impl Default for Player {
@@ -281,6 +285,7 @@ impl Default for Player {
             noises: Default::default(),
             talk: Default::default(),
             keys: Default::default(),
+            riding: false,
         }
     }
 }
@@ -361,6 +366,59 @@ impl Player {
             pistol_lamp: pistol::muzzle_lamp(graph),
             bolts: pistol::Bolts::new(graph),
             ..Default::default()
+        }
+    }
+
+    /// Puts the player on the race's bike, or takes them off it (see [`crate::race`]). On it, the
+    /// body goes wherever the bike takes it ([`Player::carry`]) rather than under its own steam -
+    /// held by nothing, falling for nothing - and the droid it is seen as is hidden, the droid on
+    /// the bike standing in for it; the pistol put away and the flashlight off. Off it, the body
+    /// is the player's again, the droid back, for [`Player::teleport`] to put down.
+    pub fn set_riding(&mut self, graph: &mut Graph, riding: bool) {
+        if riding == self.riding {
+            return;
+        }
+        self.riding = riding;
+        let body = &mut graph[self.body];
+        if riding {
+            body.set_body_type(RigidBodyType::KinematicPositionBased);
+            body.set_gravity_scale(0.0);
+            body.set_lin_vel(Vector3::zeros());
+            body.local_transform_mut().set_rotation(UnitQuaternion::identity());
+            self.armed = false;
+            self.keys = Keys::default();
+        } else {
+            body.set_body_type(RigidBodyType::Dynamic);
+            body.set_gravity_scale(1.0);
+        }
+        if let Some(avatar) = self.avatar.as_ref() {
+            avatar.set_visible(graph, !riding);
+        }
+        if let Ok(flashlight) = graph.try_get_mut(self.flashlight) {
+            flashlight.set_visibility(!riding && self.flashlight_on);
+        }
+    }
+
+    pub fn riding(&self) -> bool {
+        self.riding
+    }
+
+    /// On the bike: the body to `at`, and the camera to `eye`, looking at `target`.
+    pub fn carry(&mut self, graph: &mut Graph, at: Vector3<f32>, eye: Vector3<f32>, target: Vector3<f32>) {
+        // The droid may have joined the player since they got on.
+        if let Some(avatar) = self.avatar.as_ref() {
+            avatar.set_visible(graph, false);
+        }
+        graph[self.body]
+            .local_transform_mut()
+            .set_position(at)
+            .set_rotation(UnitQuaternion::identity());
+        let look = target - eye;
+        if look.norm() > 1e-4 {
+            graph[self.camera]
+                .local_transform_mut()
+                .set_position(eye - at)
+                .set_rotation(UnitQuaternion::face_towards(&look, &Vector3::y()));
         }
     }
 

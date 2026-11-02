@@ -16,7 +16,8 @@
 //! `MAZE_SIZE=<w>x<d>` sets how many junctions wide and deep the maze is, `MAZE_DEBUG=1` also prints
 //! the walkable map the game made of the level, `MAZE_SEED=<n>` makes every maze identical,
 //! `MAZE_WINDOWED=1` opens a window instead of filling the screen, and `MAZE_MODEL=<path>` plays a
-//! fixed maze model instead, such as `data/maze_full.fbx`. In a browser these go in the page's
+//! fixed maze model instead, such as `data/maze_full.fbx`; with a race track, such as
+//! `data/arena/race_circuit.glb`, `MAZE_RACE_AUTOPILOT=1` drives the bike round it by itself. In a browser these go in the page's
 //! address instead, as `?MAZE_SEED=7` (see [`platform::var`]).
 
 //!
@@ -60,6 +61,7 @@ mod lockpick;
 mod menu;
 mod notes;
 mod precinct;
+mod race;
 pub mod platform;
 pub mod player;
 pub mod ragdoll;

@@ -168,6 +168,37 @@ pub const URBS: Map = Map {
 /// The places a story could be told in.
 pub const STORY_MAPS: [Map; 1] = [URBS];
 
+/// The Circuit: a hover bike race track (see `data/arena/race_circuit.py` and [`crate::race`]).
+pub const CIRCUIT: Map = Map {
+    name: "Circuit",
+    path: "data/arena/race_circuit.glb",
+    about: "A figure of eight, 1.1 km round: a hairpin, a chicane up onto a viaduct over the \
+            straight, S-bends down through a tunnel.",
+    void: false,
+    open_sky: true,
+    night: false,
+    echoes: false,
+    alongside: &[],
+    foggy: false,
+};
+
+/// The Grand Circuit: the Circuit's plan, wider and twice as long (see
+/// `data/arena/race_circuit.py`'s `grand`).
+pub const GRAND_CIRCUIT: Map = Map {
+    name: "Grand Circuit",
+    path: "data/arena/race_grand.glb",
+    about: "Twice the Circuit, on a road half as wide again, 2.1 km round: a 540 m straight, a long \
+            sweeper, a chicane of four, a viaduct 14 m up, and a long tunnel.",
+    void: false,
+    open_sky: true,
+    night: false,
+    echoes: false,
+    alongside: &[],
+    foggy: false,
+};
+
+pub const RACE_MAPS: [Map; 2] = [CIRCUIT, GRAND_CIRCUIT];
+
 /// The sky round a map in the void, each face of it.
 pub const VOID_SKY: &str = "data/skybox.png";
 
@@ -177,6 +208,7 @@ pub fn map_at(path: &str) -> Option<&'static Map> {
         .chain(&ROYALE_MAPS)
         .chain(&HEIST_MAPS)
         .chain(&STORY_MAPS)
+        .chain(&RACE_MAPS)
         .find(|map| map.path == path)
 }
 

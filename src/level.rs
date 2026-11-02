@@ -50,11 +50,11 @@ const FLAG_MIDDLE: f32 = 2.0;
 /// where someone starts in battle royale (see [`crate::royale`]), or a heist's way in, doors,
 /// vault and its terminals, ways out, guards, drones and where its waves come from (see
 /// [`crate::heist`]), or a city's stores and banks, each with a computer keeping its takings (see
-/// [`crate::computer::Kind`]).
-const MARKERS: [&str; 25] = [
+/// [`crate::computer::Kind`]), or a race's start line, checkpoints and grid (see [`crate::race`]).
+const MARKERS: [&str; 27] = [
     "flag_", "computer_", "post_", "spawn_", "heist_start", "door_", "loot", "extract_", "guard_", "drone_",
     "terminal_", "wave_", "place_", "store_", "bank_", "vault_", "precinct_", "cell_", "tunnel_", "hatch_",
-    "cache_", "den_", "fence", "grate_", "hideout_",
+    "cache_", "den_", "fence", "grate_", "hideout_", "race_", "checkpoint_",
 ];
 
 /// Somewhere a maze model marks with an empty, by the empty's name, for the game to put
@@ -311,7 +311,9 @@ impl Level {
     /// `open_sky` is for a level with no ceiling over it, and `roads` are its streets, if it
     /// has any, for the droids to keep off.
     pub fn finish(&mut self, graph: &mut Graph, ignore: Handle<Node>, open_sky: bool, roads: Option<&RoadPlan>) {
-        self.grid = survey::survey(graph, self.collider, ignore, open_sky);
+        // A race track has no one on foot to find their way about it: no walk grid.
+        let raced = self.markers.iter().any(|marker| marker.name == "race_start");
+        self.grid = if raced { None } else { survey::survey(graph, self.collider, ignore, open_sky) };
         if let Some((grid, origin)) = self.grid.as_mut() {
             self.vaults.keep_out(grid, *origin);
             self.lifts.keep_out(grid, *origin);

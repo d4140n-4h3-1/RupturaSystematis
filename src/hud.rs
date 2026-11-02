@@ -95,6 +95,9 @@ pub enum Status {
         /// What there is to do next, in a heist, after the time.
         objective: Option<String>,
     },
+    /// A race: the lap and the clock, the laps so far, how fast the bike is going and how much
+    /// boost it has left (see [`crate::race`]).
+    Race(crate::race::RaceStatus),
 }
 
 #[derive(Debug, Default, PartialEq)]
@@ -407,6 +410,27 @@ impl Hud {
         let (text, alarm, breath, health, (armed, gun, ammo), credits, shield, shield_ready) = match status {
             Status::Loading => ("Loading the maze...".to_string(), None, None, None, (false, None, None), None, None, false),
             Status::Blank => (String::new(), None, None, None, (false, None, None), None, None, false),
+            Status::Race(race) => {
+                let mut text = format!(
+                    "Pos {}/{}    Lap {}/{}    Time {}",
+                    race.place,
+                    race.racers,
+                    race.lap,
+                    race.laps,
+                    format_time(race.time)
+                );
+                if let Some(last) = race.last_lap {
+                    text += &format!("    Last {}", format_time(last));
+                }
+                if let Some(best) = race.best_lap {
+                    text += &format!("    Best {}", format_time(best));
+                }
+                text += &format!("    {:.0} km/h    Boost {:.0}%", race.speed * 3.6, race.boost * 100.0);
+                if self.note_time > 0.0 {
+                    text += &format!("\n{}", self.note);
+                }
+                (text, None, None, None, (false, None, None), None, None, false)
+            }
             Status::Round {
                 time,
                 best,

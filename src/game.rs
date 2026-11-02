@@ -14,6 +14,7 @@ use crate::{
     vault,
     ctf::{self, Bases, Side, MAPS, PLAYERS},
     royale::{self, RingNews, RingPosts, Royale, Who},
+    race::{self, Race, RaceNews, Track},
     firewall::{self, Firewalls},
     drone::{self, Drone, DroneLines, Kind, State, Target, DRONE_LINES, DRONE_MODEL, QUAD_MODEL, URBS_DRONE_LINES},
     drone_shot::{Shots, SHOT_MODEL},
@@ -198,6 +199,8 @@ const VOICE_SPREAD: f32 = 0.06;
 /// it not far off; any further is far.
 const EXIT_NEAR: f32 = 25.0;
 const EXIT_NOT_FAR: f32 = 60.0;
+/// The ambient light on a race track: out in the open by day, lit from all round by the sky.
+const DAY_AMBIENT: Color = Color::opaque(92, 100, 116);
 /// The ambient light with the lights off: next to none, so that what the flashlight is not
 /// pointed at is as good as black.
 const DARK_AMBIENT: Color = Color::opaque(3, 3, 5);
@@ -612,6 +615,29 @@ pub struct MazeGame {
     #[visit(skip)]
     #[reflect(hidden)]
     royale: Option<Royale>,
+    /// In a race, the race under way (see [`race`]); the bike's model; what the banner says of it
+    /// as of the last frame; and the best time round, of any race this session.
+    #[visit(skip)]
+    #[reflect(hidden)]
+    race: Option<Race>,
+    #[visit(skip)]
+    #[reflect(hidden)]
+    bike_model: Option<ModelResource>,
+    /// The droids racing the player, each in its kind's colours (see [`race::RIVALS`]).
+    #[visit(skip)]
+    #[reflect(hidden)]
+    rival_models: Vec<ModelResource>,
+    #[visit(skip)]
+    #[reflect(hidden)]
+    race_banner: String,
+    /// Once the player is over the line: what the banner says of how they did, over the
+    /// standings as they go on coming in.
+    #[visit(skip)]
+    #[reflect(hidden)]
+    race_result: String,
+    #[visit(skip)]
+    #[reflect(hidden)]
+    race_best: Option<f32>,
     #[visit(skip)]
     #[reflect(hidden)]
     ring_posts: RingPosts,
@@ -902,6 +928,8 @@ impl MazeGame {
         self.computer_model = Some(resources.request::<Model>(COMPUTER_MODEL));
         self.drone_model = Some(resources.request::<Model>(DRONE_MODEL));
         self.quad_model = Some(resources.request::<Model>(QUAD_MODEL));
+        self.bike_model = Some(resources.request::<Model>(race::BIKE_MODEL));
+        self.rival_models = race::RIVALS.iter().map(|&(_, model, _, _)| resources.request::<Model>(model)).collect();
         self.shot_model = Some(resources.request::<Model>(SHOT_MODEL));
         self.heart_model = Some(resources.request::<Model>(HEART_MODEL));
         self.shield_model = Some(resources.request::<Model>(SHIELD_MODEL));
@@ -920,6 +948,7 @@ impl MazeGame {
             Game::BattleRoyale(map) => Some(ctf::ROYALE_MAPS[map].path.to_string()),
             Game::Heist(map) => Some(ctf::HEIST_MAPS[map].path.to_string()),
             Game::Story(map) => Some(ctf::STORY_MAPS[map].path.to_string()),
+            Game::Race(map) => Some(ctf::RACE_MAPS[map].path.to_string()),
             Game::Maze => platform::var("MAZE_MODEL"),
         };
         // No shadows or reflections - nothing ray traced - in a city traced in light.
@@ -970,6 +999,11 @@ impl MazeGame {
         ctf::map_at(&self.model_path).filter(|map| map.echoes).map(|_| formants::CITY_ECHO)
     }
 
+    /// Whether the level is a race track (see [`ctf::RACE_MAPS`]).
+    fn raced(&self) -> bool {
+        ctf::RACE_MAPS.iter().any(|map| map.path == self.model_path)
+    }
+
     /// Whether fog lies over the level (see [`ctf::Map::foggy`]).
     fn foggy(&self) -> bool {
         ctf::map_at(&self.model_path).is_some_and(|map| map.foggy)
@@ -1004,6 +1038,7 @@ impl MazeGame {
         scene.rendering_options.ambient_lighting_color = match (self.lights_off, foggy) {
             (true, _) => DARK_AMBIENT,
             (false, true) => FOG_AMBIENT,
+            (false, false) if self.raced() => DAY_AMBIENT,
             (false, false) => AMBIENT,
         };
         self.player.set_view_distance(&mut scene.graph, if foggy { FOG_VIEW } else { VIEW });
@@ -1052,6 +1087,10 @@ impl MazeGame {
         }
         self.prefabs = None;
         self.model_path.clear();
+        if let Some(mut race) = self.race.take() {
+            race.remove(&mut ctx.scenes[self.scene].graph);
+        }
+        self.player.set_riding(&mut ctx.scenes[self.scene].graph, false);
         self.ctf = None;
         self.royale = None;
         self.heist = None;
@@ -1119,6 +1158,15 @@ impl MazeGame {
     fn start_round(&mut self, ctx: &mut PluginContext) {
         self.stop_talking(ctx);
         self.stop_hacking(ctx);
+        // Off the bike, if the last round was a race - this one may be another - and the exit to
+        // be seen again.
+        if let Some(mut race) = self.race.take() {
+            race.remove(&mut ctx.scenes[self.scene].graph);
+        }
+        self.player.set_riding(&mut ctx.scenes[self.scene].graph, false);
+        if let Ok(exit) = ctx.scenes[self.scene].graph.try_get_mut(self.exit) {
+            exit.set_visibility(true);
+        }
         // The droids are put down afresh, and what they were about to say goes with them.
         self.barks.clear();
         // Made (and seeded) first: the grid below borrows the game.
@@ -1185,6 +1233,20 @@ impl MazeGame {
             for (_, bolts) in &mut self.side_bolts {
                 bolts.clear(&mut scene.graph);
             }
+        }
+        // A race needs no walk grid, nor anywhere to find: the bike on the grid, and off.
+        if Track::from_markers(&self.level.markers).is_some() {
+            let scene = &mut ctx.scenes[self.scene];
+            self.inhabitants.clear(&mut scene.graph);
+            self.talk = None;
+            self.meeting = None;
+            if let Some(shots) = self.shots.as_mut() {
+                shots.clear(&mut scene.graph);
+            }
+            self.story = false;
+            self.begin_round(ctx);
+            self.start_race(ctx);
+            return;
         }
         let Some((grid, origin)) = self.level.grid.as_ref() else {
             return;
@@ -1258,6 +1320,19 @@ impl MazeGame {
             into_maze.x.atan2(into_maze.z),
         );
 
+        self.begin_round(ctx);
+        self.start_royale(ctx);
+        self.start_heist(ctx);
+        self.start_race(ctx);
+        self.story = story.is_some();
+        if self.story {
+            self.hud.show_note("Story: off the train at the station. Find the way to Summa, the tallest tower.".to_string());
+        }
+    }
+
+    /// The round under way afresh, whatever is played: the clock at nought, whole again, free and
+    /// wanted for nothing, every precinct shut, and in play.
+    fn begin_round(&mut self, ctx: &mut PluginContext) {
         self.round_time = 0.0;
         self.health = Health::default();
         if let Some(shield) = self.shield.as_mut() {
@@ -1285,11 +1360,89 @@ impl MazeGame {
         self.level.lockers.reset(&mut ctx.scenes[self.scene].graph);
         self.phase = Phase::Playing;
         self.set_banner(ctx, "");
-        self.start_royale(ctx);
-        self.start_heist(ctx);
-        self.story = story.is_some();
-        if self.story {
-            self.hud.show_note("Story: off the train at the station. Find the way to Summa, the tallest tower.".to_string());
+    }
+
+    /// A map marking a start line and checkpoints is raced (see [`race`]): the player on the bike
+    /// at the front of the grid, the countdown started, and nothing else to find.
+    fn start_race(&mut self, ctx: &mut PluginContext) {
+        let Some(track) = Track::from_markers(&self.level.markers) else {
+            return;
+        };
+        let Some(bike) = self.bike_model.clone().filter(|model| model.is_ok()) else {
+            Log::err(format!("Could not load {}; there is no race", race::BIKE_MODEL));
+            return;
+        };
+        let scene = &mut ctx.scenes[self.scene];
+        let mut race = Race::new(track, platform::var("MAZE_RACE_AUTOPILOT").is_some(), race::RIVALS.len());
+        let rivals: Vec<Option<ModelResource>> =
+            self.rival_models.iter().map(|model| model.is_ok().then(|| model.clone())).collect();
+        race.spawn(scene, &bike, self.droid_model.as_ref(), &rivals);
+        self.player.set_riding(&mut scene.graph, true);
+        let (at, eye, target) = race.view();
+        self.player.carry(&mut scene.graph, at, eye, target);
+        if let Ok(exit) = scene.graph.try_get_mut(self.exit) {
+            exit.set_visibility(false);
+        }
+        Log::info(format!(
+            "Race: {} checkpoints, {} laps, {} racing",
+            race.track.gates.len() - 1,
+            race::LAPS,
+            race.racers.len()
+        ));
+        self.hud.show_note("W to go, S to brake, A and D to steer, Shift to boost, R back onto the track".to_string());
+        self.race_banner.clear();
+        self.race = Some(race);
+    }
+
+    /// The race under way: the bike on round the track, the camera after it, and what comes of
+    /// it - the off, each lap, the finish - put on the screen.
+    fn update_race(&mut self, ctx: &mut PluginContext) {
+        let steering = self.focused && self.phase == Phase::Playing;
+        let skip = self.player.collider();
+        let graph = &mut ctx.scenes[self.scene].graph;
+        let Some(race) = self.race.as_mut() else {
+            return;
+        };
+        let news = race.update(graph, ctx.dt, skip, steering);
+        let (at, eye, target) = race.view();
+        self.player.carry(graph, at, eye, target);
+        self.round_time = race.time;
+        let countdown = race.countdown_text();
+        for item in news {
+            match item {
+                RaceNews::Go => Log::info("Race: go"),
+                RaceNews::Lap { lap, took, best } => {
+                    Log::info(format!("Race: lap {lap} in {}", hud::format_time(took)));
+                    let fastest = if best && lap > 1 { " - fastest lap" } else { "" };
+                    self.hud.show_note(format!("Lap {lap}: {}{fastest}", hud::format_time(took)));
+                }
+                RaceNews::Finished { time, best_lap, place, of } => {
+                    self.phase = Phase::Won;
+                    let record = self.race_best.is_none_or(|best| time < best);
+                    if record {
+                        self.race_best = Some(time);
+                    }
+                    let best = self.race_best.map_or(String::new(), |best| format!("    Best {}", hud::format_time(best)));
+                    let text = format!(
+                        "{} of {of}, in {}{}\nFastest lap {}{best}\nPress N to race again",
+                        format!("{place}{}", ordinal(place)),
+                        hud::format_time(time),
+                        if record { " - a new best!" } else { "" },
+                        best_lap.map_or("-".to_string(), hud::format_time),
+                    );
+                    Log::info(format!("Race: finished {place}{} of {of} in {}", ordinal(place), hud::format_time(time)));
+                    self.race_result = text;
+                }
+            }
+        }
+        // The countdown; or, finished, how the player did and the standings as the droids come in.
+        let text = match self.phase {
+            Phase::Playing => countdown.unwrap_or_default(),
+            _ => format!("{}\n\n{}", self.race_result, self.race.as_ref().map(Race::results).unwrap_or_default()),
+        };
+        if text != self.race_banner {
+            self.set_banner(ctx, &text);
+            self.race_banner = text;
         }
     }
 
@@ -1519,6 +1672,9 @@ impl MazeGame {
         let status = match self.phase {
             Phase::Loading | Phase::Building | Phase::Settling(_) => Status::Loading,
             Phase::Title | Phase::Broken => Status::Blank,
+            Phase::Playing | Phase::Won | Phase::Deleted if self.race.is_some() => {
+                self.race.as_ref().map_or(Status::Blank, |race| Status::Race(race.status()))
+            }
             Phase::Playing | Phase::Won | Phase::Deleted => Status::Round {
                 time: self.round_time,
                 best: self.best_time,
@@ -1684,7 +1840,7 @@ impl MazeGame {
     /// A new maze, or with a fixed model a new round in it. Only once there is a level to start
     /// again from.
     fn restart(&mut self, ctx: &mut PluginContext) {
-        if self.level.grid.is_none() {
+        if self.level.grid.is_none() && Track::from_markers(&self.level.markers).is_none() {
             return;
         }
         self.set_paused(ctx, false);
@@ -1713,6 +1869,7 @@ impl MazeGame {
         scene.rendering_options.ambient_lighting_color = match (on, self.foggy()) {
             (false, _) => DARK_AMBIENT,
             (true, true) => FOG_AMBIENT,
+            (true, false) if self.raced() => DAY_AMBIENT,
             (true, false) => AMBIENT,
         };
         // No sun at night.
@@ -5074,6 +5231,7 @@ impl Plugin for MazeGame {
                     self.start_round(ctx);
                 }
             }
+            Phase::Playing | Phase::Won if self.race.is_some() => self.update_race(ctx),
             Phase::Playing => {
                 // Talking stops the clock, and holds the player where they are; so does using the
                 // computer, but the clock runs on.
@@ -5362,6 +5520,9 @@ impl Plugin for MazeGame {
                         // key still counts.
                         if (!self.menu.is_open() && !self.busy()) || !pressed {
                             self.player.on_key(code, pressed);
+                            if let Some(race) = self.race.as_mut() {
+                                race.on_key(code, pressed);
+                            }
                         }
                         // Picking a lock, A and D turn its ring for as long as they are held.
                         match code {
@@ -5455,6 +5616,9 @@ impl Plugin for MazeGame {
                         // Nothing should keep walking while the player is in another window, and a
                         // round in play waits for them to come back.
                         self.player.release_keys();
+                        if let Some(race) = self.race.as_mut() {
+                            race.release_keys();
+                        }
                         self.want_mouse = false;
                         self.set_mouse_captured(&mut ctx, false);
                         if self.phase == Phase::Playing {

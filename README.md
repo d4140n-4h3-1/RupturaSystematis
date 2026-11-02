@@ -66,6 +66,7 @@ what you do.
 | **Battle Royale** | Last droid standing on the Grid, in Nexus, or in the fog of the Foggy Forest. |
 | **Capture the Flag** | Hack red's firewall, take their flag and bring it home, with allies at your side. |
 | **Maze**          | A new random maze each round, built from tiles: find the way out.            |
+| **Race**          | Three laps of the Circuit or the Grand Circuit on a hover bike, against four droids. |
 
 ### Under the hood
 
