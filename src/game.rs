@@ -2705,7 +2705,7 @@ impl MazeGame {
         }
         if !shots.is_empty() {
             let graph = &mut ctx.scenes[self.scene].graph;
-            for (from, way, side) in shots {
+            for (from, way, side, rifle) in shots {
                 let n = match self.side_bolts.iter().position(|(of, _)| *of == side) {
                     Some(n) => n,
                     None => {
@@ -2713,7 +2713,11 @@ impl MazeGame {
                         self.side_bolts.len() - 1
                     }
                 };
-                self.side_bolts[n].1.fire(graph, from, way);
+                // A rifle's shot sounds and glows as the player's rifle's does.
+                match rifle {
+                    true => self.side_bolts[n].1.fire_rifle(graph, from, way),
+                    false => self.side_bolts[n].1.fire(graph, from, way),
+                }
                 // Heard, as the player's shots are, by those searching or wary.
                 if let Some((grid, origin)) = &self.level.grid {
                     self.inhabitants.hear((grid, *origin), from, SHOT_NOISE);

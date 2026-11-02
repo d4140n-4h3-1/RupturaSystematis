@@ -269,6 +269,11 @@ const FIRE_EVERY: (f32, f32) = (0.7, 1.3);
 const GANG_ENGAGE: f32 = 6.0;
 const GANG_FIRE_EVERY: (f32, f32) = (0.45, 0.9);
 const SPREAD: f32 = 0.55;
+/// A droid carries a pistol or a rifle, picked at random (see [`Inhabitant::rifle`]): with the
+/// rifle it fires [`RIFLE_PACE`] as long between shots, as the player's rifle fires twice as fast
+/// as their pistol, and [`RIFLE_SPREAD`] times as wide.
+const RIFLE_PACE: f32 = 0.5;
+const RIFLE_SPREAD: f32 = 1.5;
 /// A bolt flying by is noticed within [`NOTICE_BOLT`] meters, if it is in front of the droid -
 /// or felt, within [`NEAR_MISS`], wherever. Noticing [`BLIND_AFTER`] of them within
 /// [`BLIND_MEMORY`] seconds of each other, from someone it cannot see, an armed droid - a sentry,
@@ -372,9 +377,10 @@ pub struct News {
     /// The droids that answered an alarm, and are searching where the player was.
     pub alarmed: Vec<usize>,
     /// In capture the flag, the droids that have just gone after one of the other side; and the
-    /// shots fired: from where, which way, one meter long, and by which side.
+    /// shots fired: from where, which way, one meter long, by which side, and whether from a
+    /// rifle.
     pub engaged: Vec<usize>,
-    pub shots: Vec<(Vector3<f32>, Vector3<f32>, Side)>,
+    pub shots: Vec<(Vector3<f32>, Vector3<f32>, Side, bool)>,
 }
 
 /// How much breath a droid has left, for its stamina bar: where its feet and face are, how much
@@ -502,6 +508,9 @@ struct Inhabitant {
     reload: f32,
     armed_left: f32,
     aimed_at: Option<Vector3<f32>>,
+    /// Whether the gun it draws is a rifle, not a pistol: picked at random as it is put down,
+    /// half of them each.
+    rifle: bool,
     /// The droid it walks about with, if it is one of a pair, as an index; and whether it leads
     /// the way, or keeps beside the other.
     partner: Option<usize>,
@@ -2317,6 +2326,9 @@ impl Inhabitants {
             scene.graph.remove_node(body);
             return false;
         };
+        // Its number, and its gun by it: odd, a rifle - as random as the number, and drawing
+        // nothing more from `rng`, so that whatever else is picked with it is as it was.
+        let code = 10 + rng.below(90) as u32;
         self.droids.push(Inhabitant {
             body,
             collider,
@@ -2331,7 +2343,8 @@ impl Inhabitants {
             waiting: 0.0,
             last_seen: None,
             character,
-            code: 10 + rng.below(90) as u32,
+            code,
+            rifle: code % 2 == 1,
             looks_hostile: false,
             talking: false,
             with: None,
@@ -3602,14 +3615,16 @@ impl Inhabitants {
             });
             let trigger = facing_them.is_some() && droid.reload == 0.0 && !droid.down;
             if trigger {
-                droid.reload = between(
-                    rng,
-                    match (blind.is_some(), gang) {
-                        (true, _) => BLIND_FIRE_EVERY,
-                        (false, true) => GANG_FIRE_EVERY,
-                        (false, false) => FIRE_EVERY,
-                    },
-                );
+                let pace = if droid.rifle { RIFLE_PACE } else { 1.0 };
+                droid.reload = pace
+                    * between(
+                        rng,
+                        match (blind.is_some(), gang) {
+                            (true, _) => BLIND_FIRE_EVERY,
+                            (false, true) => GANG_FIRE_EVERY,
+                            (false, false) => FIRE_EVERY,
+                        },
+                    );
                 if let Some(from) = blind {
                     let wide = Vector3::new(
                         between(rng, (-BLIND_WIDE, BLIND_WIDE)),
@@ -3653,7 +3668,7 @@ impl Inhabitants {
                 pushing: true,
                 strafing: false,
                 armed: droid.armed_left > 0.0 && !droid.down,
-                rifle: false,
+                rifle: droid.rifle,
                 trigger,
                 raised: target.is_some() || held.is_some(),
                 look,
@@ -3667,14 +3682,14 @@ impl Inhabitants {
             // A sentry of the maze's firing blind fires security's bolts.
             let firing_as = droid.side.or(droid.sentry.then_some(Side::Security));
             if let (Some((from, _)), Some(at), Some(side)) = (droid.avatar.shot(), droid.aimed_at, firing_as) {
-                let wide = SPREAD * (at - from).norm() / 10.0;
+                let wide = SPREAD * if droid.rifle { RIFLE_SPREAD } else { 1.0 } * (at - from).norm() / 10.0;
                 let miss = Vector3::new(
                     between(rng, (-wide, wide)),
                     between(rng, (-0.6 * wide, 0.6 * wide)),
                     between(rng, (-wide, wide)),
                 );
                 if let Some(way) = (at + miss - from).try_normalize(1.0e-3) {
-                    shots.push((from, way, side));
+                    shots.push((from, way, side, droid.rifle));
                 }
             }
         }
