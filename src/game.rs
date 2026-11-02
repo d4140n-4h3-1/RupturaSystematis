@@ -15,7 +15,7 @@ use crate::{
     ctf::{self, Bases, Side, MAPS, PLAYERS},
     royale::{self, RingNews, RingPosts, Royale, Who},
     firewall::{self, Firewalls},
-    drone::{self, Drone, DroneLines, State, Target, DRONE_LINES, DRONE_MODEL, URBS_DRONE_LINES},
+    drone::{self, Drone, DroneLines, Kind, State, Target, DRONE_LINES, DRONE_MODEL, QUAD_MODEL, URBS_DRONE_LINES},
     drone_shot::{Shots, SHOT_MODEL},
     alarm::AlarmSound,
     latency::OutputLatency,
@@ -296,8 +296,10 @@ const LOCKER_REACH: f32 = 1.6;
 const ESCAPE_COUNTS: u32 = 2;
 
 /// How many drones there are: one patrolling each round, the rest waiting out of sight to be
-/// called in by a failed hack.
+/// called in by a failed hack; and how many quadcopters wait with them, the faster drones, which
+/// are called in first.
 const DRONES: usize = 4;
+const QUAD_DRONES: usize = 2;
 
 /// The bars over the sentries' heads, and the drone's: how far above the face or the top of the
 /// drone, and how wide, in meters, and how far off, in meters, they are still shown.
@@ -656,6 +658,9 @@ pub struct MazeGame {
     #[visit(skip)]
     #[reflect(hidden)]
     drone_model: Option<ModelResource>,
+    #[visit(skip)]
+    #[reflect(hidden)]
+    quad_model: Option<ModelResource>,
     /// The hearts floating in the corridors: their model as it loads and once it has, the hearts
     /// themselves, and whether they have been put in this round's maze.
     #[visit(skip)]
@@ -892,6 +897,7 @@ impl MazeGame {
         self.droid = Some(resources.request::<Model>(DROID_MODEL));
         self.computer_model = Some(resources.request::<Model>(COMPUTER_MODEL));
         self.drone_model = Some(resources.request::<Model>(DRONE_MODEL));
+        self.quad_model = Some(resources.request::<Model>(QUAD_MODEL));
         self.shot_model = Some(resources.request::<Model>(SHOT_MODEL));
         self.heart_model = Some(resources.request::<Model>(HEART_MODEL));
         self.shield_model = Some(resources.request::<Model>(SHIELD_MODEL));
@@ -2523,7 +2529,7 @@ impl MazeGame {
 
     /// Calls a drone in to search where the player is, `at`, saying `why`: the one patrolling
     /// nearest there, if it is near enough to come soon, or failing that one from out of sight,
-    /// not too far off - or failing that, with every drone already out, the patrolling one nearest
+    /// not too far off, a quadcopter first, the quickest to come - or failing that, with every drone already out, the patrolling one nearest
     /// there however far, or the searching one nearest, to look there instead. Some drone always
     /// comes.
     fn call_drone(&mut self, graph: &mut Graph, at: Vector3<f32>, why: &'static str) {
@@ -2550,7 +2556,12 @@ impl MazeGame {
             return;
         }
         let feet = self.player.feet(graph);
-        if let Some(n) = self.drones.iter().position(|drone| !drone.is_placed()) {
+        let waiting = |kind: Option<Kind>| {
+            self.drones
+                .iter()
+                .position(|drone| !drone.is_placed() && kind.is_none_or(|kind| drone.kind() == kind))
+        };
+        if let Some(n) = waiting(Some(Kind::Quad)).or_else(|| waiting(None)) {
             if self.drones[n].call_in(graph, (grid, *origin), feet, at, rng) {
                 self.drone_says.push((n, why));
                 Log::info(format!("Drone {n}: called in"));
@@ -4377,10 +4388,17 @@ impl MazeGame {
     fn set_up_drone(&mut self, ctx: &mut PluginContext) {
         if let Some(model) = self.drone_model.take_if(|model| model.is_ok()) {
             let scene = &mut ctx.scenes[self.scene];
-            self.drones = (0..DRONES).filter_map(|_| Drone::spawn(&model, scene)).collect();
+            self.drones.extend((0..DRONES).filter_map(|_| Drone::spawn(&model, scene, Kind::Security)));
         } else if self.drone_model.as_ref().is_some_and(|model| model.is_failed_to_load()) {
-            Log::err(format!("Could not load {DRONE_MODEL}; there are no drones"));
+            Log::err(format!("Could not load {DRONE_MODEL}; there are no security drones"));
             self.drone_model = None;
+        }
+        if let Some(model) = self.quad_model.take_if(|model| model.is_ok()) {
+            let scene = &mut ctx.scenes[self.scene];
+            self.drones.extend((0..QUAD_DRONES).filter_map(|_| Drone::spawn(&model, scene, Kind::Quad)));
+        } else if self.quad_model.as_ref().is_some_and(|model| model.is_failed_to_load()) {
+            Log::err(format!("Could not load {QUAD_MODEL}; there are no quadcopters"));
+            self.quad_model = None;
         }
         if let Some(model) = self.shot_model.take_if(|model| model.is_ok()) {
             self.shots = Some(Shots::spawn(&model, &mut ctx.scenes[self.scene]));
@@ -4453,21 +4471,27 @@ impl MazeGame {
                 match &self.ctf {
                     // In battle royale, no drones: it is droid against droid.
                     _ if self.royale.is_some() => (),
-                    // In a heist, the bank's, each patrolling round its own spot.
+                    // In a heist, the bank's, each patrolling round its own spot; the quadcopters
+                    // wait to be called in.
                     _ if self.heist.is_some() => {
                         let spots = self.heist.as_ref().map_or_else(Vec::new, |h| h.plan.drones.clone());
-                        for (drone, spot) in self.drones.iter_mut().zip(spots) {
+                        let security = self.drones.iter_mut().filter(|d| d.kind() == Kind::Security);
+                        for (drone, spot) in security.zip(spots) {
                             drone.place_for(graph, (grid, *origin), ENEMY, spot, rng);
                         }
                     }
-                    // One for each side, by its flag; the rest wait to be called in.
+                    // One for each side, by its flag - of a kind, to be fair; the rest wait to be
+                    // called in.
                     Some(bases) => {
-                        for (drone, side) in self.drones.iter_mut().zip(Side::BOTH) {
+                        let security = self.drones.iter_mut().filter(|d| d.kind() == Kind::Security);
+                        for (drone, side) in security.zip(Side::BOTH) {
                             drone.place_for(graph, (grid, *origin), side, bases.flag(side), rng);
                         }
                     }
+                    // A security drone patrols, if there is one.
                     None => {
-                        self.drones[0].place(graph, (grid, *origin), feet, rng);
+                        let n = self.drones.iter().position(|d| d.kind() == Kind::Security).unwrap_or(0);
+                        self.drones[n].place(graph, (grid, *origin), feet, rng);
                     }
                 }
             }

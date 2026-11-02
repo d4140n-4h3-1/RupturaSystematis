@@ -32,6 +32,9 @@
 //! of its eye, whose shadows are traced as every light's are. Not inside it, where the drone's own
 //! shell and eye, which are traced with the rest of the scene, would shut the light in.
 //!
+//! There is a faster kind too, the quadcopter (see [`Kind::Quad`]): it goes about the player as
+//! this one does, but gets about at getting on for twice the speed.
+//!
 //! It speaks System Latin as things happen to it - hearing the alarm, spotting the player,
 //! starting to search, giving up and going down, and why it was called in - as [`DRONE_LINES`]
 //! has it, or in Urbs [`URBS_DRONE_LINES`], said as beeps, hums and buzzes (see
@@ -83,6 +86,8 @@ use std::{collections::HashMap, f32::consts::PI};
 
 /// The drone's model, and what drones say.
 pub const DRONE_MODEL: &str = "data/drone.glb";
+/// The quadcopter's model: see [`Kind::Quad`].
+pub const QUAD_MODEL: &str = "data/quad_drone.glb";
 pub const DRONE_LINES: &str = "data/dialogue/drone.json";
 /// What the drones of Urbs say: of its thief, its banks and its gold.
 pub const URBS_DRONE_LINES: &str = "data/dialogue/drone_urbs.json";
@@ -146,10 +151,77 @@ const SEARCH_TRIP: (f32, f32) = (10.0, 40.0);
 const REST: (f32, f32) = (3.0, 8.0);
 /// How fast it flies, in meters per second: patrolling, and hostile; how quickly it gets up to
 /// speed, in meters per second per second; and how quickly it turns, in radians a second.
-const PATROL_SPEED: f32 = 1.4;
-const HURRY_SPEED: f32 = 3.5;
-const ACCELERATION: f32 = 3.0;
-const TURN_RATE: f32 = 3.0;
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Flight {
+    patrol: f32,
+    hurry: f32,
+    acceleration: f32,
+    turn_rate: f32,
+}
+
+/// The security drone's flight; and the quadcopter's, getting on for twice as fast, quicker off
+/// the mark and quicker to turn - outrunning a running droid, hostile.
+const FLIGHT: Flight = Flight { patrol: 1.4, hurry: 3.5, acceleration: 3.0, turn_rate: 3.0 };
+const QUAD_FLIGHT: Flight = Flight { patrol: 2.5, hurry: 6.0, acceleration: 6.0, turn_rate: 5.0 };
+
+/// What kind of drone it is. Both go about the player alike - patrolling, searching, firing - and
+/// say the same; the quadcopter only flies faster.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    /// The ball with its two rings, [`DRONE_MODEL`].
+    Security,
+    /// The quadcopter, [`QUAD_MODEL`], made in Blender in the drone's own terms - as big, as
+    /// scaled, and dropping as far: `quad_root`, which the animations move about, with its body,
+    /// four rotors and the gimbal under its nose under it, and the loose rotors its death sheds
+    /// beside it. Its animations are the drone's, named `quad_` where the drone's are `drone_`,
+    /// and its glow, the arm strips' and the eye's, goes along with them as the drone's does. Its
+    /// shots leave from `quad_muzzle`, at the end of its barrels, and its lamp is at `quad_eye`,
+    /// in front of its eye: both on the gimbal, which the animations turn.
+    Quad,
+}
+
+impl Kind {
+    /// Its model.
+    pub const fn model(self) -> &'static str {
+        match self {
+            Kind::Security => DRONE_MODEL,
+            Kind::Quad => QUAD_MODEL,
+        }
+    }
+
+    /// Its node that the animations move about, which the lamp goes along with.
+    const fn body(self) -> &'static str {
+        match self {
+            Kind::Security => BODY,
+            Kind::Quad => "quad_root",
+        }
+    }
+
+    /// What its animations' names start with, where the drone's - which name them here - start
+    /// with `drone_`.
+    const fn prefix(self) -> &'static str {
+        match self {
+            Kind::Security => "drone_",
+            Kind::Quad => "quad_",
+        }
+    }
+
+    /// Its nodes where its shots leave from and where its lamp goes, if it has them; without, they
+    /// are along the way its body faces (see [`MUZZLE`] and [`LAMP_AT`]).
+    const fn muzzle_and_eye(self) -> Option<(&'static str, &'static str)> {
+        match self {
+            Kind::Security => None,
+            Kind::Quad => Some(("quad_muzzle", "quad_eye")),
+        }
+    }
+
+    const fn flight(self) -> Flight {
+        match self {
+            Kind::Security => FLIGHT,
+            Kind::Quad => QUAD_FLIGHT,
+        }
+    }
+}
 /// How near the next point on its route it has to get, in meters, before making for the one after,
 /// and how near the last counts as there.
 const REACHED: f32 = 0.6;
@@ -300,11 +372,16 @@ pub struct Doing {
 /// The drone in the scene.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Drone {
+    kind: Kind,
     root: Handle<Node>,
     player: Handle<Node>,
     /// What the animations move about, and its lamp.
     body: Handle<Node>,
     lamp: Handle<Node>,
+    /// Where its shots leave from and where its lamp goes, for a kind that has them (see
+    /// [`Kind::muzzle_and_eye`]); NONE for one that has not.
+    muzzle: Handle<Node>,
+    eye: Handle<Node>,
     /// Its body, and the ball that is, while it is in the round.
     hull: Handle<Node>,
     collider: Handle<Collider>,
@@ -353,9 +430,9 @@ pub struct Drone {
 }
 
 impl Drone {
-    /// Puts the drone into `scene` from its `model`, out of sight until it is placed. None if the
-    /// model has no animations.
-    pub fn spawn(model: &ModelResource, scene: &mut Scene) -> Option<Self> {
+    /// Puts a drone of `kind` into `scene` from its `model`, out of sight until it is placed. None
+    /// if the model has no animations.
+    pub fn spawn(model: &ModelResource, scene: &mut Scene, kind: Kind) -> Option<Self> {
         let root = model.instantiate(scene);
         let graph = &mut scene.graph;
         graph[root]
@@ -368,7 +445,7 @@ impl Drone {
             .copied()
             .find(|&node| graph[node].cast::<AnimationPlayer>().is_some())
         else {
-            Log::err(format!("Drone: {DRONE_MODEL} has no animations"));
+            Log::err(format!("Drone: {} has no animations", kind.model()));
             graph.remove_node(root);
             return None;
         };
@@ -379,7 +456,11 @@ impl Drone {
                 graph[node].set_cast_shadows(false);
             }
         }
-        let body = graph.find_by_name(root, BODY).map_or(root, |(body, _)| body);
+        let body = graph.find_by_name(root, kind.body()).map_or(root, |(body, _)| body);
+        let (muzzle, eye) = kind.muzzle_and_eye().map_or((Handle::NONE, Handle::NONE), |(muzzle, eye)| {
+            let find = |name| graph.find_by_name(root, name).map_or(Handle::NONE, |(node, _)| node);
+            (find(muzzle), find(eye))
+        });
         // Not scattering into a haze in the air: the drone is what glows.
         let lamp = PointLightBuilder::new(
             BaseLightBuilder::new(BaseBuilder::new().with_visibility(false))
@@ -399,19 +480,25 @@ impl Drone {
             .pair_iter_mut()
             .map(|(handle, animation)| {
                 animation.set_enabled(false);
-                (animation.name().to_owned(), handle)
+                // Known by the drone's names, whatever its kind.
+                let name = animation.name();
+                let name = name.strip_prefix(kind.prefix()).map_or_else(|| name.to_owned(), |rest| format!("drone_{rest}"));
+                (name, handle)
             })
             .collect::<Vec<_>>();
         for name in ANIMATIONS {
             if !animations.iter().any(|(had, _)| had == name) {
-                Log::warn(format!("Drone: {DRONE_MODEL} has no {name}"));
+                Log::warn(format!("Drone: {} has no {name}", kind.model()));
             }
         }
         let mut drone = Self {
+            kind,
             root,
             player,
             body,
             lamp,
+            muzzle,
+            eye,
             // Given a body once it is put down.
             hull: Handle::NONE,
             collider: Handle::NONE,
@@ -589,6 +676,10 @@ impl Drone {
     /// Whether it is in this round, hovering where it is.
     pub fn is_placed(&self) -> bool {
         self.placed
+    }
+
+    pub fn kind(&self) -> Kind {
+        self.kind
     }
 
     pub fn state(&self) -> State {
@@ -837,10 +928,13 @@ impl Drone {
         let time = self.time(graph);
         if self.playing == FIRE && !self.fired && time * FPS >= FIRE_AT && live {
             self.fired = true;
-            let from = graph[self.body]
-                .global_transform()
-                .transform_point(&Point3::new(0.0, 0.0, MUZZLE))
-                .coords;
+            let from = match graph.is_valid_handle(self.muzzle) {
+                true => graph[self.muzzle].global_position(),
+                false => graph[self.body]
+                    .global_transform()
+                    .transform_point(&Point3::new(0.0, 0.0, MUZZLE))
+                    .coords,
+            };
             doing.fired = Some((from, self.colour));
         }
         doing
@@ -992,14 +1086,15 @@ impl Drone {
             self.route.pop();
         }
         let hurry = matches!(self.state, State::Alert | State::Search { .. });
-        let top = if hurry { HURRY_SPEED } else { PATROL_SPEED };
+        let flight = self.kind.flight();
+        let top = if hurry { flight.hurry } else { flight.patrol };
         let (way, wanted) = match self.route.last() {
             Some(&next) => {
                 let to = flat(next - under);
                 let distance = to.norm();
                 // Slowing down for the end of its route.
                 let wanted = match self.route.len() {
-                    1 => top.min((2.0 * ACCELERATION * distance).sqrt()),
+                    1 => top.min((2.0 * flight.acceleration * distance).sqrt()),
                     _ => top,
                 };
                 (to / distance.max(1.0e-4), wanted)
@@ -1007,8 +1102,8 @@ impl Drone {
             None => (Vector3::zeros(), 0.0),
         };
         self.speed = match wanted > self.speed {
-            true => (self.speed + ACCELERATION * dt).min(wanted),
-            false => (self.speed - 2.0 * ACCELERATION * dt).max(wanted),
+            true => (self.speed + flight.acceleration * dt).min(wanted),
+            false => (self.speed - 2.0 * flight.acceleration * dt).max(wanted),
         };
         let mut next = self.at + way * self.speed * dt;
         // Facing the way it goes, or the player on Alert.
@@ -1021,7 +1116,7 @@ impl Drone {
         };
         if let Some(facing) = facing {
             let turn = wrap(facing - self.heading);
-            self.heading = wrap(self.heading + turn.clamp(-TURN_RATE * dt, TURN_RATE * dt));
+            self.heading = wrap(self.heading + turn.clamp(-flight.turn_rate * dt, flight.turn_rate * dt));
         }
         // Hovering over the floor where it is, if there is floor there.
         if let Some((x, z)) = survey::cell_at(grid, origin, next).filter(|&(x, z)| grid.is_walkable(x, z)) {
@@ -1056,10 +1151,13 @@ impl Drone {
             );
         }
         // The lamp, in front of the eye wherever the animation has it, as bright as the glow.
-        let at = graph[self.body]
-            .global_transform()
-            .transform_point(&Point3::new(0.0, 0.0, LAMP_AT))
-            .coords;
+        let at = match graph.is_valid_handle(self.eye) {
+            true => graph[self.eye].global_position(),
+            false => graph[self.body]
+                .global_transform()
+                .transform_point(&Point3::new(0.0, 0.0, LAMP_AT))
+                .coords,
+        };
         graph[self.lamp].local_transform_mut().set_position(at);
         if let Ok(lamp) = graph.try_get_mut_of_type::<PointLight>(self.lamp) {
             lamp.base_light_mut().set_intensity(LAMP_BRIGHTNESS * strength);
@@ -1187,6 +1285,16 @@ mod tests {
         assert_eq!(glow(DEATH, 21.0), 4.0);
         assert_eq!(glow(DEATH, 40.0), 0.0);
         assert_eq!(glow(DEATH, 60.0), 0.0);
+    }
+
+    #[test]
+    fn the_quadcopter_is_the_faster_drone() {
+        let (security, quad) = (Kind::Security.flight(), Kind::Quad.flight());
+        assert!(quad.patrol > security.patrol && quad.hurry > security.hurry);
+        assert!(quad.acceleration > security.acceleration && quad.turn_rate > security.turn_rate);
+        // Hostile, it outruns a running droid.
+        assert!(quad.hurry > 3.5);
+        assert_eq!(Kind::Quad.model(), QUAD_MODEL);
     }
 
     #[test]
