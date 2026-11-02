@@ -13,7 +13,7 @@
 //! (see [`PISTOL_SOUNDS`]): a shot as it leaves, and a hum as it flies.
 
 use crate::{
-    drone::{claim_glows, light_colour},
+    drone::{claim_glows, light_colour, Fired},
     fixtures::{DIFFUSE_COLOR, EMISSION_STRENGTH},
     formants::{self, Load, Sounds},
     player::{pistol::Pass, PISTOL_SOUNDS},
@@ -80,15 +80,19 @@ struct Flight {
     /// shots fired together are one volley, which hurts whatever it hits once.
     size: f32,
     volley: u32,
+    /// How much it hurts, as a part of the drone's shot.
+    damage: f32,
 }
 
-/// Something a shot hit: its collider, where, and which way the shot was going; and what fired it.
+/// Something a shot hit: its collider, where, and which way the shot was going; what fired it,
+/// and how much it hurts, as a part of the drone's shot.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Hit {
     pub collider: Handle<Collider>,
     pub at: Vector3<f32>,
     pub way: Vector3<f32>,
     pub by: Handle<Collider>,
+    pub damage: f32,
 }
 
 /// One of the shots made: its model, the light and hum it carries, its own copies of its glowing
@@ -193,20 +197,11 @@ impl Shots {
         Self { shots, sound, passed: Vec::new(), volleys: 0, struck: Vec::new() }
     }
 
-    /// Fires a volley at `at`, aimed from `from`: a shot from each of `muzzles`, all flying the
-    /// same way side by side, `size` as big as made, glowing `colour` (strength 1 at its
-    /// brightest).
-    #[allow(clippy::too_many_arguments)]
-    pub fn fire(
-        &mut self,
-        graph: &mut Graph,
-        muzzles: &[Vector3<f32>],
-        from: Vector3<f32>,
-        at: Vector3<f32>,
-        size: f32,
-        colour: Vector3<f32>,
-        by: Handle<Collider>,
-    ) {
+    /// Fires the `volley` a drone fired, whose body is `by`, at `at`: a shot from each of its
+    /// muzzles, all flying the same way side by side, aimed from its middle, as big and as hurtful
+    /// as it has them, glowing its colour (strength 1 at its brightest).
+    pub fn fire(&mut self, graph: &mut Graph, volley: &Fired, at: Vector3<f32>, by: Handle<Collider>) {
+        let Fired { ref muzzles, from, size, damage, colour } = *volley;
         let Some(direction) = (at - from).try_normalize(1.0e-4) else {
             return;
         };
@@ -226,6 +221,7 @@ impl Shots {
                 from: by,
                 size,
                 volley: self.volleys,
+                damage,
             });
             for (material, strength) in &shot.glows {
                 let mut material = material.data_ref();
@@ -315,6 +311,7 @@ impl Shots {
                         at: hit.position.coords,
                         way: flight.direction,
                         by: from,
+                        damage: flight.damage,
                     });
                 }
                 let reach = (hit.position.coords - flight.position).norm();
@@ -420,7 +417,8 @@ mod tests {
     fn a_volley_of_small_shots_flies_side_by_side_and_hurts_what_it_hits_once() {
         let (mut graph, mut shots, wall) = range();
         let muzzles = [Vector3::new(-0.028, 0.0, 0.0), Vector3::new(0.028, 0.0, 0.0)];
-        shots.fire(&mut graph, &muzzles, Vector3::zeros(), Vector3::new(0.0, 0.0, 10.0), 0.35, Vector3::y(), Handle::NONE);
+        let pair = Fired { from: Vector3::zeros(), muzzles: muzzles.to_vec(), size: 0.35, damage: 0.5, colour: Vector3::y() };
+        shots.fire(&mut graph, &pair, Vector3::new(0.0, 0.0, 10.0), Handle::NONE);
         let flying: Vec<&Shot> = shots.shots.iter().filter(|shot| shot.flight.is_some()).collect();
         assert_eq!(flying.len(), 2);
         for shot in &flying {
@@ -428,7 +426,7 @@ mod tests {
         }
         let hits = second_of(&mut graph, &mut shots);
         assert_eq!(hits.len(), 1, "{hits:?}");
-        assert_eq!(hits[0].collider, wall);
+        assert_eq!((hits[0].collider, hits[0].damage), (wall, 0.5));
         // Each stopped at the wall, still side by side, as far apart as the barrels.
         let at: Vec<Vector3<f32>> = shots.shots.iter().filter_map(|shot| shot.flight.map(|f| f.position)).collect();
         assert_eq!(at.len(), 2);
@@ -436,7 +434,8 @@ mod tests {
         // Two volleys hurt twice.
         let (mut graph, mut shots, _) = range();
         for _ in 0..2 {
-            shots.fire(&mut graph, &muzzles[..1], Vector3::zeros(), Vector3::new(0.0, 0.0, 10.0), 1.0, Vector3::y(), Handle::NONE);
+            let one = Fired { from: Vector3::zeros(), muzzles: muzzles[..1].to_vec(), size: 1.0, damage: 1.0, colour: Vector3::y() };
+            shots.fire(&mut graph, &one, Vector3::new(0.0, 0.0, 10.0), Handle::NONE);
         }
         assert_eq!(second_of(&mut graph, &mut shots).len(), 2);
     }

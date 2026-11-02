@@ -12,7 +12,7 @@
 //!   patrols as before. It sees in front of it as a sentry that is not on Alert does - less far
 //!   the lower the player is, and with the lights off.
 //! - **Alert**: it can see the player. It comes on to [`ENGAGE`] from them, keeps facing them and
-//!   fires every [`FIRE_EVERY`] seconds while it can see them (see [`crate::drone_shot`]), each
+//!   fires every [`FIRE_EVERY`] seconds - the quadcopter twice as often - while it can see them (see [`crate::drone_shot`]), each
 //!   shot hurting them where it hits. Losing them, it searches.
 //!
 //! [`HITS`] bolts from the pistol bring it down: it sputters, its rings break into four pieces
@@ -227,6 +227,22 @@ impl Kind {
         }
     }
 
+    /// How much each of its shots hurts, as a part of the drone's; and how often it fires on
+    /// Alert, in seconds: the quadcopter's hurt half as much, twice as often.
+    pub const fn shot_damage(self) -> f32 {
+        match self {
+            Kind::Security => 1.0,
+            Kind::Quad => 0.5,
+        }
+    }
+
+    const fn fire_every(self) -> f32 {
+        match self {
+            Kind::Security => FIRE_EVERY,
+            Kind::Quad => FIRE_EVERY / 2.0,
+        }
+    }
+
     /// Its nodes where its shots leave from and where its lamp goes, if it has them; without, they
     /// are along the way its body faces (see [`MUZZLE`] and [`LAMP_AT`]).
     const fn muzzle_and_eye(self) -> Option<(&'static str, &'static str)> {
@@ -423,13 +439,14 @@ pub struct Doing {
 }
 
 /// A volley a drone fired: where it is aimed from, and where each shot leaves from - from there,
-/// or from the barrel whose turn it was; how big they are, as a part of the drone's shots, and the colour
-/// they glow.
+/// or from the barrel whose turn it was; how big they are and how much they hurt, as a part of the
+/// drone's shots, and the colour they glow.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Fired {
     pub from: Vector3<f32>,
     pub muzzles: Vec<Vector3<f32>>,
     pub size: f32,
+    pub damage: f32,
     pub colour: Vector3<f32>,
 }
 
@@ -1047,11 +1064,16 @@ impl Drone {
             // Which animation goes with what it is doing: firing and scanning play through.
             let next = match self.state {
                 State::Down => DEATH,
-                _ if self.playing == FIRE && self.since < FIRE_LENGTH => FIRE,
                 State::Alert if self.fire_in <= 0.0 => {
-                    self.fire_in = FIRE_EVERY;
+                    self.fire_in = self.kind.fire_every();
+                    // Firing again before the last has played through - the quadcopter does - it
+                    // starts again from the start.
+                    if self.playing == FIRE {
+                        self.playing = IDLE;
+                    }
                     FIRE
                 }
+                _ if self.playing == FIRE && self.since < FIRE_LENGTH => FIRE,
                 State::Search { .. } if self.scanning > 0.0 => SCAN,
                 _ if self.speed > 0.2 => PATROL,
                 _ => IDLE,
@@ -1078,6 +1100,7 @@ impl Drone {
                 from,
                 muzzles: vec![muzzle.unwrap_or(from)],
                 size: self.kind.shot_size(),
+                damage: self.kind.shot_damage(),
                 colour: self.colour,
             });
         }
@@ -1479,6 +1502,9 @@ mod tests {
         assert!(quad.acceleration > security.acceleration && quad.turn_rate > security.turn_rate);
         // Hostile, it outruns a running droid.
         assert!(quad.hurry > 3.5);
+        // Its shots hurt half as much, twice as often: as much over time.
+        assert_eq!(Kind::Quad.shot_damage(), 0.5 * Kind::Security.shot_damage());
+        assert_eq!(Kind::Quad.fire_every(), 0.5 * Kind::Security.fire_every());
         assert_eq!(Kind::Quad.model(), QUAD_MODEL);
     }
 

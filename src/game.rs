@@ -4449,7 +4449,7 @@ impl MazeGame {
                             continue;
                         }
                         let graph = &mut ctx.scenes[self.scene].graph;
-                        let last = self.health.hit();
+                        let last = self.health.hit_by(hit.damage);
                         let at = self.player.position(graph);
                         self.health_sounds.play(graph, Heard::Hit, at);
                         if last {
@@ -4565,8 +4565,7 @@ impl MazeGame {
             says.extend(doing.says.map(|said| (n, said)));
             // At its target's middle, wherever they are as it fires.
             if let (Some(volley), Some(shots)) = (doing.fired, self.shots.as_mut()) {
-                let collider = drone.collider();
-                shots.fire(graph, &volley.muzzles, volley.from, target.middle, volley.size, volley.colour, collider);
+                shots.fire(graph, &volley, target.middle, drone.collider());
                 fired.push(volley.from);
             }
         }

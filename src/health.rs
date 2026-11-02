@@ -55,7 +55,13 @@ impl Default for Health {
 impl Health {
     /// Takes a hit's worth. Whether that was the last of it.
     pub fn hit(&mut self) -> bool {
-        self.left = (self.left - HIT).max(0.0);
+        self.hit_by(1.0)
+    }
+
+    /// Takes `part` of a hit's worth, as a quadcopter's half-strength shots do. Whether that was
+    /// the last of it.
+    pub fn hit_by(&mut self, part: f32) -> bool {
+        self.left = (self.left - HIT * part).max(0.0);
         self.rested = 0.0;
         self.flash = FLASH;
         self.left <= 1.0e-4
@@ -177,6 +183,15 @@ mod tests {
         assert!(!health.hit());
         assert!(!health.hit());
         assert!(health.hit());
+    }
+
+    #[test]
+    fn a_quadcopters_shot_is_half_a_touch() {
+        let mut health = Health::default();
+        for _ in 0..5 {
+            assert!(!health.hit_by(0.5));
+        }
+        assert!(health.hit_by(0.5));
     }
 
     #[test]
