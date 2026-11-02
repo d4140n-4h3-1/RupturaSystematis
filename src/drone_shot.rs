@@ -4,8 +4,8 @@
 //! steps off - and stops at the first thing it hits, glowing there a moment longer. Hitting the
 //! player, it hurts them: the game is told (see [`Shots::update`]).
 //!
-//! The quadcopter fires a pair at once, smaller, one from each of its barrels, side by side (see
-//! [`Shots::fire`]): the two of them hurt as one shot does, whether one hits or both.
+//! The quadcopter's are smaller, and leave from each of its two barrels in turn. Shots fired
+//! together in a volley (see [`Shots::fire`]) fly side by side, and hurt what they hit once.
 //!
 //! It glows, and lights what it passes, in the colour of the drone's mood as it fired. Like the
 //! pistol's bolts, a handful are made once and shown while they fly: adding or taking away a mesh
@@ -47,8 +47,8 @@ use fyrox::{
 /// The shot's model.
 pub const SHOT_MODEL: &str = "data/drone_shot.glb";
 
-/// How many can be in the air at once, from every drone - a pair from a quadcopter counting as
-/// two. Firing another takes the one that has flown longest.
+/// How many can be in the air at once, from every drone. Firing another takes the one that has
+/// flown longest.
 const SHOTS: usize = 12;
 /// How fast one flies, in meters per second, and how far before it is gone, if it hits nothing.
 const SPEED: f32 = 12.0;
@@ -77,7 +77,7 @@ struct Flight {
     from: Handle<Collider>,
     fired_at: Vector3<f32>,
     /// How big it is, as a part of how it was made; and which volley it was fired in - the
-    /// quadcopter's pair are one volley, which hurts whatever it hits once.
+    /// shots fired together are one volley, which hurts whatever it hits once.
     size: f32,
     volley: u32,
 }
@@ -417,7 +417,7 @@ mod tests {
     }
 
     #[test]
-    fn a_quadcopters_pair_fly_side_by_side_small_and_hurt_what_they_hit_once() {
+    fn a_volley_of_small_shots_flies_side_by_side_and_hurts_what_it_hits_once() {
         let (mut graph, mut shots, wall) = range();
         let muzzles = [Vector3::new(-0.028, 0.0, 0.0), Vector3::new(0.028, 0.0, 0.0)];
         shots.fire(&mut graph, &muzzles, Vector3::zeros(), Vector3::new(0.0, 0.0, 10.0), 0.35, Vector3::y(), Handle::NONE);
