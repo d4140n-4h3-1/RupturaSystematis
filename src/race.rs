@@ -845,7 +845,7 @@ impl Race {
             let rider = if n == 0 { droid } else { rivals.get(n - 1).and_then(Option::as_ref) };
             let bike = build_bike(scene, model, rider);
             if night {
-                light_up_bike(&mut scene.graph, bike.root, COLOURS[n % COLOURS.len()]);
+                light_up_bike(&mut scene.graph, &bike, COLOURS[n % COLOURS.len()]);
             }
             racer.bike = Some(bike);
             racer.place(&mut scene.graph, 0.0);
@@ -1094,10 +1094,12 @@ pub(crate) fn build_bike(scene: &mut Scene, model: &ModelResource, droid: Option
     Bike { root, rider }
 }
 
-/// Has the bike under `root` glow `colour`, as a light cycle does: its pale hull, and the lines of
-/// light along it that are cyan as it was made, each given its own copy of their materials.
-fn light_up_bike(graph: &mut Graph, root: Handle<Node>, colour: Color) {
-    let nodes: Vec<Handle<Node>> = graph.traverse_handle_iter(root).collect();
+/// Has `bike` glow `colour`, as a light cycle does: its pale hull, and the lines of light along it
+/// that are cyan as it was made, each given its own copy of their materials - the bike's alone,
+/// not the droid riding it, which keeps its own colours (the player's is cyan too).
+fn light_up_bike(graph: &mut Graph, bike: &Bike, colour: Color) {
+    let rider: Vec<Handle<Node>> = bike.rider.map_or_else(Vec::new, |rider| graph.traverse_handle_iter(rider).collect());
+    let nodes: Vec<Handle<Node>> = graph.traverse_handle_iter(bike.root).filter(|node| !rider.contains(node)).collect();
     let mut copies: Vec<(u64, Option<MaterialResource>)> = Vec::new();
     for node in nodes {
         let Some(mesh) = graph[node].cast_mut::<Mesh>() else {
