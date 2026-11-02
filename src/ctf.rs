@@ -201,7 +201,7 @@ pub const GRAND_CIRCUIT: Map = Map {
 pub const LUMEN: Map = Map {
     name: "Lumen",
     path: "data/arena/race_lumen.glb",
-    about: "At night, through a city traced in light, 1.7 km round: down the Boulevard, a turn and a \
+    about: "At night, through a city traced in light, 4.1 km round: down the Boulevard, a turn and a \
             half up the Helix round the Spire, the skyway back over the Boulevard, and down through \
             the Arcology.",
     void: true,

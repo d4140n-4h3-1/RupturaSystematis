@@ -2,13 +2,13 @@
 Lumen: a hover bike race track at night through a city traced in light, built by race_circuit.py
 (`--track lumen`) with its road, walls, tunnel, pads and markers, and by this module round them.
 
-The road, about 2.7 km round and 20 m wide, from the start line:
+The road, about 4.1 km round and 20 m wide, from the start line:
 
-- the Boulevard, east, 500 m between towers, under the skyway that crosses it, and under arches of
+- the Boulevard, east, 740 m between towers, under the skyway that crosses it, and under arches of
   light;
-- the Helix: straight on into a climb of a turn and a half round the Spire, left all the way, 21 m
-  up, each turn 14 m over the one under it, hung from the Spire on lit spokes;
-- off the top, west, onto the skyway, 21 m up, and round to the south over the Boulevard;
+- the Helix: straight on into a climb of a turn and a half round the Spire, left all the way, 27 m
+  up, each turn 18 m over the one under it, hung from the Spire on lit spokes;
+- off the top, west, onto the skyway, 27 m up, and round to the south over the Boulevard;
 - down off it through S-bends into the Arcology - a megastructure over the road, the road through
   it in a tunnel - and out round the last corner onto the Boulevard.
 
@@ -34,12 +34,12 @@ from mathutils import Vector
 # (straight on from the Boulevard, east) a turn and a half anticlockwise - left - to the top
 # (heading west), climbing all the while.
 # The layout is drawn at SCALE across and RISE up: the plan the numbers below are in, made bigger.
-SCALE = 1.6
-RISE = 1.4
+SCALE = 2.4
+RISE = 1.8
 HELIX = (170.0 * SCALE, 50.0 * SCALE, 50.0 * SCALE)
 HELIX_RISE = 15.0 * RISE
 HELIX_STEPS = 18                 # waypoints round it, 30 degrees apart
-SPIRE = (48.0, 8.0, 210.0)       # the Spire's radius at its foot and its top, and its height
+SPIRE = (72.0, 10.0, 300.0)      # the Spire's radius at its foot and its top, and its height
 
 
 def helix():
@@ -83,18 +83,20 @@ LAYOUT = {
     "TUNNEL_HEIGHT": 8.0,
     "PADS": [
         (1.5, 0.3),         # down the Boulevard
+        (3.2, 0.7),         # and again, near its end
         (24.4, 0.65),       # off the top of the Helix, onto the skyway
         (28.3, 0.35),       # on the skyway, heading down
+        (29.6, 0.6),        # through the S-bends
         (35.2, 0.4),        # out of the last corner
     ],
     "NIGHT": True,
 }
 
-CITY_MARGIN = 320.0          # how far out from the track the city goes
-GROUND_MARGIN = 450.0        # and the floor under it
+CITY_MARGIN = 420.0          # how far out from the track the city goes
+GROUND_MARGIN = 600.0        # and the floor under it
 GRID = 20.0                  # the floor's lines of light, this far apart
 FLOOR = 4.0                  # a storey
-BUILDINGS = 360
+BUILDINGS = 600
 ARCH_EVERY = 60              # sections between arches over the road, at the most
 ARCH_HEIGHT = 9.5
 
@@ -410,7 +412,7 @@ class City:
         rng = self.rng
         kinds = ["twist"] * 3 + ["spire"] * 2 + ["stack"] * 2 + ["terraced"] * 2 + ["twin"] * 2 + ["collared"] * 2 + ["dome"]
         placed, tries = 0, 0
-        while placed < BUILDINGS and tries < 15000:
+        while placed < BUILDINGS and tries < 25000:
             tries += 1
             x = rng.uniform(x0 - CITY_MARGIN, x1 + CITY_MARGIN)
             y = rng.uniform(y0 - CITY_MARGIN, y1 + CITY_MARGIN)
