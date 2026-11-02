@@ -4561,7 +4561,7 @@ impl MazeGame {
         let mut fired = Vec::new();
         for (n, drone) in self.drones.iter_mut().enumerate() {
             let target = targets[n];
-            let doing = drone.update(graph, (grid, *origin), &target, &reachable, rng, ctx.dt, live);
+            let doing = drone.update(graph, (grid, *origin), &target, &reachable, self.level.leaves.as_ref(), rng, ctx.dt, live);
             says.extend(doing.says.map(|said| (n, said)));
             // At its target's middle, wherever they are as it fires.
             if let (Some(volley), Some(shots)) = (doing.fired, self.shots.as_mut()) {

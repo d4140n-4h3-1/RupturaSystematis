@@ -5,6 +5,7 @@
 //! the next physics step on, so surveying it for walkable ground and lighting it - which needs
 //! that survey's rays - comes a few frames later, in [`Level::finish`].
 
+use crate::leaves::Leaves;
 use crate::{
     culling::Culling,
     distant::{self, Distant},
@@ -97,6 +98,9 @@ pub struct Level {
     pub markers: Vec<Marker>,
     /// Where the player can walk, and the world position of that grid's corner, once finished.
     pub grid: Option<(WalkGrid, Vector3<f32>)>,
+    /// Its leaves, which stop nothing but keep the quadcopters out (see [`Leaves`]), if it has
+    /// any.
+    pub leaves: Option<Leaves>,
     /// What of a random maze is drawn and lit: only what can be seen from where the player is.
     culling: Option<Culling>,
     /// What of a city is drawn in full, and what simplified, far off: see [`Distant`].
@@ -260,6 +264,7 @@ impl Level {
             .map(GeometrySource)
             .collect();
         Log::info(format!("Maze: {} meshes", meshes.len()));
+        let leaves = Leaves::of(&scene.graph, root);
 
         let collider = ColliderBuilder::new(BaseBuilder::new())
             .with_shape(ColliderShape::trimesh(meshes))
@@ -288,6 +293,7 @@ impl Level {
             goal,
             markers,
             grid: None,
+            leaves,
             culling: None,
             distant,
             ferries,
