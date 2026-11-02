@@ -118,7 +118,7 @@ use crate::{
     player::{
         avatar::{self, Avatar, Going},
         breath,
-        pistol::Pass,
+        pistol::{self, Pass},
         posture::{Gait, Posture},
         Strike,
     },
@@ -509,8 +509,10 @@ struct Inhabitant {
     armed_left: f32,
     aimed_at: Option<Vector3<f32>>,
     /// Whether the gun it draws is a rifle, not a pistol: picked at random as it is put down,
-    /// half of them each.
+    /// half of them each; and how many shots are left in the rifle's magazine, which, empty,
+    /// recharges as the player's does (see [`pistol::MAGAZINE`]).
     rifle: bool,
+    rounds: u32,
     /// The droid it walks about with, if it is one of a pair, as an index; and whether it leads
     /// the way, or keeps beside the other.
     partner: Option<usize>,
@@ -2345,6 +2347,7 @@ impl Inhabitants {
             character,
             code,
             rifle: code % 2 == 1,
+            rounds: pistol::MAGAZINE,
             looks_hostile: false,
             talking: false,
             with: None,
@@ -3625,6 +3628,13 @@ impl Inhabitants {
                             (false, false) => FIRE_EVERY,
                         },
                     );
+                // The rifle's last shot in the magazine: it recharges before it fires again.
+                if droid.rifle {
+                    droid.rounds = droid.rounds.saturating_sub(1);
+                    if droid.rounds == 0 {
+                        (droid.reload, droid.rounds) = (pistol::RECHARGE, pistol::MAGAZINE);
+                    }
+                }
                 if let Some(from) = blind {
                     let wide = Vector3::new(
                         between(rng, (-BLIND_WIDE, BLIND_WIDE)),

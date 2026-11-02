@@ -204,6 +204,10 @@ pub struct Player {
     fire_mode: pistol::FireMode,
     burst_left: u8,
     fired_seen: u32,
+    /// How many shots are left in the rifle's magazine, and how long it has left recharging, in
+    /// seconds, once it is empty (see [`pistol::MAGAZINE`]).
+    rounds: u32,
+    recharging: f32,
     /// The pistol and the rifle held in view in first person, once the droid has loaded, as it
     /// has them.
     viewmodels: Vec<viewmodel::Viewmodel>,
@@ -270,6 +274,8 @@ impl Default for Player {
             fire_mode: pistol::FireMode::default(),
             burst_left: 0,
             fired_seen: 0,
+            rounds: pistol::MAGAZINE,
+            recharging: 0.0,
             viewmodels: Vec::new(),
             in_own_eyes: false,
             noises: Default::default(),
@@ -516,7 +522,7 @@ impl Player {
         self.place_head(graph, dt);
         let gait = self.gait();
         self.footfalls(self.feet(graph), horizontal.norm(), gait, dt);
-        self.hold_trigger();
+        self.hold_trigger(dt);
         let keys = &self.keys;
         // Which way the body is going, from the way it faces: its left is +x.
         let local = rotation.inverse() * horizontal;

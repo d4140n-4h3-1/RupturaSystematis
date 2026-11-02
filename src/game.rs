@@ -1527,6 +1527,7 @@ impl MazeGame {
                 health: (self.health.left, self.health.flash),
                 armed: self.player.armed(),
                 gun: self.player.gun_name(),
+                ammo: self.player.ammo(),
                 // The menu and the conversation say what to do next, so the hint to click would
                 // only be in the way.
                 mouse_captured: self.mouse_captured

@@ -1,8 +1,9 @@
 //! What is written on screen: a status line in the corner, a banner across the middle for the
 //! end of a round and for anything that went wrong, the droids' alert at the top in the middle,
 //! as in Metal Gear and Fallout, the player's stamina in the bottom left corner, and, with the
-//! pistol out - or the rifle - its ammo in the bottom right under its name: either's is
-//! endless, shown as ∞. The
+//! pistol out - or the rifle - its ammo in the bottom right under its name: the pistol's is
+//! endless, shown as ∞; the rifle's is the shots left in its magazine, which counts back up in
+//! grey as it recharges. The
 //! player's credits are in the top right.
 //!
 //! The alert is coloured by its phase - ALERT red, EVASION amber, CAUTION yellow - and ALERT and
@@ -75,9 +76,11 @@ pub enum Status {
         /// How much health is left, from 0 to 1, and how long is left of the red flash of a hit,
         /// in seconds.
         health: (f32, f32),
-        /// Whether the pistol is out, and the name of the gun - the rifle's with how it fires.
+        /// Whether the pistol is out, and the name of the gun - the rifle's with how it fires; and
+        /// its ammo, as [`crate::player::Player::ammo`] has it.
         armed: bool,
         gun: String,
+        ammo: Option<(u32, bool)>,
         mouse_captured: bool,
         /// How the droids hunting the player are going about it, if any are, and how many seconds
         /// that has left.
@@ -121,6 +124,9 @@ pub struct Hud {
     shown_ammo: bool,
     gun_label: Handle<Text>,
     shown_gun: String,
+    /// The ammo under the name, and what it last showed.
+    rounds: Handle<Text>,
+    shown_rounds: Option<(u32, bool)>,
     /// The player's credits in the top right, and what it last said.
     credits: Handle<Text>,
     shown_credits: Option<Credits>,
@@ -261,7 +267,7 @@ impl Hud {
         .with_orientation(Orientation::Vertical)
         .build(ctx)
         .to_base();
-        // The gun's ammo: endless. In DejaVu Sans Mono, which has the sign for it.
+        // The gun's ammo: endless at first. In DejaVu Sans Mono, which has the sign for it.
         let gun_label = label(ctx, PISTOL_NAME, HorizontalAlignment::Right);
         let mut endless = TextBuilder::new(
             WidgetBuilder::new()
@@ -364,6 +370,7 @@ impl Hud {
             fade,
             ammo,
             gun_label,
+            rounds: endless,
             credits,
             screen,
             ..Default::default()
@@ -397,9 +404,9 @@ impl Hud {
         self.note_time = (self.note_time - dt).max(0.0);
         self.blink = (self.blink + dt) % BLINK;
         let blinking_on = self.blink < BLINK_ON;
-        let (text, alarm, breath, health, (armed, gun), credits, shield, shield_ready) = match status {
-            Status::Loading => ("Loading the maze...".to_string(), None, None, None, (false, None), None, None, false),
-            Status::Blank => (String::new(), None, None, None, (false, None), None, None, false),
+        let (text, alarm, breath, health, (armed, gun, ammo), credits, shield, shield_ready) = match status {
+            Status::Loading => ("Loading the maze...".to_string(), None, None, None, (false, None, None), None, None, false),
+            Status::Blank => (String::new(), None, None, None, (false, None, None), None, None, false),
             Status::Round {
                 time,
                 best,
@@ -408,6 +415,7 @@ impl Hud {
                 health,
                 armed,
                 gun,
+                ammo,
                 mouse_captured,
                 alarm,
                 credits,
@@ -428,7 +436,7 @@ impl Hud {
                 if self.note_time > 0.0 {
                     text += &format!("\n{}", self.note);
                 }
-                (text, alarm, Some((breath, frozen)), Some(health), (armed, Some(gun)), Some(credits), shield, shield_ready)
+                (text, alarm, Some((breath, frozen)), Some(health), (armed, Some(gun), ammo), Some(credits), shield, shield_ready)
             }
         };
         ui.send(self.status, TextMessage::Text(text));
@@ -520,6 +528,16 @@ impl Hud {
         if let Some(gun) = gun.filter(|gun| *gun != self.shown_gun) {
             ui.send(self.gun_label, TextMessage::Text(gun.clone()));
             self.shown_gun = gun;
+        }
+        if ammo != self.shown_rounds {
+            let (text, colour) = match ammo {
+                None => ("∞".to_string(), Color::WHITE),
+                Some((rounds, false)) => (rounds.to_string(), Color::WHITE),
+                Some((rounds, true)) => (rounds.to_string(), Color::opaque(128, 128, 128)),
+            };
+            ui.send(self.rounds, TextMessage::Text(text));
+            ui.send(self.rounds, WidgetMessage::Foreground(Brush::Solid(colour).into()));
+            self.shown_rounds = ammo;
         }
     }
 }

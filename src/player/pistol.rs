@@ -84,6 +84,11 @@ impl FireMode {
 
 /// How many shots a burst is.
 const BURST: u8 = 3;
+/// The rifle's magazine: how many shots it holds, and how long it takes to recharge once they
+/// are all fired, in seconds - by itself, the moment the last is gone. The droids' rifles too
+/// (see [`crate::inhabitants`]). The pistol never runs out.
+pub const MAGAZINE: u32 = 30;
+pub const RECHARGE: f32 = 1.5;
 
 /// How long after the mouse wheel changes guns it can change them again, in seconds.
 const WHEEL_REPEAT: f32 = 0.35;
@@ -656,6 +661,33 @@ impl Player {
         self.fire_mode
     }
 
+    /// The ammo of the gun the player has, or will draw: None for the pistol, which never runs
+    /// out; for the rifle, how many shots are left - while it recharges, how far along it is, as
+    /// shots, filling up to [`MAGAZINE`] - and whether it is recharging.
+    pub fn ammo(&self) -> Option<(u32, bool)> {
+        self.rifle.then(|| match self.recharging > 0.0 {
+            true => (((1.0 - self.recharging / RECHARGE) * MAGAZINE as f32) as u32, true),
+            false => (self.rounds, false),
+        })
+    }
+
+    /// Takes the `shots` just fired out of the rifle's magazine, if it was the `rifle` that fired
+    /// them; and, the magazine empty, recharges it for another `dt`.
+    fn spend(&mut self, rifle: bool, shots: u32, dt: f32) {
+        if rifle {
+            self.rounds = self.rounds.saturating_sub(shots);
+        }
+        if self.rounds == 0 && self.recharging == 0.0 {
+            self.recharging = RECHARGE;
+        }
+        if self.recharging > 0.0 {
+            self.recharging -= dt;
+            if self.recharging <= 0.0 {
+                (self.rounds, self.recharging) = (MAGAZINE, 0.0);
+            }
+        }
+    }
+
     /// The name of the gun the player has, or will draw, and for the rifle how it fires.
     pub fn gun_name(&self) -> String {
         match self.rifle {
@@ -716,7 +748,9 @@ impl Player {
     /// Holding the trigger down with the rifle out on full auto keeps pulling it: the droid
     /// fires as often as the rifle lets it (see [`Avatar::arm`](super::avatar::Avatar)). A burst
     /// keeps pulling it, held or not, till its three shots are fired; semi fires once a pull.
-    pub(super) fn hold_trigger(&mut self) {
+    /// The rifle's shots come out of its magazine: empty, it recharges for another `dt`, and
+    /// fires nothing till it is full again.
+    pub(super) fn hold_trigger(&mut self, dt: f32) {
         let Some(avatar) = self.avatar.as_ref() else {
             return;
         };
@@ -724,6 +758,12 @@ impl Player {
         let shots = fired.wrapping_sub(self.fired_seen) as u8;
         self.fired_seen = fired;
         self.burst_left = self.burst_left.saturating_sub(shots);
+        self.spend(rifle, shots as u32, dt);
+        if rifle && self.rounds == 0 {
+            self.keys.trigger = false;
+            self.burst_left = 0;
+            return;
+        }
         if !(self.armed && rifle && !self.confiscated) {
             self.burst_left = 0;
             return;
@@ -842,6 +882,27 @@ mod tests {
         assert!(player.armed && !player.keys.trigger, "drawn, not fired");
         player.pull_trigger();
         assert!(player.keys.trigger, "fired");
+    }
+
+    #[test]
+    fn the_rifle_fires_thirty_and_recharges_quickly_and_the_pistol_never_runs_out() {
+        let mut player = Player::default();
+        assert_eq!(player.ammo(), None, "the pistol's is endless");
+        player.rifle = true;
+        assert_eq!(player.ammo(), Some((MAGAZINE, false)));
+        // The pistol's shots take nothing out of the rifle.
+        player.spend(false, 5, 0.1);
+        assert_eq!(player.ammo(), Some((MAGAZINE, false)));
+        player.spend(true, MAGAZINE - 1, 0.1);
+        assert_eq!(player.ammo(), Some((1, false)));
+        // The last shot: it recharges, counting back up.
+        player.spend(true, 1, 0.0);
+        assert_eq!(player.ammo(), Some((0, true)));
+        player.spend(false, 0, RECHARGE / 2.0);
+        assert_eq!(player.ammo(), Some((MAGAZINE / 2, true)));
+        player.spend(false, 0, RECHARGE / 2.0 + 0.01);
+        assert_eq!(player.ammo(), Some((MAGAZINE, false)), "full again");
+        assert!(RECHARGE <= 2.0, "a quick recharge");
     }
 
     #[test]
