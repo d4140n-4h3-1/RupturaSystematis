@@ -23,7 +23,13 @@
 //! drone rising with its speed and louder for the throttle, a turbine's whine over it as it goes
 //! faster, a roar while it boosts - each where the bike is, so that a droid coming up behind is
 //! heard there - and a whoosh over a speed pad, a screech against a wall, a clunk bumping another
-//! bike, a thud landing off a crest. With MAZE_RACE_AUTOPILOT set, the bike drives itself round, steering for the
+//! bike, a thud landing off a crest.
+//!
+//! The grandstands are full ([`Crowd`]): spectators built into the track, a section of a stand
+//! at a time (`Crowd_<stand>_<section>`, see `data/arena/race_crowd.py`), bobbing idly and
+//! jumping as the bikes come by, each stand roaring louder; and near the player, their cameras
+//! flash - the droid's flashlight, borrowed, fired for a moment at the bikes. With
+//! MAZE_RACE_AUTOPILOT set, the bike drives itself round, steering for the
 //! checkpoints ahead - for trying the track out, and the beginnings of droids to race against.
 
 use crate::level::Marker;
@@ -36,13 +42,18 @@ use fyrox::{
     },
     graph::SceneGraph,
     keyboard::KeyCode,
-    material::{MaterialProperty, MaterialResource},
+    material::{Material, MaterialProperty, MaterialResource},
+    resource::texture::{Texture, TextureKind, TexturePixelKind, TextureResource},
     resource::model::{ModelResource, ModelResourceExtension},
     scene::{
         animation::AnimationPlayer,
         base::BaseBuilder,
         collider::Collider,
-        mesh::Mesh,
+        mesh::{
+            surface::{SurfaceBuilder, SurfaceData, SurfaceResource},
+            Mesh, MeshBuilder,
+        },
+        light::spot::SpotLight,
         graph::{physics::RayCastOptions, Graph},
         sound::{Sound as SoundNode, SoundBufferResource, SoundBuilder, Status},
         transform::TransformBuilder,
@@ -98,8 +109,32 @@ pub const PAD_FOR: f32 = 1.2;
 const PAD_HALF: (f32, f32) = (4.0, 2.6);
 const PAD_HEIGHT: f32 = 2.0;
 const PAD_FACING: f32 = 0.3;
-/// Where the bikes' sounds are described.
+/// Where the bikes' sounds are described, and the crowds'.
 pub const BIKE_SOUNDS: &str = "data/sounds/bike_formants.json";
+pub const CROWD_SOUNDS: &str = "data/sounds/crowd_formants.json";
+
+/// How near a bike has to come to a section of a stand, along the ground, for it to cheer: all
+/// out within the first, not at all past the second, in meters. How quickly it gets up and
+/// settles down, a second; how high it jumps cheering all out and idly, in meters; and how fast.
+const CHEER_NEAR: f32 = 25.0;
+const CHEER_FAR: f32 = 90.0;
+const CHEER_UP: f32 = 4.0;
+const CHEER_DOWN: f32 = 0.8;
+const JUMP: (f32, f32) = (0.04, 0.3);
+const JUMPS_A_SECOND: (f32, f32) = (0.75, 1.5);
+/// The cameras' flashes: how many can be lit at once; how far from the player a section has to be
+/// to flash; how many flashes a second a section makes idly and cheering all out; how long one
+/// lasts, how bright it is at once, and how far and wide it reaches.
+const FLASHES: usize = 6;
+const FLASH_WITHIN: f32 = 90.0;
+const FLASH_RATE: (f32, f32) = (0.05, 1.5);
+const FLASH_FOR: f32 = 0.12;
+const FLASH_BRIGHTNESS: f32 = 6.0;
+const FLASH_REACH: f32 = 30.0;
+const FLASH_CONE: f32 = 70.0;
+/// How big the spark of a flash is where it goes off, in meters, and how brightly it glows.
+const SPARK: f32 = 0.18;
+const SPARK_GLOW: f32 = 8.0;
 /// The sounds every bike makes all the while, looped: its engine, its whine and its boost's roar.
 const HUMS: [&str; 3] = ["engine", "whine", "boost"];
 /// How loud the engine is idling, of how loud it is with the throttle open; and how far its
@@ -605,6 +640,16 @@ const HULL_GLOW: f32 = 0.6;
 /// How bright a colour has to be to be the hull's: the rest of the bike is dark.
 const HULL_BRIGHT: u32 = 150;
 
+/// The rivals' voices, as [`RIVALS`] has them: each the voice of its kind of droid (see
+/// `data/sounds/voice_formants.json`), which it laughs in as it passes the player.
+pub const RIVAL_VOICES: [&str; 4] = ["Obstruator", "Reparator", "Explorator", "Defendator"];
+/// What a rival says passing the player, in System Latin as its voice reads it; how long it waits
+/// before it laughs again, in seconds, so that two swapping places back and forth do not keep it
+/// up; and how far off its laugh is heard at full volume.
+pub const LAUGH: &str = "Ha ha ha ha!";
+const LAUGH_EVERY: f32 = 10.0;
+pub const LAUGH_REACH: f32 = 12.0;
+
 /// Which place on the grid the player starts from, from the front: behind the droids' front row.
 const PLAYER_GRID: usize = 3;
 /// How close two bikes come before they bump, side by side, in meters; and how much of what they
@@ -619,6 +664,8 @@ const TRAFFIC_SWERVE: f32 = 3.5;
 #[derive(Debug, Clone, PartialEq)]
 pub enum RaceNews {
     Go,
+    /// Racer `by` passed the player, and laughs at them.
+    Passed { by: usize },
     Lap { lap: u32, took: f32, best: bool },
     /// The player over the line for the last time: in this long, in what place of how many.
     Finished { time: f32, best_lap: Option<f32>, place: usize, of: usize },
@@ -854,6 +901,12 @@ pub struct Race {
     /// What the bikes sound like; and the countdown's last second beeped.
     sounds: BikeSounds,
     beeped: Option<u32>,
+    /// The grandstands' crowds.
+    crowd: Crowd,
+    /// Whether each racer was ahead of the player, as the standings go, and when each last laughed
+    /// at them, on the race's clock.
+    ahead: Vec<bool>,
+    laughed: Vec<f32>,
 }
 
 impl Race {
@@ -879,6 +932,9 @@ impl Race {
             lights: PadLights::default(),
             sounds: BikeSounds::default(),
             beeped: None,
+            crowd: Crowd::default(),
+            ahead: Vec::new(),
+            laughed: Vec::new(),
         }
     }
 
@@ -906,11 +962,13 @@ impl Race {
             racer.place(&mut scene.graph, 0.0);
         }
         self.lights = PadLights::claim(&mut scene.graph);
+        self.crowd = Crowd::claim(&mut scene.graph, sounds);
     }
 
     /// Takes the bikes out of the scene.
     pub fn remove(&mut self, graph: &mut Graph) {
         self.lights.restore();
+        self.crowd.remove(graph);
         for racer in &mut self.racers {
             if let Some(bike) = racer.bike.take() {
                 graph.remove_node(bike.root);
@@ -1040,11 +1098,47 @@ impl Race {
             }
         }
         self.lights.update(dt);
+        if started {
+            news.extend(self.passes().into_iter().map(|by| RaceNews::Passed { by }));
+        }
+        let bikes: Vec<Vector3<f32>> = self.racers.iter().map(|r| r.handling.position).collect();
+        let everyone_out = self.racers[0].finished.is_some();
+        self.crowd.update(graph, dt, &bikes, everyone_out);
         self.follow(graph, dt, skip);
         for racer in &self.racers {
             racer.place(graph, self.time);
         }
         news
+    }
+
+    /// The racers who have just gone from behind the player to ahead of them - while both are
+    /// racing, and each no sooner than [`LAUGH_EVERY`] since it last laughed at them.
+    fn passes(&mut self) -> Vec<usize> {
+        let racers = self.racers.len();
+        let you = self.racers[0].how_far(&self.track);
+        let ahead: Vec<bool> = (0..racers)
+            .map(|n| {
+                let them = self.racers[n].how_far(&self.track);
+                n > 0 && them.0.cmp(&you.0).then(them.1.total_cmp(&you.1)).is_gt()
+            })
+            .collect();
+        self.laughed.resize(racers, f32::NEG_INFINITY);
+        let mut passed = Vec::new();
+        if self.ahead.len() == racers && self.racers[0].finished.is_none() {
+            for n in 1..racers {
+                if ahead[n] && !self.ahead[n] && self.racers[n].finished.is_none() && self.time - self.laughed[n] >= LAUGH_EVERY {
+                    self.laughed[n] = self.time;
+                    passed.push(n);
+                }
+            }
+        }
+        self.ahead = ahead;
+        passed
+    }
+
+    /// Racer `n`'s bike in the scene, if it is there.
+    pub fn bike_of(&self, n: usize) -> Option<Handle<Node>> {
+        self.racers.get(n)?.bike.as_ref().map(|bike| bike.root)
     }
 
     /// The racers in the order they stand, first first: by how far round they have got.
@@ -1135,20 +1229,22 @@ pub struct BikeSounds {
 }
 
 impl BikeSounds {
-    /// The sounds in [`BIKE_SOUNDS`], made; none, if they cannot be.
+    /// The sounds in [`BIKE_SOUNDS`] and [`CROWD_SOUNDS`], made; none of a file's, if they
+    /// cannot be.
     pub fn load() -> Self {
-        let file = match <crate::formants::Sounds as crate::formants::Load>::load(BIKE_SOUNDS) {
-            Ok(file) => file,
-            Err(error) => {
-                Log::err(format!("Race: the bikes are silent, {error}"));
-                return Self::default();
-            }
-        };
-        let sounds = file
-            .sounds
-            .iter()
-            .filter_map(|(name, sound)| Some((name.clone(), crate::formants::buffer(sound, file.sample_rate)?, sound.reach)))
-            .collect();
+        let mut sounds = Vec::new();
+        for path in [BIKE_SOUNDS, CROWD_SOUNDS] {
+            let file = match <crate::formants::Sounds as crate::formants::Load>::load(path) {
+                Ok(file) => file,
+                Err(error) => {
+                    Log::err(format!("Race: silent, {error}"));
+                    continue;
+                }
+            };
+            sounds.extend(file.sounds.iter().filter_map(|(name, sound)| {
+                Some((name.clone(), crate::formants::buffer(sound, file.sample_rate)?, sound.reach))
+            }));
+        }
         Self { sounds }
     }
 
@@ -1186,6 +1282,250 @@ impl BikeSounds {
             .with_play_once(true)
             .with_status(Status::Playing)
             .build(graph);
+    }
+}
+
+/// A section of a grandstand's crowd, moving as one.
+#[derive(Debug, Clone, PartialEq)]
+struct Section {
+    node: Handle<Node>,
+    /// Where it stands still, as its parent has it; its middle, and its corners, in the world.
+    rest: Vector3<f32>,
+    middle: Vector3<f32>,
+    low: Vector3<f32>,
+    high: Vector3<f32>,
+    /// Which stand it is part of; when in its jumps it is; and how much it is cheering, 0 to 1.
+    stand: usize,
+    phase: f32,
+    cheer: f32,
+}
+
+/// A camera's flash: the light, and the spark where it goes off; and how long it has yet to go.
+#[derive(Debug, Clone, PartialEq)]
+struct Flash {
+    light: Handle<Node>,
+    spark: Handle<Node>,
+    left: f32,
+}
+
+/// The grandstands' crowds: their sections, each stand's roar, and the flashes of their cameras.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Crowd {
+    sections: Vec<Section>,
+    /// Each stand's roar, and where it is.
+    roars: Vec<Option<Handle<Node>>>,
+    flashes: Vec<Flash>,
+    clock: f32,
+    seed: u64,
+}
+
+/// How much a section `distance` from the nearest bike, along the ground, wants to cheer.
+pub fn cheer_for(distance: f32) -> f32 {
+    ((CHEER_FAR - distance) / (CHEER_FAR - CHEER_NEAR)).clamp(0.0, 1.0)
+}
+
+impl Crowd {
+    /// The crowd of the track in `graph`, its stands roaring as `sounds` has a crowd sound, and
+    /// the lights for its flashes.
+    pub fn claim(graph: &mut Graph, sounds: &BikeSounds) -> Self {
+        let mut sections = Vec::new();
+        let found: Vec<(Handle<Node>, String)> = graph
+            .pair_iter()
+            .filter(|(_, node)| node.name().starts_with("Crowd_") && node.cast::<Mesh>().is_some())
+            .map(|(handle, node)| (handle, node.name().to_string()))
+            .collect();
+        for (node, name) in found {
+            let mut parts = name.trim_start_matches("Crowd_").split('_');
+            let Some(stand) = parts.next().and_then(|s| s.parse::<usize>().ok()) else {
+                continue;
+            };
+            let Some(mesh) = graph[node].cast::<Mesh>() else {
+                continue;
+            };
+            let bounds = mesh.accurate_world_bounding_box(graph);
+            let n = sections.len() as f32;
+            sections.push(Section {
+                node,
+                rest: **graph[node].local_transform().position(),
+                middle: graph[node].global_position(),
+                low: bounds.min,
+                high: bounds.max,
+                stand,
+                phase: (n * 2.399) % std::f32::consts::TAU,
+                cheer: 0.0,
+            });
+        }
+        let stands = sections.iter().map(|s| s.stand + 1).max().unwrap_or(0);
+        let roars = (0..stands)
+            .map(|stand| {
+                let ours: Vec<&Section> = sections.iter().filter(|s| s.stand == stand).collect();
+                if ours.is_empty() {
+                    return None;
+                }
+                let middle = ours.iter().map(|s| s.middle).sum::<Vector3<f32>>() / ours.len() as f32;
+                let (_, buffer, reach) = sounds.get("crowd")?;
+                Some(
+                    SoundBuilder::new(BaseBuilder::new().with_local_transform(TransformBuilder::new().with_local_position(middle).build()))
+                        .with_buffer(Some(buffer.clone()))
+                        .with_looping(true)
+                        .with_radius(*reach)
+                        .with_gain(0.0)
+                        .with_status(Status::Playing)
+                        .build(graph)
+                        .to_base(),
+                )
+            })
+            .collect();
+        let flashes = if sections.is_empty() { Vec::new() } else { Self::flashes(graph) };
+        if !sections.is_empty() {
+            Log::info(format!("Race: a crowd on {stands} stands, {} sections", sections.len()));
+        }
+        Self { sections, roars, flashes, clock: 0.0, seed: 0x9e37_79b9_7f4a_7c15 }
+    }
+
+    /// The flashes' lights - the droid's flashlight, white, wider, further, casting no shadows -
+    /// and sparks, all out until they go off.
+    fn flashes(graph: &mut Graph) -> Vec<Flash> {
+        let white = Texture::from_bytes(TextureKind::Rectangle { width: 1, height: 1 }, TexturePixelKind::RGBA8, vec![255; 4])
+            .map(TextureResource::new_embedded);
+        let mut material = Material::standard();
+        material.set_property("diffuseColor", Color::WHITE);
+        material.set_property("emissionStrength", Vector3::repeat(SPARK_GLOW));
+        material.bind("emissionTexture", white);
+        let material = MaterialResource::new_embedded(material);
+        let shape = SurfaceResource::new_embedded(SurfaceData::make_sphere(6, 6, SPARK / 2.0, &fyrox::core::algebra::Matrix4::identity()));
+        (0..FLASHES)
+            .map(|_| {
+                let light: Handle<Node> = crate::player::flashlight(BaseBuilder::new().with_visibility(false).with_cast_shadows(false))
+                    .build(graph)
+                    .to_base();
+                if let Some(spot) = graph[light].cast_mut::<SpotLight>() {
+                    spot.set_distance(FLASH_REACH);
+                    spot.set_hotspot_cone_angle(FLASH_CONE.to_radians());
+                    spot.base_light_mut().set_color(Color::opaque(235, 242, 255));
+                }
+                let spark = MeshBuilder::new(BaseBuilder::new().with_visibility(false).with_cast_shadows(false))
+                    .with_surfaces(vec![SurfaceBuilder::new(shape.clone()).with_material(material.clone()).build()])
+                    .build(graph)
+                    .to_base();
+                Flash { light, spark, left: 0.0 }
+            })
+            .collect()
+    }
+
+    /// A number from 0 to 1, as random as the crowd needs.
+    fn random(&mut self) -> f32 {
+        self.seed ^= self.seed << 13;
+        self.seed ^= self.seed >> 7;
+        self.seed ^= self.seed << 17;
+        (self.seed >> 40) as f32 / (1u64 << 24) as f32
+    }
+
+    /// The crowd on `dt` seconds, `bikes` where they are, the player's first: each section
+    /// cheering by how near the nearest comes - all of them, once the player is `home` - and
+    /// jumping as it cheers; each stand roaring as loud as its sections cheer; flashes going off
+    /// near the player, the more the more they cheer.
+    pub fn update(&mut self, graph: &mut Graph, dt: f32, bikes: &[Vector3<f32>], home: bool) {
+        if self.sections.is_empty() {
+            return;
+        }
+        self.clock += dt;
+        let Some(&player) = bikes.first() else {
+            return;
+        };
+        let mut stands = vec![(0.0f32, 0usize); self.roars.len()];
+        let mut wanted = Vec::new();
+        for (k, section) in self.sections.iter_mut().enumerate() {
+            let nearest = bikes
+                .iter()
+                .filter(|b| (b.y - section.middle.y).abs() < 30.0)
+                .map(|b| Vector3::new(b.x - section.middle.x, 0.0, b.z - section.middle.z).norm())
+                .fold(f32::MAX, f32::min);
+            let target = if home { 1.0 } else { cheer_for(nearest) };
+            let rate = if target > section.cheer { CHEER_UP } else { CHEER_DOWN };
+            section.cheer += (target - section.cheer) * (1.0 - (-rate * dt).exp());
+            let speed = JUMPS_A_SECOND.0 + (JUMPS_A_SECOND.1 - JUMPS_A_SECOND.0) * section.cheer;
+            let height = JUMP.0 + (JUMP.1 - JUMP.0) * section.cheer;
+            let hop = (self.clock * std::f32::consts::PI * speed + section.phase).sin().abs() * height;
+            if let Ok(node) = graph.try_get_mut(section.node) {
+                node.local_transform_mut().set_position(section.rest + Vector3::y() * hop);
+            }
+            if let Some(stand) = stands.get_mut(section.stand) {
+                stand.0 += section.cheer;
+                stand.1 += 1;
+            }
+            let near = Vector3::new(player.x - section.middle.x, 0.0, player.z - section.middle.z).norm() < FLASH_WITHIN;
+            if near {
+                wanted.push((k, FLASH_RATE.0 + (FLASH_RATE.1 - FLASH_RATE.0) * section.cheer));
+            }
+        }
+        for (roar, (cheer, count)) in self.roars.iter().zip(&stands) {
+            let cheer = if *count > 0 { cheer / *count as f32 } else { 0.0 };
+            if let Some(sound) = roar.and_then(|roar| graph.try_get_mut(roar).ok()).and_then(|node| node.cast_mut::<SoundNode>()) {
+                sound.set_gain(0.2 + 0.8 * cheer);
+            }
+        }
+        // Flashes going out, and others going off.
+        for flash in &mut self.flashes {
+            if flash.left <= 0.0 {
+                continue;
+            }
+            flash.left = (flash.left - dt).max(0.0);
+            let lit = flash.left > 0.0;
+            if let Some(spot) = graph.try_get_mut(flash.light).ok().and_then(|node| node.cast_mut::<SpotLight>()) {
+                spot.base_light_mut().set_intensity(FLASH_BRIGHTNESS * flash.left / FLASH_FOR);
+                spot.set_visibility(lit);
+            }
+            if let Ok(spark) = graph.try_get_mut(flash.spark) {
+                spark.set_visibility(lit);
+            }
+        }
+        for (k, rate) in wanted {
+            if self.random() >= rate * dt {
+                continue;
+            }
+            let Some(free) = self.flashes.iter().position(|flash| flash.left <= 0.0) else {
+                break;
+            };
+            // Somewhere among the section's spectators, up where their heads are.
+            let (low, high) = (self.sections[k].low, self.sections[k].high);
+            let at = Vector3::new(
+                low.x + (high.x - low.x) * self.random(),
+                low.y + (high.y - low.y) * (0.4 + 0.6 * self.random()),
+                low.z + (high.z - low.z) * self.random(),
+            );
+            let way = (player + Vector3::y() * 0.8 - at).try_normalize(1e-4).unwrap_or(-Vector3::y());
+            let turn = UnitQuaternion::rotation_between(&-Vector3::y(), &way).unwrap_or_else(UnitQuaternion::identity);
+            let flash = &mut self.flashes[free];
+            flash.left = FLASH_FOR;
+            if let Ok(light) = graph.try_get_mut(flash.light) {
+                light.local_transform_mut().set_position(at).set_rotation(turn);
+                light.set_visibility(true);
+            }
+            if let Some(spot) = graph.try_get_mut(flash.light).ok().and_then(|node| node.cast_mut::<SpotLight>()) {
+                spot.base_light_mut().set_intensity(FLASH_BRIGHTNESS);
+            }
+            if let Ok(spark) = graph.try_get_mut(flash.spark) {
+                spark.local_transform_mut().set_position(at);
+                spark.set_visibility(true);
+            }
+        }
+    }
+
+    /// Takes the crowd's own nodes - its roars, lights and sparks - out of `graph`, and puts the
+    /// sections back where they stand still.
+    fn remove(&mut self, graph: &mut Graph) {
+        for section in &self.sections {
+            if let Ok(node) = graph.try_get_mut(section.node) {
+                node.local_transform_mut().set_position(section.rest);
+            }
+        }
+        for node in self.roars.iter().flatten().copied().chain(self.flashes.iter().flat_map(|f| [f.light, f.spark])) {
+            if graph.try_get(node).is_ok() {
+                graph.remove_node(node);
+            }
+        }
+        *self = Self::default();
     }
 }
 
@@ -1776,6 +2116,33 @@ mod tests {
         race.racers[0].finished = Some(90.0);
         assert_eq!(race.standings(), vec![0, 2, 1]);
         assert!(race.results().starts_with("1. You"));
+    }
+
+    #[test]
+    fn a_droid_that_passes_the_player_laughs_once_and_not_again_too_soon() {
+        let mut race = Race::new(square(), false, 2);
+        race.countdown = 0.0;
+        let at = |race: &mut Race, n: usize, z: f32| race.racers[n].handling.position = Vector3::new(0.0, 0.0, z);
+        at(&mut race, 0, 50.0);
+        at(&mut race, 1, 40.0);
+        at(&mut race, 2, 30.0);
+        assert!(race.passes().is_empty(), "nobody passed yet");
+        // Red goes by.
+        at(&mut race, 1, 60.0);
+        assert_eq!(race.passes(), vec![1]);
+        assert!(race.passes().is_empty(), "once, not every frame it stays ahead");
+        // The player takes the place back, and Red passes again at once: too soon to laugh.
+        at(&mut race, 0, 70.0);
+        race.passes();
+        race.time += 1.0;
+        at(&mut race, 1, 80.0);
+        assert!(race.passes().is_empty());
+        // Back again, later on: it laughs.
+        at(&mut race, 0, 90.0);
+        race.passes();
+        race.time += LAUGH_EVERY;
+        at(&mut race, 1, 95.0);
+        assert_eq!(race.passes(), vec![1]);
     }
 
     #[test]

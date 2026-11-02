@@ -92,6 +92,19 @@ LAYOUT = {
     "NIGHT": True,
 }
 
+# The grandstands: where along the road, in waypoints, and which side, left (-1) or right (+1) -
+# each where there is room for it, beside the road with nothing over or near it.
+STANDS = [
+    (0.45, -1), (0.45, 1),      # by the start line
+    (1.6, -1), (1.6, 1),        # down the Boulevard
+    (2.75, -1), (2.75, 1),      # past the skyway
+    (4.35, 1), (3.7, -1),       # before the Helix
+    (35.75, 1), (35.75, -1),    # out of the last corner
+    (34.5, 1),
+]
+MOST_STANDS = 8                 # the crowds are heavy: the model must stay well under 100 MB
+STAND = (60.0, 8, 1.6, 1.0, 3.0)   # long, rows, each row's depth and rise, gap from the wall
+
 CITY_MARGIN = 420.0          # how far out from the track the city goes
 GROUND_MARGIN = 600.0        # and the floor under it
 GRID = 20.0                  # the floor's lines of light, this far apart
@@ -581,12 +594,77 @@ class City:
         return lines.finish()
 
 
-def build(rc, secs, m, bounds, glb):
-    """Lumen's city round the track `secs`, and its lines of light for the game beside `glb`."""
+def stands(city, crowd):
+    """The grandstands along the road, and their crowds: tiers rising away from the road, each
+    row's front edge lit, a lit canopy over them on a back wall, and lit ends."""
+    rc = city.rc
+    length, rows, depth, rise, gap = STAND
+    up = Vector((0, 0, 1))
+    made = 0
+    placed = []
+    for k, (fraction, side) in enumerate(STANDS):
+        if made >= MOST_STANDS:
+            break
+        i = min(range(len(city.secs)), key=lambda j: abs(city.secs[j].fraction - fraction))
+        s = city.secs[i]
+        if s.low > 1.0:
+            print(f"[lumen] stand {k} at {fraction}: the road is up off the ground there")
+            continue
+        along = s.flat
+        out = s.right * side
+        front = rc.ROAD / 2 + rc.BARRIER[1] + gap
+        middle = Vector((s.centre.x, s.centre.y, 0.0)) + out * front
+        deep = rows * depth
+        # Room for it: every point of it clear of the road, but for the road it stands by.
+        corners = [middle + along * (a * length / 2) + out * (d * deep) for a in (-1, -0.5, 0, 0.5, 1) for d in (0, 0.5, 1)]
+        if not all(rc.far_from_track(city.secs, p.x, p.y, 1.5) for p in corners):
+            print(f"[lumen] no room for stand {k} at {fraction}")
+            continue
+        if not all(city.clear_of_buildings(p.x, p.y, 2.0) for p in corners) or \
+                any(min((p - q).length for q in other) < 4.0 for other in placed for p in corners):
+            print(f"[lumen] stand {k} at {fraction}: in the way of a building")
+            continue
+        shade = city.glows[("cyan", "pink", "violet", "yellow", "green", "orange")[made % 6]]
+        tiers = []
+        for r in range(rows):
+            top = (r + 1) * rise
+            c = middle + out * ((r + 0.5) * depth) + up * (top / 2)
+            city.shells.oriented_box(c, along, out, up, (length / 2, depth / 2, top / 2), city.dark[r % 2])
+            edge = middle + out * (r * depth - 0.05) + up * top
+            city.line(edge - along * length / 2, edge + along * length / 2, shade if r % 2 else city.white, width=0.1)
+            tiers.append((r * depth, (r + 1) * depth, top))
+        # The back wall, the canopy over the tiers, and the ends.
+        top = rows * rise
+        roof = top + 4.0
+        back = middle + out * (deep + 0.4)
+        city.shells.oriented_box(back + up * (roof / 2), along, out, up, (length / 2 + 1.0, 0.4, roof / 2), city.dark[2])
+        canopy = middle + out * (deep * 0.55) + up * (roof + 0.3)
+        city.shells.oriented_box(canopy, along, out, up, (length / 2 + 1.0, deep * 0.55 + 0.6, 0.3), city.dark[1])
+        lip = middle - out * 0.6 + up * roof
+        city.line(lip - along * (length / 2 + 1.0), lip + along * (length / 2 + 1.0), city.white, width=0.25)
+        for end in (-1, 1):
+            e = middle + along * (end * (length / 2 + 0.5))
+            city.shells.oriented_box(e + out * (deep / 2) + up * (roof / 2), along, out, up, (0.5, deep / 2 + 0.4, roof / 2), city.dark[2])
+            city.line(e - out * 0.05, e - out * 0.05 + up * roof, shade, width=0.2)
+        crowd.stand(middle, along, out, length - 1.0, tiers)
+        placed.append(corners)
+        made += 1
+    # Kept clear of the city's buildings, once they are all down: a stand's room, reckoned as a
+    # circle round it, reaches over the road to the one facing it.
+    for corners in placed:
+        mid = sum(corners, Vector()) / len(corners)
+        city.taken.append((mid.x, mid.y, (corners[0] - corners[-1]).length / 2 + 2.0))
+    print(f"[lumen] {made} stands")
+
+
+def build(rc, secs, m, bounds, glb, crowd):
+    """Lumen's city round the track `secs`, and its lines of light for the game beside `glb`;
+    and its stands, with `crowd` on them."""
     city = City(rc, m, secs)
     city.the_spire()
     city.arcology()
     city.arches()
+    stands(city, crowd)
     road = city.road_lights()
     city.city(bounds)
     city.floor_grid(bounds)

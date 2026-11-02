@@ -632,6 +632,14 @@ pub struct MazeGame {
     #[visit(skip)]
     #[reflect(hidden)]
     bike_sounds: Option<race::BikeSounds>,
+    /// Each racer's laugh as it passes the player, in its own voice, by racer, once made; and those
+    /// being made, by racer.
+    #[visit(skip)]
+    #[reflect(hidden)]
+    laughs: Vec<Option<fyrox::scene::sound::SoundBufferResource>>,
+    #[visit(skip)]
+    #[reflect(hidden)]
+    laughs_making: Vec<(usize, Making)>,
     #[visit(skip)]
     #[reflect(hidden)]
     race_banner: String,
@@ -1449,6 +1457,20 @@ impl MazeGame {
         let rivals: Vec<Option<ModelResource>> =
             self.rival_models.iter().map(|model| model.is_ok().then(|| model.clone())).collect();
         let night = self.night();
+        // The rivals' laughs, made in their own voices while the countdown runs.
+        self.laughs = vec![None; race.racers.len()];
+        self.laughs_making.clear();
+        if let Some(voices) = &self.voices {
+            for (n, name) in race::RIVAL_VOICES.iter().enumerate().take(race.racers.len() - 1) {
+                let Some(voice) = voices.voice(name) else {
+                    continue;
+                };
+                let sound = voices.speak(race::LAUGH, voice, voices.mood_pitch("success"));
+                let rate = voices.sample_rate;
+                let reach = sound.reach;
+                self.laughs_making.push((n + 1, Making(platform::in_background(move || synth::make(&sound, rate)), reach)));
+            }
+        }
         let sounds = self.bike_sounds.get_or_insert_with(race::BikeSounds::load);
         race.spawn(scene, &bike, self.droid_model.as_ref(), &rivals, night, sounds);
         self.player.set_riding(&mut scene.graph, true);
@@ -1478,6 +1500,19 @@ impl MazeGame {
             return;
         };
         let news = race.update(graph, ctx.dt, skip, steering);
+        // The rivals' laughs, as they are made.
+        let rate = self.voices.as_ref().map_or(44100, |voices| voices.sample_rate);
+        let laughs = &mut self.laughs;
+        self.laughs_making.retain(|(n, Making(making, _))| match making.try_recv() {
+            Ok(samples) => {
+                if let Some(laugh) = laughs.get_mut(*n) {
+                    *laugh = formants::playable(samples, rate);
+                }
+                false
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => true,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => false,
+        });
         let (at, eye, target) = race.view();
         self.player.carry(graph, at, eye, target);
         self.round_time = race.time;
@@ -1485,6 +1520,20 @@ impl MazeGame {
         for item in news {
             match item {
                 RaceNews::Go => Log::info("Race: go"),
+                RaceNews::Passed { by } => {
+                    // It laughs from its bike, carried on past the player with it.
+                    Log::info(format!("Race: {} passed you, laughing", race.racers[by].name));
+                    if let (Some(Some(laugh)), Some(bike)) = (self.laughs.get(by), race.bike_of(by)) {
+                        let sound: Handle<Node> = SoundBuilder::new(BaseBuilder::new())
+                            .with_buffer(Some(laugh.clone()))
+                            .with_radius(race::LAUGH_REACH)
+                            .with_play_once(true)
+                            .with_status(SoundStatus::Playing)
+                            .build(graph)
+                            .to_base();
+                        graph.link_nodes(sound, bike);
+                    }
+                }
                 RaceNews::Lap { lap, took, best } => {
                     Log::info(format!("Race: lap {lap} in {}", hud::format_time(took)));
                     let fastest = if best && lap > 1 { " - fastest lap" } else { "" };

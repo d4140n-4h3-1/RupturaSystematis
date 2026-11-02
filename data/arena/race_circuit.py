@@ -62,6 +62,7 @@ import bpy
 from mathutils import Vector
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import race_crowd  # noqa: E402
 import race_lumen  # noqa: E402
 
 # The road's middle line, round the way it is raced: (x, y, height). A closed loop, smoothed
@@ -610,7 +611,7 @@ def far_from_track(secs, x, y, clearance):
     return all((Vector((x, y)) - s.centre.xy).length > ROAD / 2 + clearance for s in secs[::3])
 
 
-def build_scenery(secs, m, bounds):
+def build_scenery(secs, m, bounds, crowd):
     rng = random.Random(7)
     scenery = Builder("Scenery")
     lamps = Builder("SceneryLamps")
@@ -625,6 +626,9 @@ def build_scenery(secs, m, bounds):
     scenery.box(x0_ - 2, x1_ + 2, stand_y + 12.8, stand_y + 14.0, 0.0, 12.0, m.dark)
     scenery.box(x0_ - 2, x1_ + 2, stand_y - 1.0, stand_y + 14.0, 12.0, 12.6, m.dark)
     lamps.box(x0_ - 1, x1_ + 1, stand_y - 0.9, stand_y - 0.6, 11.6, 11.9, m.white)
+    # Its crowd, on every row, facing the straight.
+    crowd.stand(Vector(((x0_ + x1_) / 2, stand_y, 0.0)), Vector((1, 0, 0)), Vector((0, 1, 0)), x1_ - x0_ - 1.0,
+                [(row * 1.6, (row + 1) * 1.6, 0.8 + row * 0.9) for row in range(8)])
     # Light towers round the track.
     (x0, y0), (x1, y1) = bounds
     placed = 0
@@ -706,6 +710,7 @@ def main():
     globals().update(TRACKS[track])
     bpy.ops.wm.read_factory_settings(use_empty=True)
     m = Mats()
+    crowd = race_crowd.Crowd(sys.modules[__name__], NIGHT)
     if NIGHT:
         race_lumen.night_materials(sys.modules[__name__], m)
     secs = sections()
@@ -721,10 +726,12 @@ def main():
     objs.append(build_start(secs, m))
     objs += build_pads(secs, m)
     if NIGHT:
-        objs += race_lumen.build(sys.modules[__name__], secs, m, bounds, glb)
+        objs += race_lumen.build(sys.modules[__name__], secs, m, bounds, glb, crowd)
     else:
-        objs += build_scenery(secs, m, bounds)
+        objs += build_scenery(secs, m, bounds, crowd)
         objs.append(build_ground(m, bounds))
+    objs += crowd.objs
+    print(f"[race] crowd: {crowd.figures} on {crowd.stands} stands, in {len(crowd.objs)} sections")
     checkpoints = place_markers(secs)
     highest = max(s.centre.z for s in secs)
     banked = max(abs(s.bank) for s in secs)

@@ -105,6 +105,15 @@ use view::{DEFAULT_FOV, DEFAULT_SENSITIVITY, NEAR_PLANE};
 /// there in every posture; only the collider and the eyes move.
 const FEET: f32 = -0.85;
 
+/// The droid's flashlight, on `base`: a spot light shining down its own -Y axis, 15 m, in a cone
+/// 35 degrees across. The player carries one; the race's crowds borrow it for their cameras'
+/// flashes (see [`crate::race::Crowd`]).
+pub fn flashlight(base: BaseBuilder) -> SpotLightBuilder {
+    SpotLightBuilder::new(BaseLightBuilder::new(base).with_intensity(1.5))
+        .with_distance(15.0)
+        .with_hotspot_cone_angle(35f32.to_radians())
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Player {
     body: Handle<RigidBody>,
@@ -294,22 +303,14 @@ impl Player {
     pub fn spawn(graph: &mut Graph) -> Self {
         // A flashlight, for the corridors the sun does not reach. A spot light shines down its
         // own -Y axis; turned a quarter turn about X, that is the camera's forward (+Z).
-        let flashlight = SpotLightBuilder::new(
-            BaseLightBuilder::new(
-                BaseBuilder::new().with_local_transform(
-                    TransformBuilder::new()
-                        .with_local_position(Vector3::new(0.2, -0.2, 0.0))
-                        .with_local_rotation(UnitQuaternion::from_axis_angle(
-                            &Vector3::x_axis(),
-                            -90f32.to_radians(),
-                        ))
-                        .build(),
-                ),
-            )
-            .with_intensity(1.5),
+        let flashlight = flashlight(
+            BaseBuilder::new().with_local_transform(
+                TransformBuilder::new()
+                    .with_local_position(Vector3::new(0.2, -0.2, 0.0))
+                    .with_local_rotation(UnitQuaternion::from_axis_angle(&Vector3::x_axis(), -90f32.to_radians()))
+                    .build(),
+            ),
         )
-        .with_distance(15.0)
-        .with_hotspot_cone_angle(35f32.to_radians())
         .build(graph)
         .to_base();
 
