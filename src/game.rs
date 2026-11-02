@@ -628,6 +628,10 @@ pub struct MazeGame {
     #[visit(skip)]
     #[reflect(hidden)]
     rival_models: Vec<ModelResource>,
+    /// The bikes' sounds, made the first time there is a race (see [`race::BikeSounds`]).
+    #[visit(skip)]
+    #[reflect(hidden)]
+    bike_sounds: Option<race::BikeSounds>,
     #[visit(skip)]
     #[reflect(hidden)]
     race_banner: String,
@@ -1445,7 +1449,8 @@ impl MazeGame {
         let rivals: Vec<Option<ModelResource>> =
             self.rival_models.iter().map(|model| model.is_ok().then(|| model.clone())).collect();
         let night = self.night();
-        race.spawn(scene, &bike, self.droid_model.as_ref(), &rivals, night);
+        let sounds = self.bike_sounds.get_or_insert_with(race::BikeSounds::load);
+        race.spawn(scene, &bike, self.droid_model.as_ref(), &rivals, night, sounds);
         self.player.set_riding(&mut scene.graph, true);
         let (at, eye, target) = race.view();
         self.player.carry(&mut scene.graph, at, eye, target);

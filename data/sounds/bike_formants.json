@@ -1,0 +1,144 @@
+{
+  "about": "The hover bikes' sounds in race mode (src/race.rs, BikeSounds), made from formants when the game starts: see src/formants and pistol_formants.json's `about` for what everything here means. The looped ones play all through a race on every bike, the game turning their pitch and loudness up and down: `engine` and `whine` with how fast the bike goes and how hard it is pushed, `boost` while it boosts. The others play once, where they happen.",
+  "sample_rate": 44100,
+  "sounds": {
+    "engine": {
+      "about": "The lift fans: a low, breathy drone, an 'aw' with a rasp of air through it. Pitched up with speed, from a murmur on the line to a roar flat out.",
+      "length": 1.0,
+      "looped": true,
+      "pitch": [[0.0, 82.0]],
+      "buzz": [[0.0, 1.0]],
+      "noise": [[0.0, 0.35]],
+      "loudness": [[0.0, 1.0]],
+      "formants": [
+        { "frequency": [[0.0, 480.0]], "width": 140.0, "gain": 1.0 },
+        { "frequency": [[0.0, 1100.0]], "width": 260.0, "gain": 0.55 },
+        { "frequency": [[0.0, 2600.0]], "width": 700.0, "gain": 0.25 }
+      ],
+      "volume": 0.55,
+      "reach": 6.0
+    },
+    "whine": {
+      "about": "The turbine over the fans: a soft, rounded hum in the middle of the range, an 'oh', louder and a little higher the faster the bike goes - silent at a standstill. Nothing in it high or thin: a bright, piercing whine here grates over a whole race.",
+      "length": 1.0,
+      "looped": true,
+      "pitch": [[0.0, 165.0]],
+      "buzz": [[0.0, 1.0]],
+      "noise": [[0.0, 0.1]],
+      "loudness": [[0.0, 1.0]],
+      "formants": [
+        { "frequency": [[0.0, 660.0]], "width": 160.0, "gain": 1.0 },
+        { "frequency": [[0.0, 990.0]], "width": 220.0, "gain": 0.4 }
+      ],
+      "volume": 0.22,
+      "reach": 6.0
+    },
+    "boost": {
+      "about": "Boosting: a rushing roar of air, deep and wide, under the engine for as long as the boost is held.",
+      "length": 1.0,
+      "looped": true,
+      "pitch": [[0.0, 55.0]],
+      "buzz": [[0.0, 0.4]],
+      "noise": [[0.0, 1.0]],
+      "loudness": [[0.0, 1.0]],
+      "formants": [
+        { "frequency": [[0.0, 700.0]], "width": 500.0, "gain": 1.0 },
+        { "frequency": [[0.0, 1900.0]], "width": 900.0, "gain": 0.6 },
+        { "frequency": [[0.0, 260.0]], "width": 150.0, "gain": 0.7 }
+      ],
+      "volume": 0.6,
+      "reach": 6.0
+    },
+    "surge": {
+      "about": "Over a speed pad: a rising whoosh, the air and a bright tone sweeping up together - 'vwoom'.",
+      "length": 0.9,
+      "looped": false,
+      "pitch": [[0.0, 180.0], [0.5, 720.0], [0.9, 900.0]],
+      "buzz": [[0.0, 0.3], [0.15, 0.8], [0.9, 0.2]],
+      "noise": [[0.0, 1.0], [0.4, 0.6], [0.9, 0.2]],
+      "loudness": [[0.0, 0.0], [0.04, 1.0], [0.35, 0.8], [0.9, 0.0]],
+      "formants": [
+        { "frequency": [[0.0, 400.0], [0.6, 2800.0]], "width": 380.0, "gain": 1.0 },
+        { "frequency": [[0.0, 900.0], [0.6, 4200.0]], "width": 600.0, "gain": 0.6 }
+      ],
+      "volume": 0.75,
+      "reach": 8.0
+    },
+    "scrape": {
+      "about": "Against a wall: a short grinding screech of metal on metal, harsh and high.",
+      "length": 0.4,
+      "looped": false,
+      "pitch": [[0.0, 63.0], [0.4, 48.0]],
+      "buzz": [[0.0, 0.5]],
+      "noise": [[0.0, 1.0], [0.4, 0.7]],
+      "loudness": [[0.0, 0.0], [0.01, 1.0], [0.15, 0.7], [0.4, 0.0]],
+      "formants": [
+        { "frequency": [[0.0, 3100.0], [0.4, 2700.0]], "width": 220.0, "gain": 1.0 },
+        { "frequency": [[0.0, 5200.0]], "width": 400.0, "gain": 0.6 },
+        { "frequency": [[0.0, 1300.0]], "width": 300.0, "gain": 0.4 }
+      ],
+      "volume": 0.65,
+      "reach": 8.0
+    },
+    "bump": {
+      "about": "Two bikes knocking together: a hollow, metallic clunk.",
+      "length": 0.3,
+      "looped": false,
+      "pitch": [[0.0, 120.0], [0.3, 60.0]],
+      "buzz": [[0.0, 1.0], [0.3, 0.6]],
+      "noise": [[0.0, 1.0], [0.03, 0.2], [0.3, 0.0]],
+      "loudness": [[0.0, 0.0], [0.004, 1.0], [0.08, 0.45], [0.3, 0.0]],
+      "formants": [
+        { "frequency": [[0.0, 420.0]], "width": 90.0, "gain": 1.0 },
+        { "frequency": [[0.0, 1250.0]], "width": 140.0, "gain": 0.5 }
+      ],
+      "volume": 0.75,
+      "reach": 8.0
+    },
+    "land": {
+      "about": "Coming down onto the road from a crest: a deep thud and a hiss of the fans catching it.",
+      "length": 0.45,
+      "looped": false,
+      "pitch": [[0.0, 70.0], [0.45, 40.0]],
+      "buzz": [[0.0, 1.0], [0.45, 0.3]],
+      "noise": [[0.0, 0.8], [0.1, 0.5], [0.45, 0.0]],
+      "loudness": [[0.0, 0.0], [0.005, 1.0], [0.12, 0.4], [0.45, 0.0]],
+      "formants": [
+        { "frequency": [[0.0, 260.0]], "width": 120.0, "gain": 1.0 },
+        { "frequency": [[0.0, 900.0], [0.45, 1600.0]], "width": 500.0, "gain": 0.4 }
+      ],
+      "volume": 0.7,
+      "reach": 8.0
+    },
+    "beep": {
+      "about": "The countdown, each second of it: a clean electronic tone.",
+      "length": 0.28,
+      "looped": false,
+      "pitch": [[0.0, 880.0]],
+      "buzz": [[0.0, 1.0]],
+      "noise": [[0.0, 0.0]],
+      "loudness": [[0.0, 0.0], [0.01, 1.0], [0.2, 0.8], [0.28, 0.0]],
+      "formants": [
+        { "frequency": [[0.0, 880.0]], "width": 60.0, "gain": 1.0 },
+        { "frequency": [[0.0, 2640.0]], "width": 120.0, "gain": 0.25 }
+      ],
+      "volume": 0.6,
+      "reach": 50.0
+    },
+    "go": {
+      "about": "The off: the countdown's tone an octave up, and longer.",
+      "length": 0.7,
+      "looped": false,
+      "pitch": [[0.0, 1760.0]],
+      "buzz": [[0.0, 1.0]],
+      "noise": [[0.0, 0.0]],
+      "loudness": [[0.0, 0.0], [0.01, 1.0], [0.5, 0.8], [0.7, 0.0]],
+      "formants": [
+        { "frequency": [[0.0, 1760.0]], "width": 90.0, "gain": 1.0 },
+        { "frequency": [[0.0, 3520.0]], "width": 160.0, "gain": 0.3 }
+      ],
+      "volume": 0.6,
+      "reach": 50.0
+    }
+  }
+}

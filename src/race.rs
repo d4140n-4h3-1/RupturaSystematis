@@ -17,7 +17,13 @@
 //! them, losing speed by how square on it hits.
 //!
 //! A countdown of [`COUNTDOWN`] seconds holds the bike on the line; then the clock runs until the
-//! last lap is done. With MAZE_RACE_AUTOPILOT set, the bike drives itself round, steering for the
+//! last lap is done, a beep for each second of it and a higher one for the off.
+//!
+//! Every bike sounds ([`BikeSounds`], made from `data/sounds/bike_formants.json`): its engine's
+//! drone rising with its speed and louder for the throttle, a turbine's whine over it as it goes
+//! faster, a roar while it boosts - each where the bike is, so that a droid coming up behind is
+//! heard there - and a whoosh over a speed pad, a screech against a wall, a clunk bumping another
+//! bike, a thud landing off a crest. With MAZE_RACE_AUTOPILOT set, the bike drives itself round, steering for the
 //! checkpoints ahead - for trying the track out, and the beginnings of droids to race against.
 
 use crate::level::Marker;
@@ -38,6 +44,8 @@ use fyrox::{
         collider::Collider,
         mesh::Mesh,
         graph::{physics::RayCastOptions, Graph},
+        sound::{Sound as SoundNode, SoundBufferResource, SoundBuilder, Status},
+        transform::TransformBuilder,
         node::Node,
         pivot::PivotBuilder,
         Scene,
@@ -90,6 +98,22 @@ pub const PAD_FOR: f32 = 1.2;
 const PAD_HALF: (f32, f32) = (4.0, 2.6);
 const PAD_HEIGHT: f32 = 2.0;
 const PAD_FACING: f32 = 0.3;
+/// Where the bikes' sounds are described.
+pub const BIKE_SOUNDS: &str = "data/sounds/bike_formants.json";
+/// The sounds every bike makes all the while, looped: its engine, its whine and its boost's roar.
+const HUMS: [&str; 3] = ["engine", "whine", "boost"];
+/// How loud the engine is idling, of how loud it is with the throttle open; and how far its
+/// pitch, and the whine's, rise from a standstill to the boost's top speed.
+const ENGINE_IDLE: f32 = 0.45;
+const ENGINE_PITCH: (f32, f32) = (0.7, 1.8);
+const WHINE_PITCH: (f32, f32) = (0.8, 1.25);
+/// How hard, in m/s, a bike has to come into a wall to screech against it, onto the road to thud,
+/// or into another bike to clunk; and how long a bike screeches before it can again, in seconds.
+const KNOCK: f32 = 3.0;
+const LANDING: f32 = 3.0;
+const CLUNK: f32 = 2.0;
+const SCREECH_EVERY: f32 = 0.25;
+
 /// How far ahead a droid sees a speed pad and makes for it, and how far off its line it goes to.
 const PAD_SEEN: f32 = 45.0;
 const PAD_DETOUR: f32 = 6.0;
@@ -307,6 +331,11 @@ pub struct Handling {
     pub lean: f32,
     /// How long it is held up to [`PAD_SPEED`] yet, off a speed pad, in seconds.
     pub surge: f32,
+    /// Whether it boosted on its last step; and how hard, in m/s, it came into a wall and onto the
+    /// road, if it did.
+    pub boosting: bool,
+    pub knock: f32,
+    pub landing: f32,
 }
 
 impl Handling {
@@ -320,6 +349,9 @@ impl Handling {
             boost: 1.0,
             lean: 0.0,
             surge: 0.0,
+            boosting: false,
+            knock: 0.0,
+            landing: 0.0,
         }
     }
 
@@ -353,6 +385,8 @@ impl Handling {
         if dt <= 0.0 {
             return;
         }
+        self.knock = 0.0;
+        self.landing = 0.0;
         let up = if self.grounded { self.up } else { Vector3::y() };
         // Along the road and across it.
         let ahead = flat_on(self.ahead(), up);
@@ -374,6 +408,7 @@ impl Handling {
 
         // The boost, while there is some left and the rider wants it.
         let boosting = controls.boost && self.boost > 0.0 && controls.throttle > 0.0;
+        self.boosting = boosting;
         self.boost = if boosting {
             (self.boost - dt / BOOST_FOR).max(0.0)
         } else {
@@ -466,6 +501,7 @@ impl Handling {
                     let into = self.velocity.dot(&hit.normal);
                     if into < 0.0 {
                         self.velocity -= hit.normal * into;
+                        self.landing = -into;
                     }
                 }
                 self.grounded = true;
@@ -515,6 +551,7 @@ impl Handling {
         if into >= 0.0 {
             return;
         }
+        self.knock = self.knock.max(-into);
         let square = -into / self.velocity.norm().max(1e-3);
         self.velocity -= wall * into * (1.0 + bounce);
         self.velocity *= 1.0 - 0.5 * square;
@@ -620,6 +657,8 @@ struct Keys {
 pub(crate) struct Bike {
     pub root: Handle<Node>,
     pub rider: Option<Handle<Node>>,
+    /// Its engine, whine and boost, as [`HUMS`] has them, if they could be made.
+    pub hums: [Option<Handle<Node>>; 3],
 }
 
 /// One of those racing: the player's, first, or a droid's.
@@ -637,6 +676,11 @@ pub struct Racer {
     pub finished: Option<f32>,
     /// The speed pad it is over, if any: each pad kicks once as it is crossed.
     on_pad: Option<usize>,
+    /// How hard its engine is working, and how loud its boost roars, each from 0 to 1, following
+    /// the throttle and the boost; and how long until it can screech against a wall again.
+    revs: f32,
+    roar: f32,
+    screech_in: f32,
     /// Where it started on the grid, and which way it faced: where it goes back to, put back on
     /// the track before it has passed a gate.
     grid: (Vector3<f32>, f32),
@@ -654,6 +698,9 @@ impl Racer {
             pace,
             finished: None,
             on_pad: None,
+            revs: 0.0,
+            roar: 0.0,
+            screech_in: 0.0,
         }
     }
 
@@ -804,6 +851,9 @@ pub struct Race {
     target: Vector3<f32>,
     /// The speed pads' chevrons, blinking.
     lights: PadLights,
+    /// What the bikes sound like; and the countdown's last second beeped.
+    sounds: BikeSounds,
+    beeped: Option<u32>,
 }
 
 impl Race {
@@ -827,12 +877,14 @@ impl Race {
             eye: eye - at,
             target: target - at,
             lights: PadLights::default(),
+            sounds: BikeSounds::default(),
+            beeped: None,
         }
     }
 
     /// Puts the bikes into `scene` from their `model`: the player's with the droid on it from
     /// `droid`, and each droid's with its own from `rivals`, as far as they have loaded; at
-    /// `night`, each glowing its rider's colour.
+    /// `night`, each glowing a colour of its own; each sounding as `sounds` has bikes sound.
     pub fn spawn(
         &mut self,
         scene: &mut Scene,
@@ -840,10 +892,13 @@ impl Race {
         droid: Option<&ModelResource>,
         rivals: &[Option<ModelResource>],
         night: bool,
+        sounds: &BikeSounds,
     ) {
+        self.sounds = sounds.clone();
         for (n, racer) in self.racers.iter_mut().enumerate() {
             let rider = if n == 0 { droid } else { rivals.get(n - 1).and_then(Option::as_ref) };
-            let bike = build_bike(scene, model, rider);
+            let mut bike = build_bike(scene, model, rider);
+            bike.hums = sounds.hum(&mut scene.graph, bike.root);
             if night {
                 light_up_bike(&mut scene.graph, &bike, COLOURS[n % COLOURS.len()]);
             }
@@ -898,9 +953,15 @@ impl Race {
         let mut news = Vec::new();
         let started = self.countdown <= 0.0;
         if !started {
+            let second = self.countdown.ceil() as u32;
+            if self.beeped != Some(second) {
+                self.beeped = Some(second);
+                self.sounds.play(graph, "beep", self.racers[0].handling.position, 1.0);
+            }
             self.countdown -= dt;
             if self.countdown <= 0.0 {
                 news.push(RaceNews::Go);
+                self.sounds.play(graph, "go", self.racers[0].handling.position, 1.0);
             }
         } else if self.racers[0].finished.is_none() {
             self.time += dt;
@@ -935,6 +996,7 @@ impl Race {
             if let Some(on) = pad.filter(|_| pad != racer.on_pad) {
                 let before = racer.handling.speed();
                 racer.handling.surge();
+                self.sounds.play(graph, "surge", racer.handling.position, 1.0);
                 if n == 0 {
                     Log::info(format!(
                         "Race: speed pad {}, {:.0} to {:.0} km/h",
@@ -945,6 +1007,7 @@ impl Race {
                 }
             }
             racer.on_pad = pad;
+            sound_off(graph, racer, &self.sounds, controls.throttle, dt);
             // Fallen off the world - or a droid stuck, a long way off its way round: back on the
             // track.
             if racer.handling.position.y < self.track.start.y - 40.0 {
@@ -971,7 +1034,11 @@ impl Race {
                 _ => (),
             }
         }
-        bump(&mut self.racers);
+        for (at, closing) in bump(&mut self.racers) {
+            if closing > CLUNK {
+                self.sounds.play(graph, "bump", at, (closing / 10.0).clamp(0.3, 1.0));
+            }
+        }
         self.lights.update(dt);
         self.follow(graph, dt, skip);
         for racer in &self.racers {
@@ -1061,6 +1128,104 @@ impl Race {
     }
 }
 
+/// The bikes' sounds, made to play: each with how far off it is heard at full volume.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct BikeSounds {
+    sounds: Vec<(String, SoundBufferResource, f32)>,
+}
+
+impl BikeSounds {
+    /// The sounds in [`BIKE_SOUNDS`], made; none, if they cannot be.
+    pub fn load() -> Self {
+        let file = match <crate::formants::Sounds as crate::formants::Load>::load(BIKE_SOUNDS) {
+            Ok(file) => file,
+            Err(error) => {
+                Log::err(format!("Race: the bikes are silent, {error}"));
+                return Self::default();
+            }
+        };
+        let sounds = file
+            .sounds
+            .iter()
+            .filter_map(|(name, sound)| Some((name.clone(), crate::formants::buffer(sound, file.sample_rate)?, sound.reach)))
+            .collect();
+        Self { sounds }
+    }
+
+    fn get(&self, name: &str) -> Option<&(String, SoundBufferResource, f32)> {
+        self.sounds.iter().find(|(had, _, _)| had == name)
+    }
+
+    /// The looped sounds of [`HUMS`] on the bike at `root`, playing silently until they are
+    /// turned up.
+    fn hum(&self, graph: &mut Graph, root: Handle<Node>) -> [Option<Handle<Node>>; 3] {
+        HUMS.map(|name| {
+            let (_, buffer, reach) = self.get(name)?;
+            let hum = SoundBuilder::new(BaseBuilder::new())
+                .with_buffer(Some(buffer.clone()))
+                .with_looping(true)
+                .with_radius(*reach)
+                .with_gain(0.0)
+                .with_status(Status::Playing)
+                .build(graph)
+                .to_base();
+            graph.link_nodes(hum, root);
+            Some(hum)
+        })
+    }
+
+    /// Plays the sound `name` once at `at`, `gain` as loud as it is.
+    fn play(&self, graph: &mut Graph, name: &str, at: Vector3<f32>, gain: f32) {
+        let Some((_, buffer, reach)) = self.get(name) else {
+            return;
+        };
+        SoundBuilder::new(BaseBuilder::new().with_local_transform(TransformBuilder::new().with_local_position(at).build()))
+            .with_buffer(Some(buffer.clone()))
+            .with_radius(*reach)
+            .with_gain(gain)
+            .with_play_once(true)
+            .with_status(Status::Playing)
+            .build(graph);
+    }
+}
+
+/// How loud, and at what pitch, each of a bike's hums plays: its engine, whine and boost, as
+/// [`HUMS`] has them. `speed` is how fast it goes as a share of the boost's top speed, `revs` how
+/// hard its engine works and `roar` how loud its boost is, each 0 to 1.
+pub fn hum_levels(speed: f32, revs: f32, roar: f32) -> [(f32, f32); 3] {
+    let speed = speed.clamp(0.0, 1.2);
+    let engine = (ENGINE_IDLE + (1.0 - ENGINE_IDLE) * revs, ENGINE_PITCH.0 + (ENGINE_PITCH.1 - ENGINE_PITCH.0) * speed);
+    let whine = ((speed * 1.25).min(1.0).powi(2) * (0.5 + 0.5 * revs), WHINE_PITCH.0 + (WHINE_PITCH.1 - WHINE_PITCH.0) * speed);
+    let boost = (roar, 0.9 + 0.3 * speed);
+    [engine, whine, boost]
+}
+
+/// The racer's bike sounding as it goes, `throttle` held, after a step of `dt`: its hums turned to
+/// how it goes, and a screech if it came hard into a wall, a thud if it came down hard.
+fn sound_off(graph: &mut Graph, racer: &mut Racer, sounds: &BikeSounds, throttle: f32, dt: f32) {
+    let Some(bike) = &racer.bike else {
+        return;
+    };
+    let handling = &racer.handling;
+    racer.revs += (throttle.max(0.0) - racer.revs) * (1.0 - (-6.0 * dt).exp());
+    racer.roar += (handling.boosting as u8 as f32 - racer.roar) * (1.0 - (-10.0 * dt).exp());
+    let levels = hum_levels(handling.speed().abs() / BOOST_SPEED, racer.revs, racer.roar);
+    for (hum, (gain, pitch)) in bike.hums.iter().zip(levels) {
+        if let Some(sound) = hum.and_then(|hum| graph.try_get_mut(hum).ok()).and_then(|node| node.cast_mut::<SoundNode>()) {
+            sound.set_gain(gain);
+            sound.set_pitch(pitch as f64);
+        }
+    }
+    racer.screech_in = (racer.screech_in - dt).max(0.0);
+    if handling.knock > KNOCK && racer.screech_in <= 0.0 {
+        racer.screech_in = SCREECH_EVERY;
+        sounds.play(graph, "scrape", handling.position, (handling.knock / 15.0).clamp(0.3, 1.0));
+    }
+    if handling.landing > LANDING {
+        sounds.play(graph, "land", handling.position, (handling.landing / 10.0).clamp(0.3, 1.0));
+    }
+}
+
 /// A bike in `scene` from its `model`, with the droid on it from `droid`, if there is one.
 pub(crate) fn build_bike(scene: &mut Scene, model: &ModelResource, droid: Option<&ModelResource>) -> Bike {
     let bike = model.instantiate(scene);
@@ -1091,7 +1256,7 @@ pub(crate) fn build_bike(scene: &mut Scene, model: &ModelResource, droid: Option
     graph[root]
         .local_transform_mut()
         .set_scale(Vector3::repeat(crate::player::DROID_SCALE));
-    Bike { root, rider }
+    Bike { root, rider, hums: [None; 3] }
 }
 
 /// Has `bike` glow `colour`, as a light cycle does: its pale hull, and the lines of light along it
@@ -1164,8 +1329,10 @@ fn traffic(handling: &Handling, n: usize, bikes: &[(Vector3<f32>, Vector3<f32>)]
     swerve
 }
 
-/// Bikes that have come together pushed apart, bouncing off each other.
-fn bump(racers: &mut [Racer]) {
+/// Bikes that have come together pushed apart, bouncing off each other: where each pair met, and
+/// how fast they were coming together.
+fn bump(racers: &mut [Racer]) -> Vec<(Vector3<f32>, f32)> {
+    let mut met = Vec::new();
     for a in 0..racers.len() {
         for b in a + 1..racers.len() {
             let (pa, pb) = (racers[a].handling.position, racers[b].handling.position);
@@ -1183,9 +1350,11 @@ fn bump(racers: &mut [Racer]) {
                 let impulse = normal * closing * (1.0 + CONTACT_BOUNCE) / 2.0;
                 racers[a].handling.velocity -= impulse;
                 racers[b].handling.velocity += impulse;
+                met.push(((pa + pb) / 2.0, closing));
             }
         }
     }
+    met
 }
 
 /// Where the camera wants to be behind the bike going at `speed`, and what it looks at.
@@ -1458,10 +1627,14 @@ mod tests {
         // Flat out at 45 degrees into the wall at x = 8.
         let mut bike = Handling::new(Vector3::new(0.0, HOVER, 0.0), std::f32::consts::FRAC_PI_4);
         bike.velocity = bike.ahead() * TOP_SPEED;
+        let mut knock: f32 = 0.0;
         for _ in 0..120 {
             bike.step(Controls { throttle: 1.0, ..Default::default() }, 1.0 / 60.0, &mut cast);
             assert!(bike.position.x < 8.0 - RADIUS * 0.5, "through the wall at {:?}", bike.position);
+            knock = knock.max(bike.knock);
         }
+        // How hard it hit, for its screech: about what it was going square into the wall.
+        assert!(knock > TOP_SPEED * 0.5, "{knock}");
         // It goes on along the wall, slower.
         assert!(bike.velocity.z > 5.0 && bike.velocity.norm() < TOP_SPEED, "{:?} at {:?} yaw {}", bike.velocity, bike.position, bike.yaw);
     }
@@ -1480,12 +1653,16 @@ mod tests {
         let mut bike = Handling::new(Vector3::new(0.0, 3.0 + HOVER, 0.0), 0.0);
         bike.velocity = Vector3::new(0.0, 0.0, 30.0);
         let mut flew = false;
+        let mut landing: f32 = 0.0;
         for _ in 0..90 {
             bike.step(Controls { throttle: 1.0, ..Default::default() }, 1.0 / 60.0, &mut cast);
             flew |= !bike.grounded;
+            landing = landing.max(bike.landing);
             assert!(bike.position.y >= HOVER - 1e-3);
         }
         assert!(flew && bike.grounded && (bike.position.y - HOVER).abs() < 1e-3, "{:?}", bike.position);
+        // Down 3 m, falling hard: about sqrt(2 g FALL h), for its thud.
+        assert!(landing > LANDING, "{landing}");
     }
 
     #[test]
@@ -1535,6 +1712,33 @@ mod tests {
     }
 
     #[test]
+    fn the_bikes_sounds_are_all_there_loud_enough_and_not_clipped() {
+        let file = <crate::formants::Sounds as crate::formants::Load>::load(BIKE_SOUNDS).unwrap();
+        for name in HUMS.iter().chain(&["surge", "scrape", "bump", "land", "beep", "go"]) {
+            let sound = &file.sounds[*name];
+            assert_eq!(sound.looped, HUMS.contains(name), "{name}");
+            let samples = crate::formants::synth::make(sound, file.sample_rate);
+            let peak = samples.iter().fold(0.0f32, |most, s| most.max(s.abs()));
+            assert!(peak > 0.05 && peak <= 1.0, "{name}: peak {peak}");
+        }
+    }
+
+    #[test]
+    fn the_engine_rises_with_speed_and_the_throttle_and_the_boost_roars_only_boosting() {
+        let idle = hum_levels(0.0, 0.0, 0.0);
+        let flat_out = hum_levels(TOP_SPEED / BOOST_SPEED, 1.0, 0.0);
+        let boosting = hum_levels(1.0, 1.0, 1.0);
+        // The engine: louder for the throttle, higher for the speed.
+        assert!(flat_out[0].0 > idle[0].0 && flat_out[0].1 > idle[0].1);
+        // The whine: nothing at a standstill, plain flat out.
+        assert!(idle[1].0 < 0.01 && flat_out[1].0 > 0.5, "{:?} {:?}", idle[1], flat_out[1]);
+        assert!(boosting[1].1 > flat_out[1].1);
+        // The boost: only boosting.
+        assert_eq!(flat_out[2].0, 0.0);
+        assert!(boosting[2].0 > 0.9);
+    }
+
+    #[test]
     fn a_pads_chevrons_light_one_at_a_time_from_the_back() {
         let lit: Vec<usize> = (0..7).map(|k| lit_chevron((k as f32 + 0.5) * CHEVRON_LIT)).collect();
         assert_eq!(lit, vec![0, 1, 2, 0, 1, 2, 0]);
@@ -1581,7 +1785,9 @@ mod tests {
         race.racers[0].handling.velocity = Vector3::new(5.0, 0.0, 0.0);
         race.racers[1].handling.position = Vector3::new(1.0, 0.0, 0.0);
         race.racers[1].handling.velocity = Vector3::zeros();
-        bump(&mut race.racers);
+        let met = bump(&mut race.racers);
+        assert_eq!(met.len(), 1);
+        assert!((met[0].1 - 5.0).abs() < 1e-4, "{:?}", met);
         let apart = race.racers[1].handling.position - race.racers[0].handling.position;
         assert!((apart.norm() - CONTACT).abs() < 1e-4);
         // The one that ran into the other has given it some of its speed.
