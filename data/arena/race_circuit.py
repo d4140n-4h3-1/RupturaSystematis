@@ -629,6 +629,8 @@ def build_scenery(secs, m, bounds, crowd):
     # Its crowd, on every row, facing the straight.
     crowd.stand(Vector(((x0_ + x1_) / 2, stand_y, 0.0)), Vector((1, 0, 0)), Vector((0, 1, 0)), x1_ - x0_ - 1.0,
                 [(row * 1.6, (row + 1) * 1.6, 0.8 + row * 0.9) for row in range(8)])
+    # Its monitor, up over the roof.
+    crowd.monitor(Vector(((x0_ + x1_) / 2, stand_y + 8.0, 12.6 + 1.5 + 4.5)), Vector((0, -1, 0)), Vector((1, 0, 0)), 16.0)
     # Light towers round the track.
     (x0, y0), (x1, y1) = bounds
     placed = 0
@@ -731,7 +733,8 @@ def main():
         objs += build_scenery(secs, m, bounds, crowd)
         objs.append(build_ground(m, bounds))
     objs += crowd.objs
-    print(f"[race] crowd: {crowd.figures} on {crowd.stands} stands, in {len(crowd.objs)} sections")
+    sections = sum(1 for o in crowd.objs if o.name.startswith("Crowd_"))
+    print(f"[race] crowd: {crowd.figures} on {crowd.stands} stands, in {sections} sections; {crowd.monitors} monitors")
     checkpoints = place_markers(secs)
     highest = max(s.centre.z for s in secs)
     banked = max(abs(s.bank) for s in secs)

@@ -8,11 +8,18 @@ skeleton and its fifty meshes, which would cost as much as a city's crowd each.
 Each stand is cut along its length into sections CHUNK long, every section's spectators one mesh,
 `Crowd_<stand>_<section>`, its origin in its middle: the game (src/race.rs, Crowd) bobs each
 section up and down, idly, and jumping as the bikes come by.
+
+Over each stand, a giant monitor (`monitor`): a 16:9 screen in a lit frame up on two masts,
+facing the road and turned a little towards the bikes coming, for the crowd across the road and
+the riders to see. The screen is a mesh of its own, `Monitor_<n>`, its picture's corners at its
+own; the game shows the race on it, live, from a camera of its own (src/race.rs, Broadcast).
 """
 
 import math
 import random
 
+import bmesh
+import bpy
 from mathutils import Vector
 
 CHUNK = 6.0             # how long a section of a stand is, that moves as one
@@ -27,6 +34,8 @@ COLOURS = {
     "Blue": (0.15, 0.3, 1.0),
 }
 NIGHT_GLOW = 0.25       # how brightly they glow their colours at night, as the droids do
+MONITOR_TURN = 20.0     # how far a monitor is turned from square on to the road, towards the bikes coming, in degrees
+MONITOR_TILT = 8.0      # and how far it leans down
 
 
 class Crowd:
@@ -37,6 +46,10 @@ class Crowd:
         else:
             self.bodies = [rc.material(f"Crowd{name}", rgb, roughness=0.5, metallic=0.1) for name, rgb in COLOURS.items()]
         self.joints = rc.material("CrowdJoints", (0.05, 0.05, 0.06), roughness=0.5)
+        self.frame = rc.material("MonitorFrame", (0.03, 0.035, 0.045), roughness=0.4, metallic=0.5)
+        self.trim = rc.glow("MonitorTrim", (0.0, 0.85, 1.0), 3.0)
+        self.screen = rc.glow("MonitorScreen", (1.0, 1.0, 1.0), 1.0)
+        self.monitors = 0
         self.visor = rc.glow("CrowdVisor", (0.9, 0.95, 1.0), 3.0)
         self.rng = random.Random(seed)
         self.stands = 0
@@ -70,6 +83,54 @@ class Crowd:
             else:
                 box(side * (0.25 * s) + up * 0.7, (0.05, 0.05, 0.2), body)
         self.figures += 1
+
+    def monitor(self, centre, facing, along, width):
+        """A giant monitor `width` across, 16:9, its screen's middle at `centre`: facing the way
+        `facing` is, flat, turned towards `-along` (the way the bikes come from) by MONITOR_TURN and
+        tilted down by MONITOR_TILT; on two masts down to the ground."""
+        rc = self.rc
+        up = Vector((0, 0, 1))
+        turn, tilt = math.radians(MONITOR_TURN), math.radians(MONITOR_TILT)
+        n = (facing * math.cos(turn) - along * math.sin(turn)).normalized()
+        n = (n * math.cos(tilt) - up * math.sin(tilt)).normalized()
+        f = -n                                  # the way someone looking at it looks
+        right = f.cross(up).normalized()
+        upward = right.cross(f).normalized()
+        height = width * 9 / 16
+        name = f"Monitor_{self.monitors}"
+        self.monitors += 1
+        # The screen: its picture's left at the left, its top at the top, as one looking at it sees.
+        bm = bmesh.new()
+        uv = bm.loops.layers.uv.new("UVMap")
+        corners = [(-1, -1, 0.0, 0.0), (1, -1, 1.0, 0.0), (1, 1, 1.0, 1.0), (-1, 1, 0.0, 1.0)]
+        face = bm.faces.new([bm.verts.new(n * 0.05 + right * (sx * width / 2) + upward * (sy * height / 2)) for sx, sy, _, _ in corners])
+        for loop, (_, _, u, v) in zip(face.loops, corners):
+            loop[uv].uv = (u, v)
+        face.normal_update()
+        if face.normal.dot(n) < 0:
+            face.normal_flip()
+        mesh = bpy.data.meshes.new(name)
+        bm.to_mesh(mesh)
+        bm.free()
+        mesh.materials.append(self.screen)
+        obj = bpy.data.objects.new(name, mesh)
+        obj.location = centre
+        bpy.context.scene.collection.objects.link(obj)
+        self.objs.append(obj)
+        # Its frame, lit round the screen, and the masts it stands on.
+        b = rc.Builder(f"MonitorFrame_{self.monitors - 1}")
+        b.oriented_box(centre - n * 0.4, right, n, upward, (width / 2 + 0.8, 0.4, height / 2 + 0.8), self.frame)
+        for a, c in (((-1, -1), (1, -1)), ((1, -1), (1, 1)), ((1, 1), (-1, 1)), ((-1, 1), (-1, -1))):
+            p = centre + n * 0.06 + right * (a[0] * (width / 2 + 0.3)) + upward * (a[1] * (height / 2 + 0.3))
+            q = centre + n * 0.06 + right * (c[0] * (width / 2 + 0.3)) + upward * (c[1] * (height / 2 + 0.3))
+            d = q - p
+            b.oriented_box((p + q) / 2, d.normalized(), n, d.normalized().cross(n), (d.length / 2 + 0.15, 0.06, 0.15), self.trim)
+        bottom = centre.z - height / 2 - 0.8
+        for side in (-1, 1):
+            foot = centre - n * 0.9 + right * (side * width / 3)
+            b.oriented_box(Vector((foot.x, foot.y, bottom / 2)), right, Vector((n.x, n.y, 0)).normalized(), up,
+                           (0.5, 0.5, bottom / 2 + 0.3), self.frame)
+        self.objs.append(b.finish())
 
     def stand(self, middle, along, out, length, rows):
         """Spectators on a stand: `middle` the middle of its front at the ground, `along` along it,

@@ -28,7 +28,9 @@
 //! The grandstands are full ([`Crowd`]): spectators built into the track, a section of a stand
 //! at a time (`Crowd_<stand>_<section>`, see `data/arena/race_crowd.py`), bobbing idly and
 //! jumping as the bikes come by, each stand roaring louder; and near the player, their cameras
-//! flash - the droid's flashlight, borrowed, fired for a moment at the bikes. With
+//! flash - the droid's flashlight, borrowed, fired for a moment at the bikes. Over each stand a
+//! giant monitor shows the race live ([`Broadcast`]): a camera of its own following the player,
+//! cutting from shot to shot. With
 //! MAZE_RACE_AUTOPILOT set, the bike drives itself round, steering for the
 //! checkpoints ahead - for trying the track out, and the beginnings of droids to race against.
 
@@ -43,7 +45,7 @@ use fyrox::{
     graph::SceneGraph,
     keyboard::KeyCode,
     material::{Material, MaterialProperty, MaterialResource},
-    resource::texture::{Texture, TextureKind, TexturePixelKind, TextureResource},
+    resource::texture::{Texture, TextureKind, TexturePixelKind, TextureResource, TextureResourceExtension},
     resource::model::{ModelResource, ModelResourceExtension},
     scene::{
         animation::AnimationPlayer,
@@ -54,6 +56,7 @@ use fyrox::{
             Mesh, MeshBuilder,
         },
         light::spot::SpotLight,
+        camera::{Camera, CameraBuilder},
         graph::{physics::RayCastOptions, Graph},
         sound::{Sound as SoundNode, SoundBufferResource, SoundBuilder, Status},
         transform::TransformBuilder,
@@ -132,6 +135,17 @@ const FLASH_FOR: f32 = 0.12;
 const FLASH_BRIGHTNESS: f32 = 6.0;
 const FLASH_REACH: f32 = 30.0;
 const FLASH_CONE: f32 = 70.0;
+/// The monitors' picture: how many pixels across and down, how often it is drawn - every so many
+/// frames - and how near a monitor the player has to be for it to be drawn at all, in meters; how
+/// brightly the screens glow it; how wide the camera sees, in degrees; and how long each shot is
+/// held before it cuts to the next, in seconds.
+const PICTURE: (u32, u32) = (512, 288);
+const PICTURE_EVERY: u32 = 2;
+const PICTURE_WITHIN: f32 = 300.0;
+const SCREEN_GLOW: f32 = 1.4;
+const BROADCAST_FOV: f32 = 50.0;
+const SHOT_FOR: f32 = 5.5;
+
 /// How big the spark of a flash is where it goes off, in meters, and how brightly it glows.
 const SPARK: f32 = 0.18;
 const SPARK_GLOW: f32 = 8.0;
@@ -901,8 +915,9 @@ pub struct Race {
     /// What the bikes sound like; and the countdown's last second beeped.
     sounds: BikeSounds,
     beeped: Option<u32>,
-    /// The grandstands' crowds.
+    /// The grandstands' crowds, and their monitors' live picture.
     crowd: Crowd,
+    broadcast: Broadcast,
     /// Whether each racer was ahead of the player, as the standings go, and when each last laughed
     /// at them, on the race's clock.
     ahead: Vec<bool>,
@@ -933,6 +948,7 @@ impl Race {
             sounds: BikeSounds::default(),
             beeped: None,
             crowd: Crowd::default(),
+            broadcast: Broadcast::default(),
             ahead: Vec::new(),
             laughed: Vec::new(),
         }
@@ -963,12 +979,14 @@ impl Race {
         }
         self.lights = PadLights::claim(&mut scene.graph);
         self.crowd = Crowd::claim(&mut scene.graph, sounds);
+        self.broadcast = Broadcast::claim(&mut scene.graph);
     }
 
     /// Takes the bikes out of the scene.
     pub fn remove(&mut self, graph: &mut Graph) {
         self.lights.restore();
         self.crowd.remove(graph);
+        self.broadcast.remove(graph);
         for racer in &mut self.racers {
             if let Some(bike) = racer.bike.take() {
                 graph.remove_node(bike.root);
@@ -1104,6 +1122,7 @@ impl Race {
         let bikes: Vec<Vector3<f32>> = self.racers.iter().map(|r| r.handling.position).collect();
         let everyone_out = self.racers[0].finished.is_some();
         self.crowd.update(graph, dt, &bikes, everyone_out);
+        self.broadcast.update(graph, dt, &self.racers[0].handling);
         self.follow(graph, dt, skip);
         for racer in &self.racers {
             racer.place(graph, self.time);
@@ -1523,6 +1542,136 @@ impl Crowd {
         for node in self.roars.iter().flatten().copied().chain(self.flashes.iter().flat_map(|f| [f.light, f.spark])) {
             if graph.try_get(node).is_ok() {
                 graph.remove_node(node);
+            }
+        }
+        *self = Self::default();
+    }
+}
+
+/// The shots the broadcast cuts between, each following the player's bike.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Shot {
+    /// Out in front, low, looking back at the bike coming.
+    #[default]
+    Front,
+    /// From beside the track ahead, the bike sweeping past.
+    Trackside,
+    /// From high up behind.
+    Aerial,
+}
+
+impl Shot {
+    fn next(self) -> Self {
+        match self {
+            Self::Front => Self::Trackside,
+            Self::Trackside => Self::Aerial,
+            Self::Aerial => Self::Front,
+        }
+    }
+
+    /// Where the camera is for the bike `handling`, and what it looks at; `fixed` where a
+    /// trackside camera was put at the start of the shot.
+    pub fn view(self, handling: &Handling, fixed: Vector3<f32>) -> (Vector3<f32>, Vector3<f32>) {
+        let at = handling.position;
+        let ahead = handling.ahead();
+        let look = at + Vector3::y() * 0.8;
+        match self {
+            Self::Front => (at + ahead * 7.0 + Vector3::y() * 2.0, look),
+            Self::Trackside => (fixed, look),
+            Self::Aerial => (at - ahead * 22.0 + Vector3::y() * 16.0, look + ahead * 6.0),
+        }
+    }
+}
+
+/// The monitors over the stands, and the camera whose picture they show: following the player,
+/// cutting from shot to shot, drawn only while the player is near a monitor, and not every frame.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Broadcast {
+    camera: Option<Handle<Node>>,
+    screens: Vec<Vector3<f32>>,
+    shot: Shot,
+    held: f32,
+    fixed: Vector3<f32>,
+    frame: u32,
+}
+
+impl Broadcast {
+    /// The monitors of the track in `graph` - `Monitor_<n>`, see `data/arena/race_crowd.py` - each
+    /// showing the picture of a new camera; nothing, if there are none.
+    pub fn claim(graph: &mut Graph) -> Self {
+        let screens: Vec<Handle<Node>> = graph
+            .pair_iter()
+            .filter(|(_, node)| node.name().starts_with("Monitor_") && node.cast::<Mesh>().is_some())
+            .map(|(handle, _)| handle)
+            .collect();
+        if screens.is_empty() {
+            return Self::default();
+        }
+        let picture = TextureResource::new_render_target(PICTURE.0, PICTURE.1);
+        let mut material = Material::standard();
+        material.set_property("diffuseColor", Color::WHITE);
+        material.set_property("emissionStrength", Vector3::repeat(SCREEN_GLOW));
+        // Its colour as well as its glow, as a computer's screen shows a picture: black where the
+        // picture is black, not the white of the screen lit.
+        material.bind("diffuseTexture", picture.clone());
+        material.bind("emissionTexture", picture.clone());
+        // A camera's picture comes out of the wgpu backend upside down, as the engine has it for
+        // its own UI drawn into a texture (`flip_y`): turned up the right way by reading it from
+        // the bottom up - the picture repeats, so -v is 1 - v.
+        material.set_property("texCoordScale", fyrox::core::algebra::Vector2::new(1.0f32, -1.0));
+        let material = MaterialResource::new_embedded(material);
+        let mut at = Vec::new();
+        for &screen in &screens {
+            at.push(graph[screen].global_position());
+            if let Some(mesh) = graph[screen].cast_mut::<Mesh>() {
+                for surface in mesh.surfaces_mut() {
+                    surface.set_material(material.clone());
+                }
+            }
+            graph[screen].set_cast_shadows(false);
+        }
+        let camera: Handle<Node> = CameraBuilder::new(BaseBuilder::new())
+            .with_fov(BROADCAST_FOV.to_radians())
+            .enabled(false)
+            .build(graph)
+            .to_base();
+        if let Some(camera) = graph[camera].cast_mut::<Camera>() {
+            camera.set_render_target(Some(picture));
+        }
+        Log::info(format!("Race: {} monitors", screens.len()));
+        Self { camera: Some(camera), screens: at, ..Default::default() }
+    }
+
+    /// The camera on `dt` seconds after the player's bike, `handling`: on to the next shot when
+    /// this one has been held long enough, drawn this frame if it is one it is drawn on and the
+    /// player is near enough a monitor to see it.
+    pub fn update(&mut self, graph: &mut Graph, dt: f32, handling: &Handling) {
+        let Some(camera) = self.camera else {
+            return;
+        };
+        self.held += dt;
+        self.frame = self.frame.wrapping_add(1);
+        if self.held >= SHOT_FOR {
+            self.held = 0.0;
+            self.shot = self.shot.next();
+            // A trackside camera goes up ahead, off to one side, for the bike to sweep past.
+            let side = Vector3::new(handling.ahead().z, 0.0, -handling.ahead().x);
+            self.fixed = handling.position + handling.ahead() * 60.0 + side * 14.0 + Vector3::y() * 5.0;
+        }
+        let near = self.screens.iter().any(|at| (at - handling.position).norm() < PICTURE_WITHIN);
+        let (eye, look) = self.shot.view(handling, self.fixed);
+        let turn = UnitQuaternion::face_towards(&(look - eye), &Vector3::y());
+        let Some(camera) = graph.try_get_mut(camera).ok().and_then(|node| node.cast_mut::<Camera>()) else {
+            return;
+        };
+        camera.local_transform_mut().set_position(eye).set_rotation(turn);
+        camera.set_enabled(near && self.frame.is_multiple_of(PICTURE_EVERY));
+    }
+
+    fn remove(&mut self, graph: &mut Graph) {
+        if let Some(camera) = self.camera.take() {
+            if graph.try_get(camera).is_ok() {
+                graph.remove_node(camera);
             }
         }
         *self = Self::default();
@@ -2076,6 +2225,28 @@ mod tests {
         // The boost: only boosting.
         assert_eq!(flat_out[2].0, 0.0);
         assert!(boosting[2].0 > 0.9);
+    }
+
+    #[test]
+    fn the_broadcast_cuts_round_its_shots_each_looking_at_the_bike() {
+        let bike = Handling::new(Vector3::new(10.0, HOVER, 20.0), 0.0);
+        let fixed = Vector3::new(30.0, 5.0, 80.0);
+        let mut shot = Shot::default();
+        let mut seen = Vec::new();
+        for _ in 0..3 {
+            let (eye, look) = shot.view(&bike, fixed);
+            // Every shot looks at the bike, from off it.
+            assert!((look - bike.position).norm() < 7.0 && (eye - look).norm() > 5.0, "{shot:?}");
+            seen.push(shot);
+            shot = shot.next();
+        }
+        assert_eq!(shot, Shot::Front, "and round again");
+        assert_eq!(seen, vec![Shot::Front, Shot::Trackside, Shot::Aerial]);
+        // In front of it, looking back; trackside, where it was put; high up behind.
+        assert!(Shot::Front.view(&bike, fixed).0.z > bike.position.z);
+        assert_eq!(Shot::Trackside.view(&bike, fixed).0, fixed);
+        let aerial = Shot::Aerial.view(&bike, fixed).0;
+        assert!(aerial.z < bike.position.z && aerial.y > 10.0);
     }
 
     #[test]

@@ -104,6 +104,7 @@ STANDS = [
 ]
 MOST_STANDS = 8                 # the crowds are heavy: the model must stay well under 100 MB
 STAND = (60.0, 8, 1.6, 1.0, 3.0)   # long, rows, each row's depth and rise, gap from the wall
+MONITOR = 24.0                     # how wide each stand's monitor is
 
 CITY_MARGIN = 420.0          # how far out from the track the city goes
 GROUND_MARGIN = 600.0        # and the floor under it
@@ -647,6 +648,8 @@ def stands(city, crowd):
             city.shells.oriented_box(e + out * (deep / 2) + up * (roof / 2), along, out, up, (0.5, deep / 2 + 0.4, roof / 2), city.dark[2])
             city.line(e - out * 0.05, e - out * 0.05 + up * roof, shade, width=0.2)
         crowd.stand(middle, along, out, length - 1.0, tiers)
+        # Its monitor, up over the canopy.
+        crowd.monitor(middle + out * (deep * 0.7) + up * (roof + 2.0 + MONITOR / 2 * 9 / 16), -out, along, MONITOR)
         placed.append(corners)
         made += 1
     # Kept clear of the city's buildings, once they are all down: a stand's room, reckoned as a
