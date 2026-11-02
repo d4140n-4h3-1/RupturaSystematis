@@ -4,6 +4,9 @@
 //! steps off - and stops at the first thing it hits, glowing there a moment longer. Hitting the
 //! player, it hurts them: the game is told (see [`Shots::update`]).
 //!
+//! The quadcopter fires a pair at once, smaller, one from each of its barrels, side by side (see
+//! [`Shots::fire`]): the two of them hurt as one shot does, whether one hits or both.
+//!
 //! It glows, and lights what it passes, in the colour of the drone's mood as it fired. Like the
 //! pistol's bolts, a handful are made once and shown while they fly: adding or taking away a mesh
 //! has the traced shadows gather every mesh in the scene again. It sounds as the pistol's bolts do
@@ -44,9 +47,9 @@ use fyrox::{
 /// The shot's model.
 pub const SHOT_MODEL: &str = "data/drone_shot.glb";
 
-/// How many can be in the air at once, from every drone. Firing another takes the one that has
-/// flown longest.
-const SHOTS: usize = 8;
+/// How many can be in the air at once, from every drone - a pair from a quadcopter counting as
+/// two. Firing another takes the one that has flown longest.
+const SHOTS: usize = 12;
 /// How fast one flies, in meters per second, and how far before it is gone, if it hits nothing.
 const SPEED: f32 = 12.0;
 const RANGE: f32 = 40.0;
@@ -56,7 +59,7 @@ const GLOW: f32 = 3.0;
 const FLASH_REACH: f32 = 4.0;
 const FLASH_BRIGHTNESS: f32 = 2.5;
 /// How long one that has hit something glows where it hit, in seconds; and how far back from what
-/// it hit its middle stops, in meters - its ball is 0.12 m across.
+/// it hit its middle stops, in meters - its ball is 0.12 m across, as made.
 const IMPACT: f32 = 0.15;
 const STOP_SHORT: f32 = 0.06;
 
@@ -73,6 +76,10 @@ struct Flight {
     /// What fired it, which it flies through, and where from.
     from: Handle<Collider>,
     fired_at: Vector3<f32>,
+    /// How big it is, as a part of how it was made; and which volley it was fired in - the
+    /// quadcopter's pair are one volley, which hurts whatever it hits once.
+    size: f32,
+    volley: u32,
 }
 
 /// Something a shot hit: its collider, where, and which way the shot was going; and what fired it.
@@ -103,6 +110,10 @@ pub struct Shots {
     passed: Vec<(Handle<Collider>, Pass)>,
     /// The sound of a shot leaving, and how far off it is heard at full volume, if there is one.
     sound: Option<(SoundBufferResource, f32)>,
+    /// How many volleys have been fired, and what each one still in the air has hit, so as not
+    /// to hit it again.
+    volleys: u32,
+    struck: Vec<(u32, Handle<Collider>)>,
 }
 
 /// The sound called `name` in `sounds`, made to play, with how far off it is heard at full
@@ -179,49 +190,64 @@ impl Shots {
             })
             .collect::<Vec<_>>();
         Log::info(format!("Drone shots: {} made", shots.len()));
-        Self { shots, sound, passed: Vec::new() }
+        Self { shots, sound, passed: Vec::new(), volleys: 0, struck: Vec::new() }
     }
 
-    /// Fires a shot from `from` at `at`, glowing `colour` (strength 1 at its brightest).
+    /// Fires a volley at `at`, aimed from `from`: a shot from each of `muzzles`, all flying the
+    /// same way side by side, `size` as big as made, glowing `colour` (strength 1 at its
+    /// brightest).
+    #[allow(clippy::too_many_arguments)]
     pub fn fire(
         &mut self,
         graph: &mut Graph,
+        muzzles: &[Vector3<f32>],
         from: Vector3<f32>,
         at: Vector3<f32>,
+        size: f32,
         colour: Vector3<f32>,
         by: Handle<Collider>,
     ) {
         let Some(direction) = (at - from).try_normalize(1.0e-4) else {
             return;
         };
-        // A free one, or failing that the one that has flown furthest: the least range left.
-        let left = |shot: &Shot| shot.flight.map_or(f32::NEG_INFINITY, |flight| flight.range);
-        let Some(shot) = self.shots.iter_mut().min_by(|a, b| left(a).total_cmp(&left(b))) else {
-            return;
-        };
-        shot.flight = Some(Flight {
-            fired_at: from,
-            position: from,
-            direction,
-            range: RANGE,
-            landed: None,
-            from: by,
-        });
-        for (material, strength) in &shot.glows {
-            let mut material = material.data_ref();
-            material.set_property(DIFFUSE_COLOR, light_colour(colour));
-            material.set_property(EMISSION_STRENGTH, MaterialProperty::Vector3(colour * *strength * GLOW));
+        self.volleys = self.volleys.wrapping_add(1);
+        for &muzzle in muzzles {
+            // A free one, or failing that the one that has flown furthest: the least range left.
+            let left = |shot: &Shot| shot.flight.map_or(f32::NEG_INFINITY, |flight| flight.range);
+            let Some(shot) = self.shots.iter_mut().min_by(|a, b| left(a).total_cmp(&left(b))) else {
+                return;
+            };
+            shot.flight = Some(Flight {
+                fired_at: from,
+                position: muzzle,
+                direction,
+                range: RANGE,
+                landed: None,
+                from: by,
+                size,
+                volley: self.volleys,
+            });
+            for (material, strength) in &shot.glows {
+                let mut material = material.data_ref();
+                material.set_property(DIFFUSE_COLOR, light_colour(colour));
+                material.set_property(EMISSION_STRENGTH, MaterialProperty::Vector3(colour * *strength * GLOW));
+            }
+            // A smaller one lights less, and less far.
+            if let Ok(flash) = graph.try_get_mut_of_type::<PointLight>(shot.flash) {
+                flash.set_radius(FLASH_REACH * size.sqrt());
+                let light = flash.base_light_mut();
+                light.set_color(light_colour(colour));
+                light.set_intensity(FLASH_BRIGHTNESS * size.sqrt());
+            }
+            let node = &mut graph[shot.root];
+            node.local_transform_mut()
+                .set_position(muzzle)
+                .set_rotation(UnitQuaternion::face_towards(&direction, &Vector3::y()))
+                .set_scale(Vector3::repeat(size));
+            node.set_visibility(true);
+            hum(graph, shot.hum, true);
         }
-        if let Ok(flash) = graph.try_get_mut_of_type::<PointLight>(shot.flash) {
-            flash.base_light_mut().set_color(light_colour(colour));
-        }
-        let node = &mut graph[shot.root];
-        node.local_transform_mut()
-            .set_position(from)
-            .set_rotation(UnitQuaternion::face_towards(&direction, &Vector3::y()));
-        node.set_visibility(true);
-        hum(graph, shot.hum, true);
-        // The shot sounds where it leaves, once, and is gone.
+        // The volley sounds where it leaves, once, and is gone.
         if let Some((buffer, reach)) = &self.sound {
             SoundBuilder::new(
                 BaseBuilder::new().with_local_transform(
@@ -240,6 +266,9 @@ impl Shots {
     /// maze, through all the `drones`' bodies. What they hit this time.
     pub fn update(&mut self, graph: &mut Graph, dt: f32, drones: &[Handle<Collider>]) -> Vec<Hit> {
         self.passed.clear();
+        // Only the volleys still in the air can hit anything again.
+        let flying: Vec<u32> = self.shots.iter().filter_map(|shot| shot.flight.map(|flight| flight.volley)).collect();
+        self.struck.retain(|(volley, _)| flying.contains(volley));
         let mut hits = Vec::new();
         for shot in &mut self.shots {
             let Some(flight) = shot.flight.as_mut() else {
@@ -278,14 +307,18 @@ impl Shots {
                 },
             ));
             if let Some(hit) = hit {
-                hits.push(Hit {
-                    collider: hit.collider,
-                    at: hit.position.coords,
-                    way: flight.direction,
-                    by: from,
-                });
+                // A volley hurts what it hits once, however many of its shots hit it.
+                if !self.struck.contains(&(flight.volley, hit.collider)) {
+                    self.struck.push((flight.volley, hit.collider));
+                    hits.push(Hit {
+                        collider: hit.collider,
+                        at: hit.position.coords,
+                        way: flight.direction,
+                        by: from,
+                    });
+                }
                 let reach = (hit.position.coords - flight.position).norm();
-                flight.position += flight.direction * (reach - STOP_SHORT).max(0.0);
+                flight.position += flight.direction * (reach - STOP_SHORT * flight.size).max(0.0);
                 flight.range = 0.0;
                 flight.landed = Some(IMPACT);
                 graph[shot.root]
@@ -332,5 +365,79 @@ fn hum(graph: &mut Graph, hum: Option<Handle<Node>>, on: bool) {
         if on {
             hum.play();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use fyrox::core::algebra::Vector2;
+    use fyrox::scene::{
+        collider::{ColliderBuilder, ColliderShape},
+        pivot::PivotBuilder,
+        rigidbody::{RigidBodyBuilder, RigidBodyType},
+    };
+
+    /// Shots with nothing to show, and a wall across the way 5 m off.
+    fn range() -> (Graph, Shots, Handle<Collider>) {
+        let mut graph = Graph::new();
+        let shots = (0..SHOTS)
+            .map(|_| {
+                let root = PivotBuilder::new(BaseBuilder::new()).build(&mut graph).to_base();
+                let flash = PointLightBuilder::new(BaseLightBuilder::new(BaseBuilder::new())).build(&mut graph).to_base();
+                Shot { root, flash, hum: None, glows: Vec::new(), flight: None }
+            })
+            .collect();
+        let wall = ColliderBuilder::new(BaseBuilder::new()).with_shape(ColliderShape::cuboid(3.0, 3.0, 0.1)).build(&mut graph);
+        RigidBodyBuilder::new(
+            BaseBuilder::new()
+                .with_local_transform(TransformBuilder::new().with_local_position(Vector3::new(0.0, 0.0, 5.0)).build())
+                .with_child(wall),
+        )
+        .with_body_type(RigidBodyType::Static)
+        .build(&mut graph);
+        // The physics has its colliders by the second update.
+        for _ in 0..2 {
+            graph.update(Vector2::new(800.0, 600.0), 1.0 / 60.0, Default::default());
+        }
+        let shots = Shots { shots, ..Default::default() };
+        (graph, shots, wall)
+    }
+
+    /// Everything the shots hit, flying until every one has landed, or a second is up.
+    fn second_of(graph: &mut Graph, shots: &mut Shots) -> Vec<Hit> {
+        let mut hits = Vec::new();
+        for _ in 0..60 {
+            hits.extend(shots.update(graph, 1.0 / 60.0, &[]));
+            if shots.shots.iter().filter_map(|shot| shot.flight).all(|flight| flight.landed.is_some()) {
+                break;
+            }
+        }
+        hits
+    }
+
+    #[test]
+    fn a_quadcopters_pair_fly_side_by_side_small_and_hurt_what_they_hit_once() {
+        let (mut graph, mut shots, wall) = range();
+        let muzzles = [Vector3::new(-0.028, 0.0, 0.0), Vector3::new(0.028, 0.0, 0.0)];
+        shots.fire(&mut graph, &muzzles, Vector3::zeros(), Vector3::new(0.0, 0.0, 10.0), 0.35, Vector3::y(), Handle::NONE);
+        let flying: Vec<&Shot> = shots.shots.iter().filter(|shot| shot.flight.is_some()).collect();
+        assert_eq!(flying.len(), 2);
+        for shot in &flying {
+            assert_eq!(**graph[shot.root].local_transform().scale(), Vector3::repeat(0.35));
+        }
+        let hits = second_of(&mut graph, &mut shots);
+        assert_eq!(hits.len(), 1, "{hits:?}");
+        assert_eq!(hits[0].collider, wall);
+        // Each stopped at the wall, still side by side, as far apart as the barrels.
+        let at: Vec<Vector3<f32>> = shots.shots.iter().filter_map(|shot| shot.flight.map(|f| f.position)).collect();
+        assert_eq!(at.len(), 2);
+        assert!((at[0].x - at[1].x).abs() > 0.05 && at.iter().all(|p| p.z > 4.8 && p.z < 4.9), "{at:?}");
+        // Two volleys hurt twice.
+        let (mut graph, mut shots, _) = range();
+        for _ in 0..2 {
+            shots.fire(&mut graph, &muzzles[..1], Vector3::zeros(), Vector3::new(0.0, 0.0, 10.0), 1.0, Vector3::y(), Handle::NONE);
+        }
+        assert_eq!(second_of(&mut graph, &mut shots).len(), 2);
     }
 }

@@ -210,6 +210,23 @@ impl Kind {
         }
     }
 
+    /// Its barrels' muzzles, each of which fires a shot every time it fires (see
+    /// [`crate::drone_shot::Shots::fire`]), if it has more than the one; and how big its shots
+    /// are, as a part of the drone's: the quadcopter's pair are small, as its barrels are.
+    const fn barrels(self) -> &'static [&'static str] {
+        match self {
+            Kind::Security => &[],
+            Kind::Quad => &["quad_muzzle_l", "quad_muzzle_r"],
+        }
+    }
+
+    pub const fn shot_size(self) -> f32 {
+        match self {
+            Kind::Security => 1.0,
+            Kind::Quad => 0.35,
+        }
+    }
+
     /// Its nodes where its shots leave from and where its lamp goes, if it has them; without, they
     /// are along the way its body faces (see [`MUZZLE`] and [`LAMP_AT`]).
     const fn muzzle_and_eye(self) -> Option<(&'static str, &'static str)> {
@@ -398,11 +415,22 @@ pub struct Target {
 }
 
 /// What the drone did this frame: what it has something to say about, as [`DRONE_LINES`] names it; and
-/// where a shot leaves from, and its colour, if it has fired one.
-#[derive(Debug, Default, Clone, Copy, PartialEq)]
+/// what it fired, if it fired.
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct Doing {
     pub says: Option<&'static str>,
-    pub fired: Option<(Vector3<f32>, Vector3<f32>)>,
+    pub fired: Option<Fired>,
+}
+
+/// A volley a drone fired: where it is aimed from, and where each shot leaves from - from there,
+/// or from each of its barrels; how big they are, as a part of the drone's shots, and the colour
+/// they glow.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Fired {
+    pub from: Vector3<f32>,
+    pub muzzles: Vec<Vector3<f32>>,
+    pub size: f32,
+    pub colour: Vector3<f32>,
 }
 
 /// The drone in the scene.
@@ -418,6 +446,8 @@ pub struct Drone {
     /// [`Kind::muzzle_and_eye`]); NONE for one that has not.
     muzzle: Handle<Node>,
     eye: Handle<Node>,
+    /// Its barrels' muzzles, for a kind that fires from more than one (see [`Kind::barrels`]).
+    barrels: Vec<Handle<Node>>,
     /// Its body, and the ball that is, while it is in the round.
     hull: Handle<Node>,
     collider: Handle<Collider>,
@@ -503,6 +533,11 @@ impl Drone {
             let find = |name| graph.find_by_name(root, name).map_or(Handle::NONE, |(node, _)| node);
             (find(muzzle), find(eye))
         });
+        let barrels = kind
+            .barrels()
+            .iter()
+            .filter_map(|&name| graph.find_by_name(root, name).map(|(node, _)| node))
+            .collect();
         // Not scattering into a haze in the air: the drone is what glows.
         let lamp = PointLightBuilder::new(
             BaseLightBuilder::new(BaseBuilder::new().with_visibility(false))
@@ -541,6 +576,7 @@ impl Drone {
             lamp,
             muzzle,
             eye,
+            barrels,
             // Given a body once it is put down.
             hull: Handle::NONE,
             collider: Handle::NONE,
@@ -1031,7 +1067,18 @@ impl Drone {
                     .transform_point(&Point3::new(0.0, 0.0, MUZZLE))
                     .coords,
             };
-            doing.fired = Some((from, self.colour));
+            let barrels: Vec<Vector3<f32>> = self
+                .barrels
+                .iter()
+                .filter(|&&barrel| graph.is_valid_handle(barrel))
+                .map(|&barrel| graph[barrel].global_position())
+                .collect();
+            doing.fired = Some(Fired {
+                from,
+                muzzles: if barrels.is_empty() { vec![from] } else { barrels },
+                size: self.kind.shot_size(),
+                colour: self.colour,
+            });
         }
         doing
     }

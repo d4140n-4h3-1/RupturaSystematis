@@ -4564,9 +4564,10 @@ impl MazeGame {
             let doing = drone.update(graph, (grid, *origin), &target, &reachable, rng, ctx.dt, live);
             says.extend(doing.says.map(|said| (n, said)));
             // At its target's middle, wherever they are as it fires.
-            if let (Some((from, colour)), Some(shots)) = (doing.fired, self.shots.as_mut()) {
-                shots.fire(graph, from, target.middle, colour, drone.collider());
-                fired.push(from);
+            if let (Some(volley), Some(shots)) = (doing.fired, self.shots.as_mut()) {
+                let collider = drone.collider();
+                shots.fire(graph, &volley.muzzles, volley.from, target.middle, volley.size, volley.colour, collider);
+                fired.push(volley.from);
             }
         }
         // Its shot heard, as the player's are, by the droids searching or wary: they run to where
