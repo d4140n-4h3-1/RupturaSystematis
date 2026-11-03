@@ -291,6 +291,43 @@ pub struct Script {
     pub crowd: bool,
 }
 
+/// What the droids say among themselves about the player, on every map (see [`GOSSIP`]).
+pub const GOSSIP: &str = "data/dialogue/gossip.json";
+
+/// What the droids say among themselves about the player: news of a deed, how they take it, and
+/// what they think of them; and how one that hates them refuses to talk to them.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+pub struct Gossip {
+    /// For each deed, by name - `shooting`, `robbing`, `threatening` - what one says telling of
+    /// it: `saw` if it saw it done, `heard` if it was told.
+    pub news: HashMap<String, Telling>,
+    /// What one answers news with, by how it takes the player now it has heard it: `friendly`,
+    /// `neutral`, `wary` or `hostile`.
+    pub reactions: HashMap<String, Vec<Bark>>,
+    /// What the one telling says to close.
+    pub closings: Vec<Bark>,
+    /// Exchanges about the player, by how the first to speak takes them: two lines each, said by
+    /// one and then the other.
+    pub opinions: HashMap<String, Vec<Vec<Bark>>>,
+    /// What one that hates the player says, rather than talk to them.
+    pub refusals: Vec<Bark>,
+}
+
+/// How a deed is told: by one that saw it, or one that heard of it.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+pub struct Telling {
+    pub saw: Vec<Bark>,
+    pub heard: Vec<Bark>,
+}
+
+impl Gossip {
+    /// The gossip in the file at `path`.
+    pub fn load(path: &str) -> Result<Self, String> {
+        let text = crate::platform::read_to_string(path)?;
+        serde_json::from_str(&text).map_err(|error| format!("{path}: {error}"))
+    }
+}
+
 /// What two droids walking about by themselves say when they meet: lines said one after the
 /// other, by the first and then the second, in turn.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -459,6 +496,11 @@ pub struct View {
 pub struct Conversation {
     character: usize,
     line: String,
+    /// How many points of chance every check is the easier - or, less than none, the harder -
+    /// for what the droid thinks of the player (see [`Conversation::swayed`]).
+    sway: i32,
+    /// Whether the last check said was a bribe.
+    bribed: bool,
     /// The replies said so far, by the line they were said to and which of its replies they were.
     said: HashSet<(String, usize)>,
     /// How the last check went, if the last reply was one: what to say about it, and whether it
@@ -475,9 +517,30 @@ impl Conversation {
         Some(Self {
             character,
             line,
+            sway: 0,
+            bribed: false,
             said: HashSet::new(),
             note: None,
         })
+    }
+
+    /// As it is, but with every check `sway` points of chance the easier - harder, less than
+    /// none - for what the droid thinks of the player (see `hydroxus_ai::social::opinion::sway`):
+    /// never under 5 nor over 95, nor a bribe's less likely than the check on its own.
+    pub fn swayed(mut self, sway: i32) -> Self {
+        self.sway = sway;
+        self
+    }
+
+    /// The chance of a check `chance` likely, as what the droid thinks of the player sways it.
+    fn chance(&self, chance: u32) -> u32 {
+        (chance as i32 + self.sway).clamp(5, 95) as u32
+    }
+
+    /// How the last check went, if the last reply was one: whether it succeeded, and whether it
+    /// was a bribe.
+    pub fn last_check(&self) -> Option<(bool, bool)> {
+        self.note.as_ref().map(|&(_, passed)| (passed, self.bribed))
     }
 
     fn line<'a>(&self, script: &'a Script) -> Option<&'a Line> {
@@ -529,7 +592,7 @@ impl Conversation {
                         label: format!(
                             "[{} {}%] [{}] {}",
                             check.skill,
-                            bribe.chance,
+                            self.chance(bribe.chance),
                             bribe.credits,
                             facts.fill(&bribe.say, false)
                         ),
@@ -539,7 +602,7 @@ impl Conversation {
                         let say = facts.fill(&reply.say, false);
                         Choice {
                             label: match check {
-                                Some(check) => format!("[{} {}%] {say}", check.skill, check.chance),
+                                Some(check) => format!("[{} {}%] {say}", check.skill, self.chance(check.chance)),
                                 None => say,
                             },
                             said: self.said.contains(&(self.line.clone(), index)),
@@ -610,7 +673,8 @@ impl Conversation {
         self.note = None;
         let next = match &reply.check {
             Some(check) => {
-                let chance = bribe.map_or(check.chance, |bribe| bribe.chance);
+                let chance = self.chance(bribe.map_or(check.chance, |bribe| bribe.chance));
+                self.bribed = bribe.is_some();
                 let passed = roll < chance;
                 let paid = bribe.map_or(String::new(), |bribe| format!(", {} paid", bribe.credits));
                 self.note = Some((
@@ -1062,4 +1126,52 @@ mod tests {
         reply.fail = None;
         assert_eq!(script.problems().len(), 1, "no check");
     }
+
+    #[test]
+    fn the_gossip_has_news_of_every_deed_an_answer_for_every_attitude_and_all_in_good_system_latin() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let gossip = Gossip::load(dir.join(GOSSIP).to_str().unwrap()).unwrap();
+        for deed in ["shooting", "robbing", "threatening"] {
+            let telling = &gossip.news[deed];
+            assert!(!telling.saw.is_empty() && !telling.heard.is_empty(), "{deed}");
+        }
+        for attitude in ["friendly", "neutral", "wary", "hostile"] {
+            assert!(!gossip.reactions[attitude].is_empty(), "{attitude}");
+        }
+        for attitude in ["friendly", "wary", "hostile"] {
+            assert!(gossip.opinions[attitude].iter().all(|lines| lines.len() == 2), "{attitude}");
+        }
+        assert!(!gossip.closings.is_empty() && !gossip.refusals.is_empty());
+        // Every line the droids say parses as System Latin, as the language's own parser has it.
+        let lines: Vec<&Bark> = gossip
+            .news
+            .values()
+            .flat_map(|t| t.saw.iter().chain(&t.heard))
+            .chain(gossip.reactions.values().flatten())
+            .chain(&gossip.closings)
+            .chain(gossip.opinions.values().flatten().flatten())
+            .chain(&gossip.refusals)
+            .collect();
+        let parser = dir.join("data/system_latin/sl_parser.py");
+        for line in lines {
+            assert!(!line.means.is_empty(), "{} means nothing", line.says);
+            let Ok(out) = std::process::Command::new("python3").arg(&parser).arg(&line.says).output() else {
+                return; // No Python here: the words are checked where there is.
+            };
+            assert!(out.status.success(), "{}: {}", line.says, String::from_utf8_lossy(&out.stdout));
+        }
+    }
+
+    #[test]
+    fn what_a_droid_thinks_of_the_player_sways_its_checks_within_reason() {
+        let script = script();
+        let liked = Conversation::from(&script, 0, None).unwrap().swayed(20);
+        let hated = Conversation::from(&script, 0, None).unwrap().swayed(-60);
+        assert_eq!((liked.chance(50), liked.chance(90)), (70, 95));
+        assert_eq!(hated.chance(50), 5);
+        let facts = Facts::default();
+        let label = &liked.view(&script, &facts, Credits::default()).choices[0].label;
+        assert!(label.contains("70%"), "{label}");
+    }
 }
+

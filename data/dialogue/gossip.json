@@ -1,0 +1,86 @@
+{
+  "about": "What the droids say among themselves about the player, on every map: news of what the player did, and what they think of them (see hydroxus-ai's social::rumour and social::chat). Two droids that meet, or a group that talks among itself, near the player, talk of news one of them has and another has not, if any of them has some: the one that knows says one of 'news' for the deed - 'saw' if it saw it done itself, 'heard' if it was told - the other answers with one of 'reactions' for how it takes the player now it has heard it, and the first closes with one of 'closings'. With no news, one that feels strongly about the player says one of 'opinions' for how it takes them, and the other answers. Otherwise they have one of the script's own meetings or talks. A droid that hates the player will not talk to them, and says one of 'refusals' instead. Every 'says' is in System Latin, checked with data/system_latin/sl_parser.py; 'means' is the English under it.",
+  "news": {
+    "shooting": {
+      "saw": [
+        { "says": "Detectavo aggressor. Percutavat civis.", "means": "I saw the attacker. It shot a citizen down." },
+        { "says": "Ego detectavo. Hostis percutavat unitas.", "means": "I saw it myself. The hostile shot a unit down." }
+      ],
+      "heard": [
+        { "says": "Recipo relatio. Aggressor percutavat civis.", "means": "I got a report. An attacker shot a citizen down." },
+        { "says": "Informatio incertum: hostis percutavat unitas.", "means": "Unconfirmed: a hostile shot a unit down." }
+      ]
+    },
+    "robbing": {
+      "saw": [
+        { "says": "Detectavo fur in taberna.", "means": "I saw the thief, in a store." },
+        { "says": "Ego detectavo furtum. Fur evadavat.", "means": "I saw a robbery. The thief got away." }
+      ],
+      "heard": [
+        { "says": "Recipo relatio. Furtum in argentaria.", "means": "I got a report. A bank was robbed." },
+        { "says": "Informatio incertum: fur prope.", "means": "Unconfirmed: the thief is near." }
+      ]
+    },
+    "threatening": {
+      "saw": [
+        { "says": "Detectavo telum contra civis.", "means": "I saw a weapon pointed at a citizen." },
+        { "says": "Minatio detectum. Telum contra civis.", "means": "A threat, seen. A weapon on a citizen." }
+      ],
+      "heard": [
+        { "says": "Recipo relatio. Minatio contra civis.", "means": "I got a report. A citizen was threatened." }
+      ]
+    }
+  },
+  "reactions": {
+    "friendly": [
+      { "says": "Improbabilum. Ille non hostilum.", "means": "Hard to believe. It's not hostile." },
+      { "says": "Dubium. Informatio incertum.", "means": "I doubt it. That's not confirmed." },
+      { "says": "Dubium. Ille non periculosum.", "means": "I doubt it. It's not dangerous." }
+    ],
+    "neutral": [
+      { "says": "Accipatum. Observo.", "means": "Understood. I'll keep watch." },
+      { "says": "Accipatum. Continuo observatio.", "means": "Understood. I'll keep watching." }
+    ],
+    "wary": [
+      { "says": "Periculosum. Observa area.", "means": "That's dangerous. Watch the area." },
+      { "says": "Securitas necessarium.", "means": "We need security." }
+    ],
+    "hostile": [
+      { "says": "Hostis. Si detectum, tunc sirena.", "means": "An enemy. If I see it, I sound the alarm." },
+      { "says": "Persequa hostis.", "means": "Go after the enemy." }
+    ]
+  },
+  "closings": [
+    { "says": "Affirmatum. Resumo.", "means": "Right. I'll carry on." },
+    { "says": "Observa. Resumo.", "means": "Keep watch. I'll carry on." }
+  ],
+  "opinions": {
+    "friendly": [
+      [
+        { "says": "Persona novum non hostilum.", "means": "The newcomer's not hostile." },
+        { "says": "Accipatum.", "means": "Understood." }
+      ],
+      [
+        { "says": "Ille validum. Nullum minatio.", "means": "It's all right. No threat." },
+        { "says": "Persona novum non periculosum.", "means": "The newcomer's not dangerous." }
+      ]
+    ],
+    "wary": [
+      [
+        { "says": "Persona novum suspectum.", "means": "The newcomer's suspect." },
+        { "says": "Observa ille.", "means": "Keep an eye on it." }
+      ]
+    ],
+    "hostile": [
+      [
+        { "says": "Ille hostis. Si detectum, tunc sirena.", "means": "It's an enemy. If I see it, I sound the alarm." },
+        { "says": "Affirmatum. Defendo.", "means": "Right. I'll stand guard." }
+      ]
+    ]
+  },
+  "refusals": [
+    { "says": "Nullum communicatio. Tu hostis.", "means": "No talking. You're an enemy." },
+    { "says": "Nullum communicatio. Receda.", "means": "No talking. Back off." },
+    { "says": "Tu periculosum. Receda.", "means": "You're dangerous. Back off." }
+  ]
+}

@@ -126,7 +126,10 @@ use hydroxus_ai::{
     social::{
         crowd::{self, Crowd, CROWD_AT_ONCE, CROWD_BACK, CROWD_EVERY, CROWD_GONE, CROWD_REST},
         group::{self, about_leader, Groups, ABOUT_LEADER, BESIDE},
+        chat::{self, Topic},
+        opinion::{self, Attitude, Deed},
         report::{hears_alarm, Telling, Witness},
+        rumour::Minds,
         talk::{self, within_talking},
     },
 };
@@ -717,6 +720,8 @@ pub struct Inhabitants {
     droids: Vec<Inhabitant>,
     /// Who of them walks about with whom, by the same index (see [`group::Groups`]).
     groups: Groups,
+    /// What each of them thinks of the player, and knows of them (see [`Minds`]).
+    minds: Minds,
     /// What each kind of droid looks like, by its index into the conversations' characters.
     liveries: Vec<Livery>,
     /// How each kind walks about, alone, in pairs or in groups, by the same index.
@@ -1035,6 +1040,7 @@ impl Inhabitants {
             }
         }
         self.groups.clear();
+        self.minds.clear();
         self.populated = false;
         self.reachable = Reach::default();
         self.chase = None;
@@ -1788,8 +1794,10 @@ impl Inhabitants {
                 }
             }
             self.droids[n].put_down(graph, feet, heading, resting, rng);
+            self.minds.renew(n);
             for (&m, at) in members.iter().skip(1).zip(about) {
                 self.droids[m].put_down(graph, at, heading, resting, rng);
+                self.minds.renew(m);
             }
             moved += 1;
         }
@@ -1833,6 +1841,10 @@ impl Inhabitants {
             let Some(fresh) = self.droids.pop() else {
                 continue;
             };
+            self.groups.truncate(self.droids.len());
+            self.minds.truncate(self.droids.len());
+            // Another droid: it has only heard what the town talks of.
+            self.minds.renew(n);
             let mut old = std::mem::replace(&mut self.droids[n], fresh);
             old.avatar.sweep_up(&mut scene.graph);
             if scene.graph.is_valid_handle(old.body) {
@@ -1885,6 +1897,7 @@ impl Inhabitants {
         // as it was.
         let code = 10 + rng.below(90) as u32;
         self.groups.add();
+        self.minds.add();
         self.droids.push(Inhabitant {
             body,
             collider,
@@ -2233,6 +2246,8 @@ impl Inhabitants {
         dt: f32,
         sentry: impl Fn(usize) -> bool,
     ) -> News {
+        // What they think and know of the player fades a little.
+        self.minds.step(dt);
         let mut caught = None;
         let mut alerts = std::mem::take(&mut self.alerts);
         let heard = std::mem::take(&mut self.heard);
@@ -3542,6 +3557,65 @@ impl Inhabitants {
             }
         }
         found
+    }
+
+    /// Those standing within `reach` of the `player`'s feet, their body `them`, that can see them -
+    /// `in_the_dark` or not - as they would see them standing, and nothing in the way: to see
+    /// what they do.
+    pub fn onlookers(
+        &self,
+        graph: &Graph,
+        (player, them): (Vector3<f32>, Handle<Collider>),
+        in_the_dark: bool,
+        reach: f32,
+    ) -> Vec<usize> {
+        (0..self.droids.len())
+            .filter(|&n| {
+                let droid = &self.droids[n];
+                !droid.down
+                    && flat(droid.feet - player).norm() < reach
+                    && could_see_other(droid.alert, droid.feet, droid.heading, player, in_the_dark)
+                    && clear_between(
+                        graph,
+                        droid.feet + Vector3::new(0.0, FACE_HEIGHT, 0.0),
+                        player + Vector3::new(0.0, PLAYER_CHEST, 0.0),
+                        |c| c == droid.collider || c == them,
+                    )
+            })
+            .collect()
+    }
+
+    /// Those of `saw` saw the player do `deed` at `at`: what they think of them moves, and if it
+    /// is talked about, they know of it, to tell others (see [`Minds::saw`]).
+    pub fn saw(&mut self, saw: &[usize], deed: Deed, at: Vector3<f32>) {
+        if saw.is_empty() {
+            return;
+        }
+        self.minds.saw(saw, deed, at);
+        Log::info(format!("Opinion: droids {saw:?} saw the player {deed:?}"));
+    }
+
+    /// How the `n`th droid takes the player, by what it thinks of them.
+    pub fn attitude(&self, n: usize) -> Attitude {
+        self.minds.attitude(n)
+    }
+
+    /// How many points of chance what the `n`th droid thinks of the player puts on a talk check.
+    pub fn sway(&self, n: usize) -> i32 {
+        opinion::sway(self.minds.regard(n))
+    }
+
+    /// What `members` - two that meet, or a group - would talk about among themselves.
+    pub fn topic(&self, members: &[usize]) -> Topic {
+        chat::topic(&self.minds, members)
+    }
+
+    /// Has `topic`, talked of among `members`, sink in: news told on, an opinion swaying the rest.
+    pub fn talked_of(&mut self, members: &[usize], topic: Topic) {
+        chat::heard(&mut self.minds, members, topic);
+        if let Topic::News { teller, rumour } = topic {
+            Log::info(format!("Rumour: droid {teller} tells {members:?} of the player {:?}", rumour.deed));
+        }
     }
 
     /// Has the `n`th droid, having seen what the player did at `at` - and who did it, if it
