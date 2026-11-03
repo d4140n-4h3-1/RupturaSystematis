@@ -196,14 +196,6 @@ pub fn cell_center(origin: Vector3<f32>, x: usize, z: usize) -> Vector3<f32> {
     hydroxus_ai::navigation::grid::cell_center(origin, CELL_SIZE, x, z)
 }
 
-/// The cell of `grid` that `position` is in, if it is on the grid at all.
-pub fn cell_at(
-    grid: &WalkGrid,
-    origin: Vector3<f32>,
-    position: Vector3<f32>,
-) -> Option<(usize, usize)> {
-    grid.cell_at(origin, position)
-}
 
 /// The walkable cell nearest to a point, which is where the player can stand to reach it.
 pub fn nearest_walkable(

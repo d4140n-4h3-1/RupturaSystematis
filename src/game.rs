@@ -1783,10 +1783,10 @@ impl MazeGame {
             for who in royale.back_now(dt) {
                 let mut others: Vec<Vector3<f32>> = self.inhabitants.standing().iter().map(|d| d.2).collect();
                 others.push(self.player.feet(&scene.graph));
-                if let (Some((at, facing)), Some((grid, origin)), Some(rng)) =
-                    (royale.start_for(&others), self.level.grid.as_ref(), self.rng.as_mut())
+                if let (Some((at, facing)), Some(mesh), Some(rng)) =
+                    (royale.start_for(&others), self.level.navmesh.as_ref(), self.rng.as_mut())
                 {
-                    if self.inhabitants.spawn_lone((grid, *origin), scene, Royale::side(who), at, facing, rng) {
+                    if self.inhabitants.spawn_lone(mesh, scene, Royale::side(who), at, facing, rng) {
                         Log::info(format!("Battle royale: droid {who} is back, {} lives left", royale.lives(who)));
                         came_back.push(Royale::side(who));
                     }
@@ -2218,14 +2218,14 @@ impl MazeGame {
         // The navmesh caught up with any door opened or shut, firewall put down, since last time.
         let changed = self.level.sync_navmesh();
         let populating = liveries.is_some();
-        let (Some((grid, origin)), Some(mesh), Some(rng)) = (&self.level.grid, &self.level.navmesh, self.rng.as_mut()) else {
+        let (Some(mesh), Some(rng)) = (&self.level.navmesh, self.rng.as_mut()) else {
             return News::default();
         };
         let scene = &mut ctx.scenes[self.scene];
         let player = self.player.feet(&scene.graph);
         if let (Some(liveries), Some(heist)) = (liveries.clone(), &self.heist) {
             // In a heist, a guard at each post.
-            self.inhabitants.populate_guards(scene, liveries, (grid, *origin), &heist.plan.guards, rng);
+            self.inhabitants.populate_guards(scene, liveries, mesh, &heist.plan.guards, rng);
         } else if let Some(liveries) = liveries {
             match &self.ctf {
                 // Each side's droids of its own kind: red's the first in the conversations, blue's
@@ -2233,7 +2233,7 @@ impl MazeGame {
                 Some(bases) => self.inhabitants.populate_sides(
                     scene,
                     liveries,
-                    (grid, *origin),
+                    mesh,
                     bases,
                     |side| match side.is_players() {
                         true => 0,
@@ -2243,7 +2243,7 @@ impl MazeGame {
                 ),
                 None => match &self.royale {
                     // In battle royale, a droid on a side of its own at each of the others' starts.
-                    Some(royale) => self.inhabitants.populate_lone(scene, liveries, (grid, *origin), &royale.first_starts, rng),
+                    Some(royale) => self.inhabitants.populate_lone(scene, liveries, mesh, &royale.first_starts, rng),
                     None => {
                         let script = self.script.as_ref();
                         let people = script.and_then(|script| script.inhabitants);
@@ -2260,7 +2260,7 @@ impl MazeGame {
                         self.inhabitants.populate(
                             scene,
                             liveries,
-                            (grid, *origin),
+                            mesh,
                             (player, self.player.yaw()),
                             (people, grouping),
                             script.is_some_and(|script| script.crowd),
@@ -2285,8 +2285,8 @@ impl MazeGame {
             if let Some(kind) = kind {
                 for precinct in &self.level.precincts.precincts {
                     let facing = |from: Vector3<f32>, to: Vector3<f32>| (to - from).x.atan2((to - from).z);
-                    let desk = self.inhabitants.post_guard(scene, (grid, *origin), precinct.desk, facing(precinct.desk, precinct.front), kind, rng);
-                    let corridor = self.inhabitants.post_guard(scene, (grid, *origin), precinct.guard, 0.0, kind, rng);
+                    let desk = self.inhabitants.post_guard(scene, mesh, precinct.desk, facing(precinct.desk, precinct.front), kind, rng);
+                    let corridor = self.inhabitants.post_guard(scene, mesh, precinct.guard, 0.0, kind, rng);
                     self.precinct_guards.push([desk, corridor]);
                 }
                 if !self.precinct_guards.is_empty() {
@@ -2300,7 +2300,7 @@ impl MazeGame {
                     let posts: Vec<Vector3<f32>> = self.level.tunnels.den.iter().copied().chain(hideouts).collect();
                     let kept = posts
                         .into_iter()
-                        .filter_map(|at| self.inhabitants.post_guard(scene, (grid, *origin), at, rng.below(628) as f32 / 100.0, gang, rng))
+                        .filter_map(|at| self.inhabitants.post_guard(scene, mesh, at, rng.below(628) as f32 / 100.0, gang, rng))
                         .count();
                     Log::info(format!("Escape tunnels and hideouts: {kept} of the gang kept there"));
                 }
@@ -2332,7 +2332,7 @@ impl MazeGame {
             .collect();
         // In a city, those far off out of sight turn up again nearer by.
         let ahead = self.player.ahead();
-        self.inhabitants.recycle(scene, (grid, *origin), player, ahead, rng, ctx.dt, |graph, feet| {
+        self.inhabitants.recycle(scene, mesh, player, ahead, rng, ctx.dt, |graph, feet| {
             self.player.can_see(graph, feet)
         });
         // And now and then one of its security goes after one of a gang, which runs.
@@ -2389,7 +2389,6 @@ impl MazeGame {
         self.inhabitants.set_trains(self.trains.iter().map(Train::doors).collect());
         self.inhabitants.update(
             &mut scene.graph,
-            (grid, *origin),
             mesh,
             &crossings,
             self.level.roads.as_ref(),
@@ -2854,8 +2853,8 @@ impl MazeGame {
         if let Some(size) = heist.update(ctx.dt).filter(|_| self.phase == Phase::Playing) {
             let player = self.player.feet(graph);
             let scene = &mut ctx.scenes[self.scene];
-            if let (Some((grid, origin)), Some(rng)) = (self.level.grid.as_ref(), self.rng.as_mut()) {
-                let came = self.inhabitants.spawn_wave(scene, (grid, *origin), &heist.plan.waves, size, player, rng);
+            if let (Some(mesh), Some(rng)) = (self.level.navmesh.as_ref(), self.rng.as_mut()) {
+                let came = self.inhabitants.spawn_wave(scene, mesh, &heist.plan.waves, size, player, rng);
                 self.hud.show_note(format!("Security wave {}: {came} guards coming", heist.wave));
                 Log::info(format!("Heist: wave {}, {came} guards", heist.wave));
             }
@@ -2945,7 +2944,7 @@ impl MazeGame {
     fn call_drone(&mut self, graph: &mut Graph, at: Vector3<f32>, why: &'static str) {
         // The klaxon, from where the drone is called to.
         self.alarm_sound.sound(graph, at + Vector3::new(0.0, 1.5, 0.0));
-        let (Some((grid, origin)), Some(rng)) = (self.level.grid.as_ref(), self.rng.as_mut()) else {
+        let (Some(mesh), Some(rng)) = (self.level.navmesh.as_ref(), self.rng.as_mut()) else {
             return;
         };
         let from = |drone: &Drone| (drone.at() - at).xz().norm();
@@ -2972,7 +2971,7 @@ impl MazeGame {
                 .position(|drone| !drone.is_placed() && kind.is_none_or(|kind| drone.kind() == kind))
         };
         if let Some(n) = waiting(Some(Kind::Quad)).or_else(|| waiting(None)) {
-            if self.drones[n].call_in(graph, (grid, *origin), feet, at, rng) {
+            if self.drones[n].call_in(graph, mesh, feet, at, rng) {
                 self.drone_says.push((n, why));
                 Log::info(format!("Drone {n}: called in"));
                 return;
@@ -3090,9 +3089,9 @@ impl MazeGame {
     fn move_inhabitants(&mut self, ctx: &mut PluginContext) -> bool {
         // What the player made heard since the last time, for the droids to hear.
         let noises = self.player.noises();
-        if let Some((grid, origin)) = &self.level.grid {
+        if let Some(mesh) = &self.level.navmesh {
             for (at, loudness) in noises {
-                self.inhabitants.hear((grid, *origin), at, loudness);
+                self.inhabitants.hear(mesh, at, loudness);
             }
         }
         let News {
@@ -3139,8 +3138,8 @@ impl MazeGame {
                     false => self.side_bolts[n].1.fire(graph, from, way),
                 }
                 // Heard, as the player's shots are, by those searching or wary.
-                if let Some((grid, origin)) = &self.level.grid {
-                    self.inhabitants.hear((grid, *origin), from, SHOT_NOISE);
+                if let Some(mesh) = &self.level.navmesh {
+                    self.inhabitants.hear(mesh, from, SHOT_NOISE);
                 }
             }
         }
@@ -4972,7 +4971,7 @@ impl MazeGame {
         if !self.drone_placed && self.phase == Phase::Playing {
             let graph = &mut ctx.scenes[self.scene].graph;
             let feet = self.player.feet(graph);
-            if let (Some((grid, origin)), Some(mesh), Some(rng)) = (self.level.grid.as_ref(), self.level.navmesh.as_ref(), self.rng.as_mut()) {
+            if let (Some(mesh), Some(rng)) = (self.level.navmesh.as_ref(), self.rng.as_mut()) {
                 for drone in &mut self.drones {
                     drone.hide(graph);
                 }
@@ -4985,7 +4984,7 @@ impl MazeGame {
                         let spots = self.heist.as_ref().map_or_else(Vec::new, |h| h.plan.drones.clone());
                         let security = self.drones.iter_mut().filter(|d| d.kind() == Kind::Security);
                         for (drone, spot) in security.zip(spots) {
-                            drone.place_for(graph, (grid, *origin), mesh, ENEMY, spot, rng);
+                            drone.place_for(graph, mesh, ENEMY, spot, rng);
                         }
                     }
                     // One for each side, by its flag - of a kind, to be fair; the rest wait to be
@@ -4993,13 +4992,13 @@ impl MazeGame {
                     Some(bases) => {
                         let security = self.drones.iter_mut().filter(|d| d.kind() == Kind::Security);
                         for (drone, side) in security.zip(Side::BOTH) {
-                            drone.place_for(graph, (grid, *origin), mesh, side, bases.flag(side), rng);
+                            drone.place_for(graph, mesh, side, bases.flag(side), rng);
                         }
                     }
                     // A security drone patrols, if there is one.
                     None => {
                         let n = self.drones.iter().position(|d| d.kind() == Kind::Security).unwrap_or(0);
-                        self.drones[n].place(graph, (grid, *origin), feet, rng);
+                        self.drones[n].place(graph, mesh, feet, rng);
                     }
                 }
             }
@@ -5019,7 +5018,7 @@ impl MazeGame {
             self.call_drone(&mut ctx.scenes[self.scene].graph, at, why);
         }
         let sided = self.sided();
-        let (Some((grid, origin)), Some(mesh), Some(rng)) = (self.level.grid.as_ref(), self.level.navmesh.as_ref(), self.rng.as_mut()) else {
+        let (Some(mesh), Some(rng)) = (self.level.navmesh.as_ref(), self.rng.as_mut()) else {
             return;
         };
         let graph = &mut ctx.scenes[self.scene].graph;
@@ -5065,7 +5064,7 @@ impl MazeGame {
         let mut fired = Vec::new();
         for (n, drone) in self.drones.iter_mut().enumerate() {
             let target = targets[n];
-            let doing = drone.update(graph, (grid, *origin), mesh, &target, &reachable, self.level.leaves.as_ref(), rng, ctx.dt, live);
+            let doing = drone.update(graph, mesh, &target, &reachable, self.level.leaves.as_ref(), rng, ctx.dt, live);
             says.extend(doing.says.map(|said| (n, said)));
             // At its target's middle, wherever they are as it fires.
             if let (Some(volley), Some(shots)) = (doing.fired, self.shots.as_mut()) {
@@ -5076,7 +5075,7 @@ impl MazeGame {
         // Its shot heard, as the player's are, by the droids searching or wary: they run to where
         // it was fired from and search from there.
         for from in fired {
-            self.inhabitants.hear((grid, *origin), from, SHOT_NOISE);
+            self.inhabitants.hear(mesh, from, SHOT_NOISE);
         }
         for &(n, said) in &says {
             Log::info(format!("Drone {n}: {said}"));
@@ -5199,7 +5198,7 @@ impl MazeGame {
         }
         let scene = &mut ctx.scenes[self.scene];
         let player = self.player.feet(&scene.graph);
-        let (Some((grid, origin)), Some(rng)) = (self.level.grid.as_ref(), self.rng.as_mut()) else {
+        let (Some(mesh), Some(rng)) = (self.level.navmesh.as_ref(), self.rng.as_mut()) else {
             return;
         };
         // Round the player, each in a place of its own - in rings, twelve to a ring, the first
@@ -5210,7 +5209,7 @@ impl MazeGame {
                 player + Vector3::new(a.cos(), 0.0, a.sin()) * (3.0 + 2.5 * (k / 12) as f32)
             })
             .collect();
-        let came = self.inhabitants.spawn_wave(scene, (grid, *origin), &around, count, player, rng);
+        let came = self.inhabitants.spawn_wave(scene, mesh, &around, count, player, rng);
         let mut down = 0;
         for _ in 0..came {
             if self.inhabitants.knock_down(&mut scene.graph, player).is_some() {
@@ -5272,24 +5271,25 @@ impl MazeGame {
         let cells_ready = [&cells, &stamina].iter().all(|m| m.as_ref().is_none_or(|m| m.is_ok()));
         if !self.hearts_placed && self.phase == Phase::Playing && cells_ready {
             self.rng();
-            if let (Some((grid, origin)), Some(start), Some(rng)) =
-                (self.level.grid.as_ref(), self.start_cell, self.rng.as_mut())
+            if let (Some((grid, origin)), Some(mesh), Some(start), Some(rng)) =
+                (self.level.grid.as_ref(), self.level.navmesh.as_ref(), self.start_cell, self.rng.as_mut())
             {
                 let floor = grid.walkable_cells().count();
+                let start = grid.on_floor(*origin, start);
                 // Hearts and cells all apart from one another: the first, near the start, a heart.
                 let hearts = hearts::count(floor);
                 let shields = if cells.is_some() { hearts::shield_count(floor) } else { 0 };
                 let breaths = if stamina.is_some() { hearts::stamina_count(floor) } else { 0 };
-                let spots = hearts::spots(grid, start, hearts + shields + breaths, rng);
+                let spots = hearts::spots(mesh, start, hearts + shields + breaths, rng);
                 let (heart_spots, rest) = spots.split_at(hearts.min(spots.len()));
                 let (cell_spots, stamina_spots) = rest.split_at(shields.min(rest.len()));
                 let scene = &mut ctx.scenes[self.scene];
-                self.hearts.place(&model, scene, (grid, *origin), heart_spots);
+                self.hearts.place(&model, scene, heart_spots);
                 if let Some(cells) = &cells {
-                    self.shield_cells.place(cells, scene, (grid, *origin), cell_spots);
+                    self.shield_cells.place(cells, scene, cell_spots);
                 }
                 if let Some(stamina) = &stamina {
-                    self.stamina_cells.place(stamina, scene, (grid, *origin), stamina_spots);
+                    self.stamina_cells.place(stamina, scene, stamina_spots);
                 }
                 // Tried once a round, found room or not.
                 self.hearts_placed = true;
@@ -5346,7 +5346,7 @@ impl MazeGame {
                 self.chips.set_model(model);
             }
         }
-        let Some((grid, origin)) = self.level.grid.as_ref() else {
+        let Some(mesh) = self.level.navmesh.as_ref() else {
             return;
         };
         let graph = &mut ctx.scenes[self.scene].graph;
@@ -5355,7 +5355,7 @@ impl MazeGame {
         if platform::var("MAZE_CHIPS").is_some() {
             self.chips.show_off(self.player.feet(graph), self.player.yaw());
         }
-        if let Some(got) = self.chips.update(graph, ctx.dt, player, (grid, *origin), self.story) {
+        if let Some(got) = self.chips.update(graph, ctx.dt, player, mesh, self.story) {
             self.credits += got;
             chips::log_pickup(got, self.credits);
             self.hud.show_note(format!("+{got}    {} in all", self.credits));

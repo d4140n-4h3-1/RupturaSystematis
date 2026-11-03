@@ -49,9 +49,8 @@ use crate::{
     fixtures::{glow_strength, DIFFUSE_COLOR, EMISSION_STRENGTH},
     formants::Curve,
     inhabitants::{self, Alert},
-    layout::{Rng, WalkGrid},
+    layout::Rng,
     player::posture::Posture,
-    survey,
 };
 use fyrox::{
     core::{
@@ -83,7 +82,10 @@ use fyrox::{
     },
 };
 use hydroxus_ai::{
-    navigation::{navmesh::NavMesh, route, walk},
+    navigation::{
+        navmesh::{NavMesh, Poly},
+        walk,
+    },
     perception::sight::Sight,
 };
 use serde::Deserialize;
@@ -138,12 +140,12 @@ impl DroneLines {
 const SCALE: f32 = 0.2;
 /// How high it hovers, in meters above the floor. The death animation drops it this far.
 pub const HOVER: f32 = 1.7;
-/// How far from where the player starts it is put down, in steps across the grid's half-meter
-/// cells, at least: out of sight.
-const AWAY_FROM_PLAYER: f32 = 40.0;
-/// How far off one called in is put down, in the same steps, at most: out of sight, but near
+/// How far from where the player starts it is put down, in meters of walking, at least: out of
+/// sight.
+const AWAY_FROM_PLAYER: f32 = 20.0;
+/// How far off one called in is put down, in meters of walking, at most: out of sight, but near
 /// enough to be heard coming, and to come.
-const CALLED_FROM: f32 = 80.0;
+const CALLED_FROM: f32 = 40.0;
 /// How near where it is called to a patrolling drone has to be, in meters as the crow flies, to
 /// answer the call itself, rather than one being called in from nearer.
 pub const ANSWERS_WITHIN: f32 = 25.0;
@@ -654,13 +656,13 @@ impl Drone {
     pub fn place(
         &mut self,
         graph: &mut Graph,
-        (grid, origin): (&WalkGrid, Vector3<f32>),
+        mesh: &NavMesh,
         feet: Vector3<f32>,
         rng: &mut Rng,
     ) -> bool {
         self.side = None;
         self.post = None;
-        self.put_down(graph, (grid, origin), feet, f32::INFINITY, rng)
+        self.put_down(graph, mesh, feet, f32::INFINITY, rng)
     }
 
     /// Puts it down for `side` in capture the flag, by `post`, its side's flag, to patrol round
@@ -668,7 +670,6 @@ impl Drone {
     pub fn place_for(
         &mut self,
         graph: &mut Graph,
-        (grid, origin): (&WalkGrid, Vector3<f32>),
         mesh: &NavMesh,
         side: Side,
         post: Vector3<f32>,
@@ -678,7 +679,7 @@ impl Drone {
             return false;
         };
         // Put down anywhere, and then where it should be.
-        if !self.put_down(graph, (grid, origin), at, f32::INFINITY, rng) {
+        if !self.put_down(graph, mesh, at, f32::INFINITY, rng) {
             return false;
         }
         self.side = Some(side);
@@ -713,55 +714,48 @@ impl Drone {
     fn put_down(
         &mut self,
         graph: &mut Graph,
-        (grid, origin): (&WalkGrid, Vector3<f32>),
+        mesh: &NavMesh,
         feet: Vector3<f32>,
         within: f32,
         rng: &mut Rng,
     ) -> bool {
-        let Some(start) = survey::cell_at(grid, origin, feet)
-            .filter(|&(x, z)| grid.is_walkable(x, z))
-            .or_else(|| survey::nearest_walkable(grid, origin, feet))
-        else {
+        if mesh.nearest(feet).is_none() {
             return false;
-        };
-        // Anywhere well away from the player, on a city's grid: a cell picked at random will do -
-        // every walkable cell can be walked to, the survey having found it by walking - rather
-        // than routes worked out to every one of millions, which took seconds.
-        let picked = within.is_infinite().then(|| route::far_cell(grid, start, AWAY_FROM_PLAYER, rng)).flatten();
-        if let Some(cell) = picked {
-            return self.put_at(graph, (grid, origin), feet, cell, rng);
         }
-        // Within so far of them: routes as far as that, and no further.
-        let routes = grid.routes_from(start, within.max(AWAY_FROM_PLAYER));
-        let reached: Vec<(usize, f32)> = routes.reached().collect();
-        let away: Vec<usize> = reached
-            .iter()
-            .filter(|&&(_, cost)| cost >= AWAY_FROM_PLAYER && cost <= within.max(AWAY_FROM_PLAYER))
-            .map(|&(i, _)| i)
-            .collect();
+        // Anywhere well away from the player: a spot picked at random will do - every polygon of
+        // a surveyed level can be walked to, the survey having found it by walking - rather than
+        // the way worked out to every one of a city's.
+        if within.is_infinite() {
+            if let Some(spot) = walk::far_spot(mesh, feet, AWAY_FROM_PLAYER, rng) {
+                return self.put_at(graph, feet, spot, rng);
+            }
+        }
+        // Within so far of them: the ways as far as that, and no further.
+        let reach = within.min(1.0e4).max(AWAY_FROM_PLAYER);
+        let mut reached: Vec<(Poly, f32)> = mesh.costs_from(feet, reach, |_| 0.0).into_iter().collect();
+        reached.sort_unstable_by_key(|&(n, _)| n);
+        let away: Vec<Poly> = reached.iter().filter(|&&(_, cost)| cost >= AWAY_FROM_PLAYER).map(|&(n, _)| n).collect();
         // Out of the way if there is room; in a small maze, as far off as it can be.
-        let cell = match away.is_empty() {
+        let n = match away.is_empty() {
             false => away[rng.below(away.len())],
             true => match reached.iter().max_by(|a, b| a.1.total_cmp(&b.1)) {
-                Some(&(i, _)) => i,
+                Some(&(n, _)) => n,
                 None => return false,
             },
         };
-        self.put_at(graph, (grid, origin), feet, cell, rng)
+        let spot = mesh.random_point(n, &mut |k| rng.below(k));
+        self.put_at(graph, feet, spot, rng)
     }
 
-    /// Puts it down over cell `cell` - an index into `grid`, whose corner is at `origin` - calm
-    /// and whole, the player's `feet` where they are.
+    /// Puts it down over `spot`, on the floor, calm and whole, the player's `feet` where they are.
     fn put_at(
         &mut self,
         graph: &mut Graph,
-        (grid, origin): (&WalkGrid, Vector3<f32>),
         feet: Vector3<f32>,
-        cell: usize,
+        spot: Vector3<f32>,
         rng: &mut Rng,
     ) -> bool {
-        let (x, z) = (cell % grid.width, cell / grid.width);
-        self.at = grid.center(origin, (x, z)) + Vector3::new(0.0, grid.floor(x, z) + HOVER, 0.0);
+        self.at = spot + Vector3::new(0.0, HOVER, 0.0);
         self.heading = inhabitants::between(rng, (-PI, PI));
         self.state = State::Patrol;
         self.placed = true;
@@ -796,12 +790,12 @@ impl Drone {
     pub fn call_in(
         &mut self,
         graph: &mut Graph,
-        (grid, origin): (&WalkGrid, Vector3<f32>),
+        mesh: &NavMesh,
         feet: Vector3<f32>,
         at: Vector3<f32>,
         rng: &mut Rng,
     ) -> bool {
-        if !self.put_down(graph, (grid, origin), feet, CALLED_FROM, rng) {
+        if !self.put_down(graph, mesh, feet, CALLED_FROM, rng) {
             return false;
         }
         self.search(at);
@@ -1070,7 +1064,6 @@ impl Drone {
     pub fn update(
         &mut self,
         graph: &mut Graph,
-        (grid, origin): (&WalkGrid, Vector3<f32>),
         mesh: &NavMesh,
         player: &Target,
         reachable: &dyn Fn(Vector3<f32>) -> bool,
@@ -1084,7 +1077,7 @@ impl Drone {
             self.since += dt;
             let leaves = leaves.map(Leaves::graph);
             doing.says = self.think(graph, mesh, player, reachable, leaves, rng, dt);
-            self.fly(graph, (grid, origin), player, leaves, dt);
+            self.fly(graph, mesh, player, leaves, dt);
             match self.wrecked {
                 true => self.follow_wreck(graph, dt),
                 false => self.pose(graph),
@@ -1305,7 +1298,7 @@ impl Drone {
     fn fly(
         &mut self,
         graph: &Graph,
-        (grid, origin): (&WalkGrid, Vector3<f32>),
+        mesh: &NavMesh,
         player: &Target,
         leaves: Option<&Graph>,
         dt: f32,
@@ -1374,8 +1367,8 @@ impl Drone {
                 self.replan = 0.0;
                 return;
             }
-        } else if let Some((x, z)) = survey::cell_at(grid, origin, next).filter(|&(x, z)| grid.is_walkable(x, z)) {
-            let height = grid.floor(x, z) + HOVER;
+        } else if let Some(floor) = walk::floor_under(mesh, next - Vector3::new(0.0, HOVER, 0.0)) {
+            let height = floor + HOVER;
             next.y += (height - next.y) * (1.0 - (-FLOOR_EASING * dt).exp());
         }
         // Never into anyone, sideways, up or down: it waits for them to move.

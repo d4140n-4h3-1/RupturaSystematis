@@ -10,7 +10,7 @@
 //!
 //! The city's own lie about everywhere there is floor to walk on - streets, rooftops, upper
 //! storeys - a few in every [`CHUNK`]-meter square, always in the same places, worked out from
-//! the square and the walk grid as the player comes near it ([`Chips::update`]); only those near
+//! the square and the navmesh as the player comes near it ([`Chips::update`]); only those near
 //! the player are in the scene. Taken, one stays taken until a new game, however many times the
 //! round starts again.
 //!
@@ -22,8 +22,9 @@
 
 use crate::{
     credits::Credits,
-    layout::{Rng, WalkGrid},
+    layout::Rng,
 };
+use hydroxus_ai::navigation::{grid::MAX_CLIMB, navmesh::NavMesh, walk};
 use fyrox::{
     core::{
         algebra::{Matrix4, UnitQuaternion, Vector3},
@@ -220,9 +221,9 @@ impl Chips {
         Log::info("Credit chips: one of each worth put down in front of the player (MAZE_CHIPS)");
     }
 
-    /// The chips a square of the city has: where, on `grid` with its corner at `origin`, and what
-    /// each is worth. The same every time for the same square.
-    fn square(&mut self, (grid, origin): (&WalkGrid, Vector3<f32>), (sx, sz): (i64, i64)) -> &Vec<(Vector3<f32>, Credits)> {
+    /// The chips a square of the city has: where, on the floor of `mesh`, and what each is worth.
+    /// The same every time for the same square.
+    fn square(&mut self, mesh: &NavMesh, (sx, sz): (i64, i64)) -> &Vec<(Vector3<f32>, Credits)> {
         let seed = self.seed;
         self.squares.entry((sx, sz)).or_insert_with(|| {
             let mut rng = Rng::new(seed ^ (sx as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ (sz as u64).wrapping_mul(0xc2b2_ae3d_27d4_eb4f));
@@ -236,27 +237,33 @@ impl Chips {
                     break;
                 }
             }
-            let per = (CHUNK / grid.cell_size).round() as i64;
+            let cell = mesh.cell_size;
+            let per = (CHUNK / cell).round() as i64;
+            let (low, high) = mesh.bounds();
             let mut chips = Vec::new();
             for _ in 0..count {
                 for _ in 0..TRIES {
                     let x = sx * per + rng.below(per as usize) as i64;
                     let z = sz * per + rng.below(per as usize) as i64;
-                    if x < 0 || z < 0 || x as usize >= grid.width || z as usize >= grid.depth {
+                    let spot = low + Vector3::new((x as f32 + 0.5) * cell, 0.0, (z as f32 + 0.5) * cell);
+                    if x < 0 || z < 0 || spot.x >= high.x || spot.z >= high.z {
                         continue;
                     }
-                    let over: Vec<(usize, usize)> = grid.cells_over((x as usize, z as usize)).collect();
+                    let over = mesh.over_spot(spot);
                     if over.is_empty() {
                         continue;
                     }
-                    let cell = over[rng.below(over.len())];
+                    let n = over[rng.below(over.len())];
+                    let spot = Vector3::new(spot.x, mesh.floor_of(n), spot.z);
                     // Floor all round it, a step either way at most: out in the open, not in a
                     // corner or on a ledge.
-                    let open = (-1isize..=1).all(|dx| (-1isize..=1).all(|dz| (dx, dz) == (0, 0) || grid.step_to(cell, dx, dz).is_some()));
+                    let open = (-1..=1).all(|dx| {
+                        (-1..=1).all(|dz| walk::floor_at(mesh, spot + Vector3::new(dx as f32, 0.0, dz as f32) * cell, MAX_CLIMB))
+                    });
                     if !open {
                         continue;
                     }
-                    let at = grid.on_floor(origin, cell) + Vector3::new(0.0, HOVER, 0.0);
+                    let at = spot + Vector3::new(0.0, HOVER, 0.0);
                     chips.push((at, Credits::chip(|n| rng.below(n))));
                     break;
                 }
@@ -356,16 +363,16 @@ impl Chips {
     /// brought into the scene and those gone far taken out, each spinning and bobbing, and the
     /// ones the player walks into picked up - the city's own among them, if it is a `city`, or only
     /// those dropped. What those picked up were worth, all told, if any were.
-    pub fn update(&mut self, graph: &mut Graph, dt: f32, player: Vector3<f32>, grid: (&WalkGrid, Vector3<f32>), city: bool) -> Option<Credits> {
+    pub fn update(&mut self, graph: &mut Graph, dt: f32, player: Vector3<f32>, mesh: &NavMesh, city: bool) -> Option<Credits> {
         self.time += dt;
         if std::mem::take(&mut self.remake) {
             self.clear_scene(graph);
         }
-        let here = ((player.x - grid.1.x) / CHUNK).floor() as i64;
-        let here = (here, ((player.z - grid.1.z) / CHUNK).floor() as i64);
+        let here = ((player.x - mesh.origin.x) / CHUNK).floor() as i64;
+        let here = (here, ((player.z - mesh.origin.z) / CHUNK).floor() as i64);
         if self.around != Some(here) {
             self.around = Some(here);
-            self.bring_in(graph, player, grid, here, city);
+            self.bring_in(graph, player, mesh, here, city);
         }
         // Spinning and bobbing.
         for shown in &self.shown {
@@ -415,7 +422,7 @@ impl Chips {
 
     /// Brings into the scene the chips within [`SHOWN_WITHIN`] of `player`, in square `here`, that
     /// are not taken, and takes out those further off.
-    fn bring_in(&mut self, graph: &mut Graph, player: Vector3<f32>, grid: (&WalkGrid, Vector3<f32>), here: (i64, i64), city: bool) {
+    fn bring_in(&mut self, graph: &mut Graph, player: Vector3<f32>, mesh: &NavMesh, here: (i64, i64), city: bool) {
         let near = |at: Vector3<f32>| Vector3::new(at.x - player.x, 0.0, at.z - player.z).norm() < SHOWN_WITHIN;
         // Out of it, the far ones.
         let mut k = 0;
@@ -434,7 +441,7 @@ impl Chips {
         let mut wanted: Vec<(Key, Vector3<f32>, Credits)> = Vec::new();
         for sx in here.0 - reach..=here.0 + reach {
             for sz in here.1 - reach..=here.1 + reach {
-                let chips = self.square(grid, (sx, sz)).clone();
+                let chips = self.square(mesh, (sx, sz)).clone();
                 for (n, (at, value)) in chips.into_iter().enumerate() {
                     wanted.push((Key::City(sx, sz, n), at, value));
                 }
@@ -489,16 +496,17 @@ pub fn log_pickup(got: Credits, total: Credits) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::layout::WalkGrid;
 
     /// An open plain of floor, `cells` across, half a meter each.
-    fn plain(cells: usize) -> WalkGrid {
+    fn plain(cells: usize) -> NavMesh {
         let mut grid = WalkGrid::new(cells, cells, 0.5);
         for x in 0..cells {
             for z in 0..cells {
                 grid.set(x, z, true);
             }
         }
-        grid
+        NavMesh::build(&grid, Vector3::zeros(), |_, _| 0)
     }
 
     #[test]
@@ -533,8 +541,8 @@ mod tests {
         let mut all = 0;
         for sx in 0..4 {
             for sz in 0..4 {
-                let first = chips.square((&grid, Vector3::zeros()), (sx, sz)).clone();
-                assert_eq!(&first, again.square((&grid, Vector3::zeros()), (sx, sz)));
+                let first = chips.square(&grid, (sx, sz)).clone();
+                assert_eq!(&first, again.square(&grid, (sx, sz)));
                 for (at, value) in &first {
                     // In its square, over the floor.
                     assert!(at.x >= sx as f32 * CHUNK && at.x < (sx + 1) as f32 * CHUNK, "{at:?}");
@@ -546,7 +554,7 @@ mod tests {
         // One and a bit a square, on average.
         assert!((8..=40).contains(&all), "{all}");
         // Off the grid, none.
-        assert!(chips.square((&grid, Vector3::zeros()), (-1, 0)).is_empty());
+        assert!(chips.square(&grid, (-1, 0)).is_empty());
     }
 
     #[test]
@@ -558,14 +566,14 @@ mod tests {
         chips.drop_credits(Vector3::new(50.0, 0.0, 50.0), Credits::new(2, 0), &mut rng);
         // Far off, nothing.
         let far = Vector3::new(10.0, 1.0, 10.0);
-        let got = chips.update(&mut graph, 0.1, far, (&grid, Vector3::zeros()), true);
+        let got = chips.update(&mut graph, 0.1, far, &grid, true);
         let city_got = got.unwrap_or_default();
         // Over to each dropped chip in turn.
         let spots: Vec<Vector3<f32>> = chips.dropped.iter().map(|&(_, at, _)| at).collect();
         assert_eq!(spots.len(), 2);
         let mut picked = Credits::default();
         for at in spots {
-            picked += chips.update(&mut graph, 0.1, at, (&grid, Vector3::zeros()), true).unwrap_or_default();
+            picked += chips.update(&mut graph, 0.1, at, &grid, true).unwrap_or_default();
         }
         assert!(picked >= Credits::new(2, 0), "{picked} {city_got}");
         assert!(chips.dropped.is_empty());
@@ -573,10 +581,10 @@ mod tests {
         let (shown, _) = chips.counts();
         if let Some(first) = chips.shown.first().cloned() {
             let before = shown;
-            chips.update(&mut graph, 0.1, first.at, (&grid, Vector3::zeros()), true);
+            chips.update(&mut graph, 0.1, first.at, &grid, true);
             assert!(chips.taken.contains(&first.key));
             chips.clear_scene(&mut graph);
-            chips.update(&mut graph, 0.1, first.at + Vector3::new(0.0, 0.0, 0.01), (&grid, Vector3::zeros()), true);
+            chips.update(&mut graph, 0.1, first.at + Vector3::new(0.0, 0.0, 0.01), &grid, true);
             assert!(chips.shown.iter().all(|shown| shown.key != first.key));
             assert!(chips.shown.len() < before + 1);
         }

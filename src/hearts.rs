@@ -24,9 +24,13 @@
 
 use crate::{
     fixtures::{property, DIFFUSE_COLOR},
-    layout::{Rng, WalkGrid},
+    layout::Rng,
 };
-use hydroxus_ai::navigation::route::BIG_GRID;
+use hydroxus_ai::navigation::{
+    grid::MAX_CLIMB,
+    navmesh::{NavMesh, Poly},
+    walk,
+};
 use fyrox_gfx::{replace_materials, GlassMaterial};
 use fyrox::{
     core::{
@@ -86,12 +90,12 @@ const FLOOR_PER_STAMINA: usize = 10000;
 const FEWEST_STAMINA: usize = 2;
 const MOST_STAMINA: usize = 6;
 /// How many cells of walking from the start a heart has to be at least, and the first at most;
-/// how many cells apart two hearts are at first asked to be; and how many cells of floor all
-/// round a heart's cell has to have, so that it floats in a corridor rather than against a wall.
-const AWAY_FROM_START: u32 = 16;
-const NEAR_START: u32 = 40;
-const APART: f32 = 40.0;
-const ROOM: i64 = 2;
+/// how far apart two hearts are at first asked to be; and how far out all round a heart has to
+/// have floor, so that it floats in a corridor rather than against a wall - all in meters.
+const AWAY_FROM_START: f32 = 8.0;
+const NEAR_START: f32 = 20.0;
+const APART: f32 = 20.0;
+const ROOM: f32 = 1.0;
 
 /// How many hearts a maze with `floor` cells of floor gets.
 pub fn count(floor: usize) -> usize {
@@ -109,117 +113,57 @@ pub fn stamina_count(floor: usize) -> usize {
     (floor / FLOOR_PER_STAMINA).clamp(FEWEST_STAMINA, MOST_STAMINA)
 }
 
-/// How many cells picked at random [`spots`] tries for the next, before going through them all.
-const TRIES: usize = 200;
+/// How many spots picked at random [`spots`] tries for each, before asking for less room.
+const TRIES: usize = 4000;
 
-/// Where `count` hearts go in `grid`, whose player starts at `start`: cells of open floor far
-/// enough from the start - the first no further than [`NEAR_START`], where there is room - as far
-/// apart as there are cells for, picked by `rng`. Fewer if the maze has no room for them all.
-pub fn spots(grid: &WalkGrid, start: (usize, usize), count: usize, rng: &mut Rng) -> Vec<(usize, usize)> {
-    // Floor all round, on the same floor: a step up or down from it at most, on whichever storey.
-    let open = |x: usize, z: usize| {
-        (-ROOM..=ROOM).all(|dx| {
-            (-ROOM..=ROOM).all(|dz| (dx, dz) == (0, 0) || grid.step_to((x, z), dx as isize, dz as isize).is_some())
+/// Where `count` hearts go on `mesh`, whose player starts at `start`: on open floor (see [`ROOM`])
+/// far enough from the start to walk - the first no further than [`NEAR_START`], where there is
+/// room - as far apart as there is room for, each picked at random by `rng` from the floor that
+/// can be walked to, as likely anywhere of it as anywhere else. Fewer if there is no room for
+/// them all.
+pub fn spots(mesh: &NavMesh, start: Vector3<f32>, count: usize, rng: &mut Rng) -> Vec<Vector3<f32>> {
+    let reached = mesh.entries_from(start, f32::INFINITY);
+    let mut polygons: Vec<(Poly, [f32; 2], f32)> = reached.iter().map(|(&n, &(entry, cost))| (n, entry, cost)).collect();
+    polygons.sort_unstable_by_key(|&(n, _, _)| n);
+    // Each by how much floor it has, for picking somewhere as likely anywhere as anywhere else.
+    let mut floor = 0.0;
+    let upto: Vec<f32> = polygons
+        .iter()
+        .map(|&(n, _, _)| {
+            floor += mesh.area_of(n);
+            floor
+        })
+        .collect();
+    if floor <= 0.0 {
+        return Vec::new();
+    }
+    // Floor all round, at its height: a stair's step up or down at most.
+    let open = |at: Vector3<f32>| {
+        (0..8).all(|k| {
+            let angle = k as f32 * std::f32::consts::FRAC_PI_4;
+            walk::floor_at(mesh, at + Vector3::new(angle.sin(), 0.0, angle.cos()) * ROOM, MAX_CLIMB)
         })
     };
-    // A city's, as big as for a drone's spot (see [`BIG_GRID`]).
-    if grid.width * grid.rows() >= BIG_GRID {
-        return sampled_spots(grid, start, count, rng, open);
-    }
-    let distances = grid.distances_from(start);
-    let fits: Vec<(usize, usize)> = distances
-        .iter()
-        .enumerate()
-        .filter(|(_, d)| d.is_some_and(|d| d >= AWAY_FROM_START))
-        .map(|(i, _)| (i % grid.width, i / grid.width))
-        .filter(|&(x, z)| open(x, z))
-        .collect();
-    let mut spots: Vec<(usize, usize)> = Vec::new();
-    let near: Vec<(usize, usize)> = fits
-        .iter()
-        .copied()
-        .filter(|&(x, z)| distances[z * grid.width + x].is_some_and(|d| d <= NEAR_START))
-        .collect();
-    if count > 0 && !near.is_empty() {
-        spots.push(near[rng.below(near.len())]);
-    }
-    let mut apart = APART;
-    while spots.len() < count && !fits.is_empty() {
-        let far_enough = |&(x, z): &(usize, usize), spots: &[(usize, usize)]| {
-            spots.iter().all(|&(sx, sz)| (x as f32 - sx as f32).hypot(z as f32 - sz as f32) >= apart)
-        };
-        // A cell picked at random, tried against those placed: in a city of millions of cells,
-        // going through them all for each would take minutes. Only when the tries all miss is
-        // every cell gone through, to be sure none is left that far apart.
-        if let Some(spot) = (0..TRIES).map(|_| fits[rng.below(fits.len())]).find(|spot| far_enough(spot, &spots)) {
-            spots.push(spot);
-            continue;
-        }
-        let far: Vec<(usize, usize)> = fits.iter().copied().filter(|spot| far_enough(spot, &spots)).collect();
-        if far.is_empty() {
-            // No room left that far apart: nearer, then, or no more at all.
-            if apart < 1.0 {
-                break;
-            }
-            apart /= 2.0;
-            continue;
-        }
-        spots.push(far[rng.below(far.len())]);
-    }
-    spots
-}
-
-/// How many random cells are tried for each spot.
-const SAMPLE_TRIES: usize = 4000;
-
-/// Where `count` hearts go on a big grid, as [`spots`] has them on a small one - on open floor
-/// (`open`), away from the start, the first near it, as far apart as there is room for - but from
-/// cells picked at random, how far each is reckoned as the crow flies: working out the walk to
-/// every one of a city's millions took seconds. Every walkable cell can be walked to, the survey
-/// having found it by walking.
-fn sampled_spots(
-    grid: &WalkGrid,
-    start: (usize, usize),
-    count: usize,
-    rng: &mut Rng,
-    open: impl Fn(usize, usize) -> bool,
-) -> Vec<(usize, usize)> {
-    let (sx, sz) = grid.plan(start);
-    let from_start = |(x, z): (usize, usize)| {
-        let (x, z) = grid.plan((x, z));
-        (x as f32 - sx as f32).hypot(z as f32 - sz as f32)
+    // Somewhere picked at random, and how far it is to walk there from the start.
+    let pick = |rng: &mut Rng| {
+        let roll = rng.below(1 << 20) as f32 / (1 << 20) as f32 * floor;
+        let k = upto.partition_point(|&u| u < roll).min(polygons.len() - 1);
+        let (n, entry, cost) = polygons[k];
+        let at = mesh.random_point(n, &mut |m| rng.below(m));
+        (at, cost + (at.x - entry[0]).hypot(at.z - entry[1]))
     };
-    // A walkable cell picked at random: within `reach` cells of the start, or anywhere.
-    let pick = |rng: &mut Rng, reach: Option<u32>| -> Option<(usize, usize)> {
-        let (x, z) = match reach {
-            Some(r) => {
-                let r = r as isize;
-                let x = sx as isize + rng.below(2 * r as usize + 1) as isize - r;
-                let z = sz as isize + rng.below(2 * r as usize + 1) as isize - r;
-                if x < 0 || z < 0 || x as usize >= grid.width || z as usize >= grid.depth {
-                    return None;
-                }
-                (x as usize, z as usize)
-            }
-            None => (rng.below(grid.width), rng.below(grid.depth)),
-        };
-        let over: Vec<(usize, usize)> = grid.cells_over((x, z)).collect();
-        let cell = *over.get(rng.below(over.len().max(1)))?;
-        (from_start(cell) >= AWAY_FROM_START as f32 && open(cell.0, cell.1)).then_some(cell)
-    };
-    let mut spots: Vec<(usize, usize)> = Vec::new();
+    let mut spots: Vec<Vector3<f32>> = Vec::new();
     if count > 0 {
-        if let Some(near) = (0..SAMPLE_TRIES).find_map(|_| pick(rng, Some(NEAR_START)).filter(|&c| from_start(c) <= NEAR_START as f32)) {
-            spots.push(near);
-        }
+        let near = (0..TRIES)
+            .map(|_| pick(rng))
+            .find(|&(at, walk)| (AWAY_FROM_START..=NEAR_START).contains(&walk) && open(at));
+        spots.extend(near.map(|(at, _)| at));
     }
     let mut apart = APART;
-    while spots.len() < count && apart >= 1.0 {
-        let far_enough = |&(x, z): &(usize, usize), spots: &[(usize, usize)]| {
-            spots.iter().all(|&(sx, sz)| (x as f32 - sx as f32).hypot(z as f32 - sz as f32) >= apart)
-        };
-        match (0..SAMPLE_TRIES).find_map(|_| pick(rng, None).filter(|c| far_enough(c, &spots))) {
-            Some(spot) => spots.push(spot),
+    while spots.len() < count && apart >= 0.5 {
+        let far_enough = |at: Vector3<f32>, spots: &[Vector3<f32>]| spots.iter().all(|s| (s.x - at.x).hypot(s.z - at.z) >= apart);
+        match (0..TRIES).map(|_| pick(rng)).find(|&(at, walk)| walk >= AWAY_FROM_START && open(at) && far_enough(at, &spots)) {
+            Some((at, _)) => spots.push(at),
             // No room that far apart: nearer, then.
             None => apart /= 2.0,
         }
@@ -250,17 +194,11 @@ impl Hearts {
         Self { lamp: Some(colour), name: Some(name), ..Default::default() }
     }
 
-    /// Takes the hearts of the last maze out of `scene`, and puts one from `model` at each of
-    /// `spots` in the maze whose `grid` has its corner at `origin`.
-    pub fn place(
-        &mut self,
-        model: &ModelResource,
-        scene: &mut Scene,
-        (grid, origin): (&WalkGrid, Vector3<f32>),
-        spots: &[(usize, usize)],
-    ) {
+    /// Takes the hearts of the last maze out of `scene`, and puts one from `model` over each of
+    /// `spots`, on the floor.
+    pub fn place(&mut self, model: &ModelResource, scene: &mut Scene, spots: &[Vector3<f32>]) {
         self.clear(&mut scene.graph);
-        for (n, &(x, z)) in spots.iter().enumerate() {
+        for (n, &spot) in spots.iter().enumerate() {
             let root = model.instantiate(scene);
             if n == 0 {
                 self.scale = scale_for(&scene.graph, root);
@@ -282,9 +220,7 @@ impl Hearts {
             .with_radius(LAMP_REACH)
             .build(&mut scene.graph)
             .to_base();
-            // Where the cell is on the plan, whichever storey it is on.
-            let at = grid.center(origin, (x, z));
-            let at = Vector3::new(at.x, grid.floor(x, z) + HOVER, at.z);
+            let at = spot + Vector3::new(0.0, HOVER, 0.0);
             // Each out of step with the others.
             let phase = n as f32 * 0.37 % 1.0;
             self.hearts.push((root, lamp, at, phase));
@@ -429,6 +365,7 @@ fn scale_for(graph: &Graph, root: Handle<Node>) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::layout::WalkGrid;
 
     #[test]
     fn shield_cells_are_rarer_than_hearts() {
@@ -463,17 +400,20 @@ mod tests {
                 grid.set(x, z, true);
             }
         }
-        let start = (5, 5);
-        let spots = spots(&grid, start, 4, &mut Rng::new(3));
+        let mesh = NavMesh::build(&grid, Vector3::zeros(), |_, _| 0);
+        let start = Vector3::new(2.75, 0.0, 2.75);
+        let spots = spots(&mesh, start, 4, &mut Rng::new(3));
         assert_eq!(spots.len(), 4);
-        let distances = grid.distances_from(start);
-        let (x, z) = spots[0];
-        assert!(distances[z * grid.width + x].unwrap() <= NEAR_START, "the first near the start");
-        for (n, &(x, z)) in spots.iter().enumerate() {
-            assert!(distances[z * grid.width + x].unwrap() >= AWAY_FROM_START);
-            assert!(x >= 3 && z >= 3 && x <= 58 && z <= 58, "not against a wall: {x}, {z}");
-            for &(ox, oz) in &spots[n + 1..] {
-                assert!((x, z) != (ox, oz), "two in one place");
+        // In the open, as the crow flies is how far it is to walk.
+        let away = |at: Vector3<f32>| (at.x - start.x).hypot(at.z - start.z);
+        assert!(away(spots[0]) <= NEAR_START + 0.5, "the first near the start");
+        for (n, &at) in spots.iter().enumerate() {
+            assert!(away(at) >= AWAY_FROM_START - 0.5, "{at:?}");
+            // The walls are the first and last half meter each way, the room 30 m across.
+            let wall = 0.5 + ROOM;
+            assert!(at.x >= wall && at.z >= wall && at.x <= 30.5 - ROOM && at.z <= 30.5 - ROOM, "not against a wall: {at:?}");
+            for &other in &spots[n + 1..] {
+                assert!((other - at).norm() > 1.0, "two in one place");
             }
         }
     }
@@ -481,6 +421,7 @@ mod tests {
     #[test]
     fn a_maze_with_no_room_gets_none() {
         let grid = WalkGrid::new(10, 10, crate::survey::CELL_SIZE);
-        assert!(spots(&grid, (1, 1), 3, &mut Rng::new(1)).is_empty());
+        let mesh = NavMesh::build(&grid, Vector3::zeros(), |_, _| 0);
+        assert!(spots(&mesh, Vector3::new(0.5, 0.0, 0.5), 3, &mut Rng::new(1)).is_empty());
     }
 }
