@@ -16,6 +16,12 @@ const STORE: (f64, f64) = (40.0, 600.0);
 const BANK: (f64, f64) = (1_000.0, 5_000.0);
 /// And what a bank's vault holds.
 const VAULT: (f64, f64) = (10_000.0, 30_000.0);
+/// The most a credit chip lying about is worth, and the most a droid carries, in whole credits;
+/// and the least of each, in hundredths.
+const CHIP: f64 = 40.0;
+const PURSE: f64 = 60.0;
+const LEAST_CHIP: u64 = 10;
+const LEAST_PURSE: u64 = 50;
 
 /// An amount of credits, in hundredths of a credit.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -61,6 +67,26 @@ impl Credits {
     /// What a bank's vault holds: between [`VAULT`]'s, mostly toward the least.
     pub fn vault(below: impl FnMut(usize) -> usize) -> Self {
         Self::between(below, VAULT)
+    }
+
+    /// A credit chip lying about in the city (see [`crate::chips`]), from `below` as
+    /// [`Credits::random`]'s are: mostly a credit or two, now and then up to [`CHIP`] - as the cube
+    /// of an even chance, so half are worth under 5.
+    pub fn chip(mut below: impl FnMut(usize) -> usize) -> Self {
+        let chance = below(1001) as f64 / 1000.0;
+        Self::new((chance.powi(3) * CHIP) as u64, below(100) as u64).max(Self(LEAST_CHIP))
+    }
+
+    /// What a droid carries, and drops where it goes down: as the square of an even chance, up to
+    /// [`PURSE`], a quarter of them under 15.
+    pub fn purse(mut below: impl FnMut(usize) -> usize) -> Self {
+        let chance = below(1001) as f64 / 1000.0;
+        Self::new((chance.powi(2) * PURSE) as u64, below(100) as u64).max(Self(LEAST_PURSE))
+    }
+
+    /// `share` of it, to the hundredth.
+    pub fn share(self, share: f64) -> Self {
+        Self((self.0 as f64 * share).round() as u64)
     }
 
     fn between(mut below: impl FnMut(usize) -> usize, (least, most): (f64, f64)) -> Self {

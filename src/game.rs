@@ -15,6 +15,7 @@ use crate::{
     ctf::{self, Bases, Side, MAPS, PLAYERS},
     royale::{self, RingNews, RingPosts, Royale, Who},
     race::{self, Race, RaceNews, Track},
+    chips,
     traffic::{self, Network, Traffic},
     firewall::{self, Firewalls},
     drone::{self, Drone, DroneLines, Kind, State, Target, DRONE_LINES, DRONE_MODEL, QUAD_MODEL, URBS_DRONE_LINES},
@@ -285,6 +286,13 @@ impl PartialEq for Making {
 /// How high the droid with `code` speaks, feeling `mood`, as a part of its kind's pitch: each a
 /// little higher or lower than the rest of its kind, and always the same; and higher or lower
 /// again with how it feels.
+/// The sound of a credit chip picked up, made, with how far off it is heard at full volume.
+fn chip_sound() -> Option<(fyrox::scene::sound::SoundBufferResource, f32)> {
+    let sounds = formants::Sounds::load(chips::CHIP_SOUNDS).inspect_err(|error| Log::err(format!("Credit chips: silent, {error}"))).ok()?;
+    let sound = sounds.sounds.get("chip")?;
+    Some((formants::buffer(sound, sounds.sample_rate)?, sound.reach))
+}
+
 fn pitch(voices: &Voices, code: u32, mood: Mood) -> f32 {
     (1.0 + VOICE_SPREAD * ((code % 7) as f32 / 3.0 - 1.0)) * voices.mood_pitch(mood.name())
 }
@@ -628,6 +636,10 @@ pub struct MazeGame {
     #[visit(skip)]
     #[reflect(hidden)]
     rival_models: Vec<ModelResource>,
+    /// The credit chips lying about in Story mode (see [`chips`]).
+    #[visit(skip)]
+    #[reflect(hidden)]
+    chips: chips::Chips,
     /// The bikes' sounds, made the first time there is a race (see [`race::BikeSounds`]).
     #[visit(skip)]
     #[reflect(hidden)]
@@ -964,6 +976,12 @@ impl MazeGame {
     /// Starts `game`, picked in the main menu: loads its level, and plays it once it has. The
     /// maze is random, unless MAZE_MODEL gives a model to play instead.
     fn play(&mut self, ctx: &mut PluginContext, game: Game) {
+        // A new game: the city's chips all there again, none dropped, laid out afresh.
+        let seed = self.rng().below(usize::MAX) as u64;
+        self.chips.reset(&mut ctx.scenes[self.scene].graph, seed);
+        if self.chips.sound_unset() {
+            self.chips.set_sound(chip_sound());
+        }
         let resources = &ctx.resource_manager;
         let model = match game {
             Game::CaptureTheFlag(map) => Some(MAPS[map].path.to_string()),
@@ -1966,6 +1984,8 @@ impl MazeGame {
         if self.level.grid.is_none() && Track::from_markers(&self.level.markers).is_none() {
             return;
         }
+        // The chips out of the scene, to come back as the player comes near them again.
+        self.chips.clear_scene(&mut ctx.scenes[self.scene].graph);
         self.set_paused(ctx, false);
         self.stop_talking(ctx);
         self.barks.clear();
@@ -2374,6 +2394,7 @@ impl MazeGame {
             if let Some(n) = self.inhabitants.shot(graph, strike, player) {
                 let name = self.name_of(n).unwrap_or_else(|| "The droid".into());
                 self.hud.show_note(format!("{name} is down"));
+                self.drop_purse(n);
             }
             // Shot at, a droid that was not after the player already is at once.
             else if let Some(n) = self.inhabitants.hit(collider) {
@@ -2641,6 +2662,7 @@ impl MazeGame {
             return;
         }
         if let Some(n) = self.inhabitants.shot(graph, strike, from) {
+            self.drop_purse(n);
             match self.inhabitants.side(n) {
                 // In a shootout, each side's own business.
                 Some(Side::Security | Side::Gang) => Log::info(format!("Shootout: droid {n} is down")),
@@ -3334,6 +3356,10 @@ impl MazeGame {
         self.phase = Phase::Deleted;
         self.deleted = 0.0;
         self.set_banner(ctx, &format!("Deleted by {name}"));
+        let feet = self.player.feet(&ctx.scenes[self.scene].graph);
+        if let Some(dropped) = self.drop_players_credits(feet, &format!("deleted by {name}")) {
+            self.hud.show_note(format!("You dropped {dropped} where you went down"));
+        }
         // In battle royale, a life less: back in a moment, or out of the match.
         if let Some(royale) = self.royale.as_mut() {
             if !royale.went_down(0) {
@@ -3926,6 +3952,7 @@ impl MazeGame {
         self.stop_hacking(ctx);
         self.stop_picking(ctx);
         let again = self.custody.is_some_and(|custody| custody.escaped);
+        let dropped = self.drop_players_credits(feet, &format!("arrested by {by}"));
         let c = self.rng().below(cells);
         let graph = &mut ctx.scenes[self.scene].graph;
         // Every firewall in it shut again behind them.
@@ -3961,6 +3988,9 @@ impl MazeGame {
             hud::format_time(custody.sentence),
             if tunnel { ", at the loose panel to pry it" } else { "" }
         ));
+        if let Some(dropped) = dropped {
+            self.hud.show_note(format!("You dropped {dropped} where you were caught"));
+        }
     }
 
     /// Puts the player's hands up, with security after them: arrested, for a little less.
@@ -5113,6 +5143,59 @@ impl MazeGame {
         }
     }
 
+    /// In Story mode, the credit chips about the player: brought in and out of the scene as they
+    /// go, and those they walk into picked up, their credits theirs.
+    fn update_chips(&mut self, ctx: &mut PluginContext) {
+        if !self.story || self.phase != Phase::Playing || self.menu.is_open() {
+            return;
+        }
+        let Some((grid, origin)) = self.level.grid.as_ref() else {
+            return;
+        };
+        let graph = &mut ctx.scenes[self.scene].graph;
+        let player = self.player.position(graph);
+        if let Some(got) = self.chips.update(graph, ctx.dt, player, (grid, *origin)) {
+            self.credits += got;
+            chips::log_pickup(got, self.credits);
+            self.hud.show_note(format!("+{got}    {} in all", self.credits));
+        }
+    }
+
+    /// In Story mode, the `n`th droid, gone down, drops what it was carrying where it fell.
+    fn drop_purse(&mut self, n: usize) {
+        if !self.story {
+            return;
+        }
+        let Some(feet) = self.inhabitants.feet(n) else {
+            return;
+        };
+        let rng = self.rng();
+        let purse = Credits::purse(|k| rng.below(k));
+        if let Some(rng) = self.rng.as_mut() {
+            self.chips.drop_credits(feet, purse, rng);
+        }
+        Log::info(format!("Credits: droid {n} dropped {purse}"));
+    }
+
+    /// In Story mode, the player - deleted or arrested at `feet` - drops a share of their credits
+    /// there (see [`chips::DROPPED`]): what they dropped, if they had any.
+    fn drop_players_credits(&mut self, feet: Vector3<f32>, why: &str) -> Option<Credits> {
+        if !self.story {
+            return None;
+        }
+        let dropped = self.credits.share(chips::DROPPED);
+        if dropped.0 == 0 {
+            return None;
+        }
+        self.credits.0 -= dropped.0;
+        self.rng();
+        if let Some(rng) = self.rng.as_mut() {
+            self.chips.drop_credits(feet, dropped, rng);
+        }
+        Log::info(format!("Credits: dropped {dropped} at {feet:.1?}, {why}; {} left", self.credits));
+        Some(dropped)
+    }
+
     /// Starts using the computer, if the player is at it: the view goes in to its screen, and the
     /// keys are for typing.
     fn start_hacking(&mut self, ctx: &mut PluginContext) {
@@ -5294,6 +5377,7 @@ impl Plugin for MazeGame {
         self.set_up_computer(ctx);
         self.set_up_drone(ctx);
         self.set_up_hearts(ctx);
+        self.update_chips(ctx);
         self.set_up_shield(ctx);
         self.update_heist(ctx);
         self.debug_corpses(ctx);
@@ -5493,6 +5577,7 @@ impl Plugin for MazeGame {
             self.inhabitants.show(&mut scene.graph, &self.level);
             let level = &self.level;
             self.hearts.cull(&mut scene.graph, |at| level.can_see(at));
+            self.chips.cull(&mut scene.graph, |at| level.can_see(at));
             self.shield_cells.cull(&mut scene.graph, |at| level.can_see(at));
             self.stamina_cells.cull(&mut scene.graph, |at| level.can_see(at));
         }

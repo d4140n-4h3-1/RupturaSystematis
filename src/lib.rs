@@ -25,6 +25,7 @@
 //! such as the droids the player and the maze's inhabitants are made from ([`player::avatar`]).
 
 mod alarm;
+mod chips;
 mod computer;
 mod credits;
 mod ctf;
