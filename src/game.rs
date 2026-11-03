@@ -2215,7 +2215,10 @@ impl MazeGame {
                 None => return News::default(),
             },
         };
-        let (Some((grid, origin)), Some(rng)) = (&self.level.grid, self.rng.as_mut()) else {
+        // The navmesh caught up with any door opened or shut, firewall put down, since last time.
+        let changed = self.level.sync_navmesh();
+        let populating = liveries.is_some();
+        let (Some((grid, origin)), Some(mesh), Some(rng)) = (&self.level.grid, &self.level.navmesh, self.rng.as_mut()) else {
             return News::default();
         };
         let scene = &mut ctx.scenes[self.scene];
@@ -2267,6 +2270,11 @@ impl MazeGame {
                     }
                 },
             }
+        }
+        // Where can be got to, from where the player is: afresh as they are put down, and as the
+        // navmesh changes.
+        if populating || changed {
+            self.inhabitants.set_reach(mesh, player);
         }
         // In a city with precincts, once the crowd is down, two guards at each: one at the desk,
         // one in the corridor along the cells.
@@ -2382,6 +2390,7 @@ impl MazeGame {
         self.inhabitants.update(
             &mut scene.graph,
             (grid, *origin),
+            mesh,
             &crossings,
             self.level.roads.as_ref(),
             player,
@@ -4963,7 +4972,7 @@ impl MazeGame {
         if !self.drone_placed && self.phase == Phase::Playing {
             let graph = &mut ctx.scenes[self.scene].graph;
             let feet = self.player.feet(graph);
-            if let (Some((grid, origin)), Some(rng)) = (self.level.grid.as_ref(), self.rng.as_mut()) {
+            if let (Some((grid, origin)), Some(mesh), Some(rng)) = (self.level.grid.as_ref(), self.level.navmesh.as_ref(), self.rng.as_mut()) {
                 for drone in &mut self.drones {
                     drone.hide(graph);
                 }
@@ -4976,7 +4985,7 @@ impl MazeGame {
                         let spots = self.heist.as_ref().map_or_else(Vec::new, |h| h.plan.drones.clone());
                         let security = self.drones.iter_mut().filter(|d| d.kind() == Kind::Security);
                         for (drone, spot) in security.zip(spots) {
-                            drone.place_for(graph, (grid, *origin), ENEMY, spot, rng);
+                            drone.place_for(graph, (grid, *origin), mesh, ENEMY, spot, rng);
                         }
                     }
                     // One for each side, by its flag - of a kind, to be fair; the rest wait to be
@@ -4984,7 +4993,7 @@ impl MazeGame {
                     Some(bases) => {
                         let security = self.drones.iter_mut().filter(|d| d.kind() == Kind::Security);
                         for (drone, side) in security.zip(Side::BOTH) {
-                            drone.place_for(graph, (grid, *origin), side, bases.flag(side), rng);
+                            drone.place_for(graph, (grid, *origin), mesh, side, bases.flag(side), rng);
                         }
                     }
                     // A security drone patrols, if there is one.
@@ -5010,7 +5019,7 @@ impl MazeGame {
             self.call_drone(&mut ctx.scenes[self.scene].graph, at, why);
         }
         let sided = self.sided();
-        let (Some((grid, origin)), Some(rng)) = (self.level.grid.as_ref(), self.rng.as_mut()) else {
+        let (Some((grid, origin)), Some(mesh), Some(rng)) = (self.level.grid.as_ref(), self.level.navmesh.as_ref(), self.rng.as_mut()) else {
             return;
         };
         let graph = &mut ctx.scenes[self.scene].graph;
@@ -5052,11 +5061,11 @@ impl MazeGame {
         let mut says = std::mem::take(&mut self.drone_says);
         // Ways looked for only where there is one to be had (see [`Inhabitants::can_reach`]).
         let inhabitants = &self.inhabitants;
-        let reachable = |to: Vector3<f32>| inhabitants.can_reach((grid, *origin), to);
+        let reachable = |to: Vector3<f32>| inhabitants.can_reach(mesh, to);
         let mut fired = Vec::new();
         for (n, drone) in self.drones.iter_mut().enumerate() {
             let target = targets[n];
-            let doing = drone.update(graph, (grid, *origin), &target, &reachable, self.level.leaves.as_ref(), rng, ctx.dt, live);
+            let doing = drone.update(graph, (grid, *origin), mesh, &target, &reachable, self.level.leaves.as_ref(), rng, ctx.dt, live);
             says.extend(doing.says.map(|said| (n, said)));
             // At its target's middle, wherever they are as it fires.
             if let (Some(volley), Some(shots)) = (doing.fired, self.shots.as_mut()) {

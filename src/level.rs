@@ -5,6 +5,7 @@
 //! the next physics step on, so surveying it for walkable ground and lighting it - which needs
 //! that survey's rays - comes a few frames later, in [`Level::finish`].
 
+use hydroxus_ai::navigation::navmesh::NavMesh;
 use crate::leaves::Leaves;
 use crate::{
     culling::Culling,
@@ -98,6 +99,10 @@ pub struct Level {
     pub markers: Vec<Marker>,
     /// Where the player can walk, and the world position of that grid's corner, once finished.
     pub grid: Option<(WalkGrid, Vector3<f32>)>,
+    /// The walkable floor as polygons, made from the grid once it is surveyed - roads their own
+    /// area ([`ROAD_AREA`]) - and kept up with it as doors open and shut (see
+    /// [`Level::sync_navmesh`]): what the droids and drones find their way about by.
+    pub navmesh: Option<NavMesh>,
     /// Its leaves, which stop nothing but keep the quadcopters out (see [`Leaves`]), if it has
     /// any.
     pub leaves: Option<Leaves>,
@@ -121,7 +126,29 @@ pub struct Level {
     pub roads: Option<Roads>,
 }
 
+/// The area of a navmesh polygon over road (see [`Level::navmesh`]).
+pub const ROAD_AREA: u8 = 1;
+
+/// The area cell `(x, row)` of the grid is, for the navmesh: road, or not.
+fn area(roads: Option<&crate::roads::Roads>, x: usize, row: usize) -> u8 {
+    if roads.is_some_and(|roads| roads.is_road(x, row)) {
+        ROAD_AREA
+    } else {
+        0
+    }
+}
+
 impl Level {
+    /// Has the navmesh catch up with whatever has changed on the grid since it last did - a door
+    /// opened or shut, a firewall put down. Whether anything had.
+    pub fn sync_navmesh(&mut self) -> bool {
+        let (Some((grid, _)), Some(mesh)) = (self.grid.as_mut(), self.navmesh.as_mut()) else {
+            return false;
+        };
+        let roads = self.roads.as_ref();
+        mesh.sync(grid, |x, row| area(roads, x, row))
+    }
+
     /// Puts a random maze into the scene, built from tiles. `doubled` is the surface data already
     /// made double-sided, which tiles share between all their copies, in every level.
     pub fn from_tiles(
@@ -293,6 +320,7 @@ impl Level {
             goal,
             markers,
             grid: None,
+            navmesh: None,
             leaves,
             culling: None,
             distant,
@@ -320,6 +348,20 @@ impl Level {
             self.precincts.keep_out(grid, *origin);
         }
         self.roads = roads.zip(self.grid.as_ref()).map(|(plan, (grid, origin))| plan.on(grid, *origin));
+        self.navmesh = self.grid.as_mut().map(|(grid, origin)| {
+            let started = std::time::Instant::now();
+            let roads = self.roads.as_ref();
+            let mesh = NavMesh::build(grid, *origin, |x, row| area(roads, x, row));
+            grid.track_changes();
+            Log::info(format!(
+                "Maze: navmesh of {} polygons and {} portals, {:.1} MB, in {:.2} s",
+                mesh.len(),
+                mesh.portal_count(),
+                mesh.bytes() as f64 / 1.0e6,
+                started.elapsed().as_secs_f64()
+            ));
+            mesh
+        });
         let fixtures = std::mem::take(&mut self.fixtures);
         let lamps = fixtures::place_lamps(graph, &fixtures, self.lamp_sharing);
         if let Some(culling) = self.culling.as_mut() {

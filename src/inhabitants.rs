@@ -95,14 +95,18 @@
 
 pub use hydroxus_ai::alert::{Alert, CAUTION, EVASION};
 pub use hydroxus_ai::tactics::threat::Threat;
-pub(crate) use hydroxus_ai::navigation::route::{between, plan, route_to, spot_near};
+pub(crate) use hydroxus_ai::navigation::route::between;
+// Where droids are put down is still found on the grid, until it goes.
+use hydroxus_ai::navigation::route::spot_near as spot_near_grid;
+use hydroxus_ai::navigation::walk::route_to;
 use crate::{ferry::Crossing, roads::Roads, train::Doors};
 use hydroxus_ai::{
     flat, forward, heading_of,
     navigation::{
         reach::Reach,
         ride::{take_train, Rides, Riding, Ride, TRAIN_CHANCE},
-        route::spot_on_any_floor_near,
+        navmesh::{NavMesh, Poly},
+        walk::{self, plan, spot_near, spot_on_any_floor_near},
         steer::{make_way, step_aside},
         trip::{self, Doing, Trip},
         wander::wander,
@@ -207,9 +211,9 @@ const AWAY_FROM_PLAYER: f32 = 24.0;
 const NEAR_PLAYER: (f32, f32) = (8.0, 14.0);
 const NEAR_CONE: f32 = 30.0 * std::f32::consts::PI / 180.0;
 const NEAR_REST: f32 = 20.0;
-/// How far a droid goes each time it sets off, in steps across the grid, from least to most:
-/// never just round the corner, never across the whole maze.
-const TRIP: (f32, f32) = (30.0, 160.0);
+/// How far a droid goes each time it sets off, in meters, from least to most: never just round
+/// the corner, never across the whole maze.
+const TRIP: (f32, f32) = (15.0, 80.0);
 /// How long it stands still between trips, in seconds, from least to most.
 const REST: (f32, f32) = (2.0, 10.0);
 /// How near the next point on its route it has to get, in meters, before making for the one
@@ -246,15 +250,15 @@ const GUESS: f32 = 4.0;
 /// looking, in radians.
 const LOOK_ABOUT: f32 = 3.0;
 const LOOK_SWEEP: f32 = 70.0 * std::f32::consts::PI / 180.0;
-/// How far each spot it searches is from the last, in steps across the grid, from least to most.
-const SEARCH_TRIP: (f32, f32) = (10.0, 40.0);
+/// How far each spot it searches is from the last, in meters of walking, from least to most.
+const SEARCH_TRIP: (f32, f32) = (5.0, 20.0);
 /// How far above its feet, in meters, the middle of the view is taken to be pointed at a droid.
 const CHEST: f32 = 1.2;
 /// How often a hostile droid that can see the player works out its way to them again, in
 /// seconds.
 const REPLAN: f32 = 0.4;
-/// How far it looks for a way to the player, in steps across the grid's half-meter cells.
-const CHASE_REACH: f32 = 200.0;
+/// How far it looks for a way to the player, in meters of walking.
+const CHASE_REACH: f32 = 100.0;
 /// How far above or below where a droid is the floor can be and still be the floor it is on, in
 /// meters: a stair's step, and a little more for its feet still coming down onto it.
 const ON_FLOOR: f32 = 0.7;
@@ -1091,7 +1095,6 @@ impl Inhabitants {
             return;
         };
         let routes = grid.routes_from(start, f32::INFINITY);
-        self.reachable = Reach::of((0..grid.width * grid.rows()).map(|i| routes.cost(i).is_some()));
         // A crowd turns up again anywhere it could have walked to, off the roads; and is about
         // the player from the start.
         self.chase_in = CHASE_FIRST;
@@ -1992,7 +1995,7 @@ impl Inhabitants {
         for side in Side::BOTH {
             let facing = flat(bases.flag(side.other()) - bases.flag(side));
             for n in 0..ctf::DROIDS {
-                let Some(feet) = spot_near((grid, origin), bases.post(side, n), SPAWN_REACH, rng) else {
+                let Some(feet) = spot_near_grid((grid, origin), bases.post(side, n), SPAWN_REACH, rng) else {
                     continue;
                 };
                 let character = kind(side).min(self.liveries.len() - 1);
@@ -2032,7 +2035,7 @@ impl Inhabitants {
         }
         ragdoll::prepare(&mut scene.graph);
         for (n, &post) in posts.iter().enumerate() {
-            let Some(feet) = spot_near((grid, origin), post, SPAWN_REACH, rng) else {
+            let Some(feet) = spot_near_grid((grid, origin), post, SPAWN_REACH, rng) else {
                 continue;
             };
             let heading = between(rng, (0.0, std::f32::consts::TAU));
@@ -2066,7 +2069,7 @@ impl Inhabitants {
         let mut came = 0;
         for k in 0..count {
             let at = entries[k % entries.len()];
-            let Some(feet) = spot_near((grid, origin), at, SPAWN_REACH, rng) else {
+            let Some(feet) = spot_near_grid((grid, origin), at, SPAWN_REACH, rng) else {
                 continue;
             };
             let to = flat(player - feet);
@@ -2130,7 +2133,7 @@ impl Inhabitants {
         if self.liveries.is_empty() {
             return false;
         }
-        let feet = spot_near((grid, origin), at, SPAWN_REACH, rng).unwrap_or(at);
+        let feet = spot_near_grid((grid, origin), at, SPAWN_REACH, rng).unwrap_or(at);
         let number = match side {
             Side::Lone(n) => n as usize,
             _ => 0,
@@ -2160,8 +2163,15 @@ impl Inhabitants {
 
     /// Whether there is any way at all to `to` over `grid`, whose corner is at `origin`, from where
     /// the player started - for the drones, to look for a way only where there is one.
-    pub fn can_reach(&self, (grid, origin): (&WalkGrid, Vector3<f32>), to: Vector3<f32>) -> bool {
-        self.reachable.to((grid, origin), to)
+    pub fn can_reach(&self, mesh: &NavMesh, to: Vector3<f32>) -> bool {
+        self.reachable.to_on_mesh(mesh, to)
+    }
+
+    /// Works out afresh which of `mesh`'s polygons can be got to from `from` - where the player
+    /// is, as a round starts, or the navmesh has changed (see [`Reach::on_mesh`]): where those
+    /// going about their business may set off for, and the way to anywhere is looked for.
+    pub fn set_reach(&mut self, mesh: &NavMesh, from: Vector3<f32>) {
+        self.reachable = Reach::on_mesh(mesh, from);
     }
 
     /// The trains, as of the end of this step, for those that take them.
@@ -2238,6 +2248,7 @@ impl Inhabitants {
         &mut self,
         graph: &mut Graph,
         (grid, origin): (&WalkGrid, Vector3<f32>),
+        mesh: &NavMesh,
         crossings: &[Crossing],
         roads: Option<&Roads>,
         player: Vector3<f32>,
@@ -2254,18 +2265,18 @@ impl Inhabitants {
         let alarmed = std::mem::take(&mut self.alarmed);
         // Floor that can be walked at the height of `spot`: not a drop off the edge, nor the floor
         // under a walkway, nor the walkway over it.
-        let floor_at = |spot: Vector3<f32>| {
-            survey::cell_at(grid, origin, spot)
-                .is_some_and(|(x, z)| grid.is_walkable(x, z) && (grid.floor(x, z) - spot.y).abs() <= ON_FLOOR)
-        };
+        let floor_at = |spot: Vector3<f32>| walk::floor_at(mesh, spot, ON_FLOOR);
+        // The roads, to keep off but to cross, if there are any.
+        let on_road = |n: Poly| mesh.polygon(n).area == crate::level::ROAD_AREA;
+        let road: Option<&dyn Fn(Poly) -> bool> = roads.map(|_| &on_road as &dyn Fn(Poly) -> bool);
         // A way to `to`, if there is one at all: none looked for where there is none to be had.
         let reachable = &self.reachable;
-        let go_to = |feet: Vector3<f32>, to: Vector3<f32>| match reachable.to((grid, origin), to) {
-            true => trip::go_to((grid, origin), feet, to, CHASE_REACH, crossings),
+        let go_to = |feet: Vector3<f32>, to: Vector3<f32>| match reachable.to_on_mesh(mesh, to) {
+            true => trip::go_to(mesh, feet, to, CHASE_REACH, crossings),
             false => (Vec::new(), None),
         };
-        let route_to = |feet: Vector3<f32>, to: Vector3<f32>| match reachable.to((grid, origin), to) {
-            true => route_to((grid, origin), feet, to, CHASE_REACH),
+        let route_to = |feet: Vector3<f32>, to: Vector3<f32>| match reachable.to_on_mesh(mesh, to) {
+            true => route_to(mesh, feet, to, CHASE_REACH),
             false => Vec::new(),
         };
         // Where everyone is, and which way those walking are going; the player last.
@@ -2424,17 +2435,14 @@ impl Inhabitants {
             Some(_) => CROWD_REST,
             None => REST,
         };
-        // Each group's turf, for the others to keep off: the cell its spot is in, and how many
-        // cells round it reaches.
-        let turfs: Vec<((usize, usize), f32)> = self
+        // Each group's turf, for the others to keep off: its spot, and how far round it it reaches,
+        // in meters.
+        let turfs: Vec<(Vector3<f32>, f32)> = self
             .droids
             .iter()
             .enumerate()
             .filter(|&(n, droid)| !droid.down && (self.groups.leads(n) || self.groups.partner(n).is_none()))
-            .filter_map(|(_, droid)| {
-                let (at, reach) = droid.turf?;
-                Some((survey::cell_at(grid, origin, at)?, reach / grid.cell_size))
-            })
+            .filter_map(|(_, droid)| droid.turf)
             .collect();
         // The droids' own bodies, which are no cover.
         let bodies: Vec<Handle<Collider>> = self.droids.iter().map(|droid| droid.collider).collect();
@@ -2680,7 +2688,7 @@ impl Inhabitants {
                             .and_then(|(feet, _)| flat(droid.feet - feet).try_normalize(1.0e-3));
                         if let Some(away) = away.filter(|_| droid.replan <= 0.0 || droid.route.is_empty() && !droid.no_way) {
                             droid.replan = REPLAN * 4.0;
-                            let to = chase::flee_to((grid, origin), droid.feet, away, rng);
+                            let to = chase::flee_to(mesh, droid.feet, away, rng);
                             droid.route = route_to(droid.feet, to);
                             droid.no_way = droid.route.is_empty();
                         }
@@ -2763,14 +2771,14 @@ impl Inhabitants {
                                 .filter_map(|(_, g)| *g)
                                 .collect();
                             let next = cell_of(droid.feet).filter(|_| !search.is_empty()).and_then(|from| {
-                                search.best(grid, from, &taken, SEARCH_APART / grid.cell_size, CHASE_REACH)
+                                search.best(grid, from, &taken, SEARCH_APART / grid.cell_size, CHASE_REACH / grid.cell_size)
                             });
                             (droid.route, droid.trip) = match next {
                                 Some(cell) => go_to(droid.feet, grid.on_floor(origin, cell)),
                                 None => (Vec::new(), None),
                             };
                             if droid.route.is_empty() {
-                                droid.route = plan((grid, origin), droid.feet, SEARCH_TRIP, rng);
+                                droid.route = plan(mesh, droid.feet, SEARCH_TRIP, rng);
                             }
                         }
                         // First where the player was going when it last saw them, if there is
@@ -2827,7 +2835,7 @@ impl Inhabitants {
                         );
                         !hits.iter().any(|hit| !bodies.contains(&hit.collider))
                     };
-                    let to = cover::take_cover((grid, origin), droid.feet, droid.heading, danger, rng, open);
+                    let to = cover::take_cover(mesh, droid.feet, droid.heading, danger, rng, open);
                     droid.route = to.map_or_else(Vec::new, |to| route_to(droid.feet, to));
                     droid.cover = Some((danger, true));
                 } else if droid.route.is_empty() {
@@ -2843,8 +2851,7 @@ impl Inhabitants {
                 // off the road there.
                 let ahead = forward(leader.heading) * leader.speed * LEAD;
                 let keeps_off = |at: Vector3<f32>| {
-                    floor_at(at)
-                        && !survey::cell_at(grid, origin, at).is_some_and(|(x, z)| roads.is_some_and(|r| r.is_road(x, z)))
+                    floor_at(at) && !(roads.is_some() && mesh.poly_at(at).is_some_and(on_road))
                 };
                 let behind = leader.feet + ahead - forward(leader.heading) * (BESIDE.0 + 0.8 * groups.slot(me) as f32);
                 let slot = [about_leader(leader.feet + ahead, leader.heading, groups.slot(me)), behind]
@@ -2869,7 +2876,7 @@ impl Inhabitants {
                 } else if droid.resting == 0.0 {
                     (droid.route, droid.trip) = match droid.post {
                         // In capture the flag, about where it keeps to.
-                        Some(post) => spot_near((grid, origin), post, POST_REACH, rng)
+                        Some(post) => spot_near(mesh, post, POST_REACH, rng)
                             .map(|to| go_to(droid.feet, to))
                             .unwrap_or_default(),
                         // In battle royale, somewhere inside the ring, well in from its edge.
@@ -2885,7 +2892,7 @@ impl Inhabitants {
                                     droid.feet + to_middle * ((off - reach * 0.5).min(RING_WANDER) / off)
                                 };
                                 (0..6)
-                                    .filter_map(|_| spot_on_any_floor_near((grid, origin), around, RING_WANDER, rng))
+                                    .filter_map(|_| spot_on_any_floor_near(mesh, around, RING_WANDER, rng))
                                     .find(|&to| flat(to - middle).norm() < reach * 0.9)
                                     .map(|to| go_to(droid.feet, to))
                                     .unwrap_or_default()
@@ -2894,7 +2901,7 @@ impl Inhabitants {
                             // others' turf.
                             None => match droid.turf {
                                 Some((at, _)) => (
-                                    spot_near((grid, origin), at, TURF_KEEP, rng)
+                                    spot_near(mesh, at, TURF_KEEP, rng)
                                         .map_or_else(Vec::new, |to| route_to(droid.feet, to)),
                                     None,
                                 ),
@@ -2907,7 +2914,7 @@ impl Inhabitants {
                                     && droid.side.is_none()
                                     && !droid.sentry
                                     && rng.below(TRAIN_CHANCE) == 0)
-                                    .then(|| take_train((grid, origin), droid.feet, &self.trains, &taken, CHASE_REACH, rng))
+                                    .then(|| take_train(mesh, droid.feet, &self.trains, &taken, CHASE_REACH, rng))
                                     .flatten()
                                 {
                                     Some((route, ride)) => {
@@ -2915,7 +2922,7 @@ impl Inhabitants {
                                         droid.ride = Some(ride);
                                         (route, None)
                                     }
-                                    None => (wander((grid, origin), droid.feet, TRIP, roads, &turfs, &self.reachable, rng), None),
+                                    None => (wander(mesh, droid.feet, TRIP, road, &turfs, &self.reachable, rng), None),
                                 },
                             },
                         },
@@ -3066,7 +3073,7 @@ impl Inhabitants {
             // it, it goes where the trip takes it.
             let step = forward(droid.heading) * (droid.speed * dt);
             let off_the_grid = droid.trip.is_some_and(|trip| trip.off_the_grid()) || droid.aboard();
-            let fits = |step: Vector3<f32>| off_the_grid || trip::can_step(grid, origin, droid.feet, droid.feet + step);
+            let fits = |step: Vector3<f32>| off_the_grid || trip::can_step(mesh, droid.feet, droid.feet + step);
             match [step, Vector3::new(step.x, 0.0, 0.0), Vector3::new(0.0, 0.0, step.z)].into_iter().find(|&step| fits(step)) {
                 Some(step) => droid.feet += step,
                 // Nowhere to go from here: kept waiting, as by someone in its way, it goes
@@ -3091,9 +3098,8 @@ impl Inhabitants {
                 None => match train.filter(|train| train.within(droid.feet)) {
                     Some(train) => droid.feet.y = train.floor(),
                     None => {
-                        if let Some((x, z)) = survey::cell_at(grid, origin, droid.feet) {
-                            if grid.is_walkable(x, z) {
-                                let floor = grid.floor(x, z);
+                        if let Some(floor) = walk::floor_under(mesh, droid.feet) {
+                            {
                                 droid.feet.y += (floor - droid.feet.y) * (1.0 - (-FLOOR_EASING * dt).exp());
                             }
                         }

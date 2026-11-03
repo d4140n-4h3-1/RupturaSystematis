@@ -82,7 +82,10 @@ use fyrox::{
         Scene,
     },
 };
-use hydroxus_ai::{navigation::route, perception::sight::Sight};
+use hydroxus_ai::{
+    navigation::{navmesh::NavMesh, route, walk},
+    perception::sight::Sight,
+};
 use serde::Deserialize;
 use std::{collections::HashMap, f32::consts::PI};
 
@@ -145,11 +148,11 @@ const CALLED_FROM: f32 = 80.0;
 /// answer the call itself, rather than one being called in from nearer.
 pub const ANSWERS_WITHIN: f32 = 25.0;
 /// How far it goes on patrol each time it sets off, and how far between the spots it searches,
-/// in steps across the grid, from least to most; and how long it waits between trips, in seconds.
-const TRIP: (f32, f32) = (30.0, 120.0);
+/// in meters of walking, from least to most; and how long it waits between trips, in seconds.
+const TRIP: (f32, f32) = (15.0, 60.0);
 /// On a side in capture the flag, how far from its flag it patrols, in meters.
 const POST_REACH: f32 = 9.0;
-const SEARCH_TRIP: (f32, f32) = (10.0, 40.0);
+const SEARCH_TRIP: (f32, f32) = (5.0, 20.0);
 const REST: (f32, f32) = (3.0, 8.0);
 /// How fast it flies, in meters per second: patrolling, and hostile; how quickly it gets up to
 /// speed, in meters per second per second; and how quickly it turns, in radians a second.
@@ -282,10 +285,10 @@ const FIRE_RANGE: f32 = 20.0;
 const FIRE_EVERY: f32 = 1.5;
 const FIRST_SHOT: f32 = 0.8;
 const REPLAN: f32 = 0.5;
-/// How far it looks for a way anywhere, in steps across the grid's half-meter cells: 200 m. With
+/// How far it looks for a way anywhere, in meters of walking. With
 /// no way there - the player up on a roof it has no way under, say - a search with no bound goes
 /// over every cell it can reach in the whole city before it gives up, a tenth of a second and more.
-const ROUTE_REACH: f32 = 400.0;
+const ROUTE_REACH: f32 = 200.0;
 /// How many of the pistol's bolts bring it down.
 pub const HITS: u32 = 3;
 /// Its body: a ball this big across its middle, in meters.
@@ -666,11 +669,12 @@ impl Drone {
         &mut self,
         graph: &mut Graph,
         (grid, origin): (&WalkGrid, Vector3<f32>),
+        mesh: &NavMesh,
         side: Side,
         post: Vector3<f32>,
         rng: &mut Rng,
     ) -> bool {
-        let Some(at) = inhabitants::spot_near((grid, origin), post, POST_REACH, rng) else {
+        let Some(at) = walk::spot_near(mesh, post, POST_REACH, rng) else {
             return false;
         };
         // Put down anywhere, and then where it should be.
@@ -1067,6 +1071,7 @@ impl Drone {
         &mut self,
         graph: &mut Graph,
         (grid, origin): (&WalkGrid, Vector3<f32>),
+        mesh: &NavMesh,
         player: &Target,
         reachable: &dyn Fn(Vector3<f32>) -> bool,
         leaves: Option<&Leaves>,
@@ -1078,7 +1083,7 @@ impl Drone {
         if live && self.placed {
             self.since += dt;
             let leaves = leaves.map(Leaves::graph);
-            doing.says = self.think(graph, (grid, origin), player, reachable, leaves, rng, dt);
+            doing.says = self.think(graph, mesh, player, reachable, leaves, rng, dt);
             self.fly(graph, (grid, origin), player, leaves, dt);
             match self.wrecked {
                 true => self.follow_wreck(graph, dt),
@@ -1166,7 +1171,7 @@ impl Drone {
     fn think(
         &mut self,
         graph: &Graph,
-        (grid, origin): (&WalkGrid, Vector3<f32>),
+        mesh: &NavMesh,
         player: &Target,
         reachable: &dyn Fn(Vector3<f32>) -> bool,
         leaves: Option<&Graph>,
@@ -1177,7 +1182,7 @@ impl Drone {
         // A way to `to`, if there is any: none looked for where there is none to be had (see
         // [`ROUTE_REACH`]).
         let ground = |to: Vector3<f32>| match reachable(to) {
-            true => inhabitants::route_to((grid, origin), self.at - Vector3::new(0.0, HOVER, 0.0), to, ROUTE_REACH),
+            true => walk::route_to(mesh, self.at - Vector3::new(0.0, HOVER, 0.0), to, ROUTE_REACH),
             false => Vec::new(),
         };
         // Flying free, through the air to its height over `to`: there whether there is a way
@@ -1210,10 +1215,10 @@ impl Drone {
                     if self.resting <= 0.0 {
                         self.route = match self.post {
                             // On a side, round its flag.
-                            Some(post) => inhabitants::spot_near((grid, origin), post, POST_REACH, rng)
+                            Some(post) => walk::spot_near(mesh, post, POST_REACH, rng)
                                 .map(&route_to)
                                 .unwrap_or_default(),
-                            None => lift(inhabitants::plan((grid, origin), under, TRIP, rng)),
+                            None => lift(walk::plan(mesh, under, TRIP, rng)),
                         };
                         self.resting = inhabitants::between(rng, REST);
                     }
@@ -1276,7 +1281,7 @@ impl Drone {
                     if self.scanning <= 0.0 {
                         self.scanning = 0.0;
                         self.searched += 1;
-                        self.route = lift(inhabitants::plan((grid, origin), under, SEARCH_TRIP, rng));
+                        self.route = lift(walk::plan(mesh, under, SEARCH_TRIP, rng));
                     }
                 } else if self.route.is_empty() {
                     if self.searched == 0 && flat(self.lost_at - under).norm() > REACHED {

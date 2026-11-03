@@ -5,7 +5,7 @@
 //! each `[x0, z0, x1, z1]` in the world; and the height under which the floor is the road's
 //! rather than the pavement's, so that nothing built over a street counts. On the walk grid
 //! that comes of it, each cell of road but not of a crossing is dear to walk into for a droid
-//! going about its business (see [`ROAD_COST`]): its routes keep to the pavements, and go over
+//! going about its business (see `hydroxus_ai::navigation::wander::ROAD_COST`): its routes keep to the pavements, and go over
 //! the road only at a crossing - or where there is no other way at all. A droid after the
 //! player pays no heed to it.
 
@@ -13,9 +13,6 @@ use crate::layout::WalkGrid;
 use fyrox::core::{algebra::Vector3, log::Log};
 use serde::Deserialize;
 
-/// How much more a step onto the road costs than one along the pavement: enough that a droid
-/// walks to the nearest crossing rather than straight over, a block's length out of its way.
-pub const ROAD_COST: f32 = 20.0;
 
 /// A rectangle on the ground, `[x0, z0, x1, z1]`.
 type Rect = [f32; 4];
@@ -113,26 +110,6 @@ impl Roads {
     pub fn is_road(&self, x: usize, row: usize) -> bool {
         self.road.get(row * self.width + x).copied().unwrap_or(false)
     }
-
-    /// What a step into cell `(x, row)` costs over a step along the pavement, for a route (see
-    /// [`WalkGrid::routes_from_weighted`]).
-    pub fn extra(&self, x: usize, row: usize) -> f32 {
-        if self.is_road(x, row) {
-            ROAD_COST
-        } else {
-            0.0
-        }
-    }
-}
-
-/// The road a droid going about its business keeps off (see [`hydroxus_ai::navigation::wander`]).
-impl hydroxus_ai::navigation::wander::Roads for Roads {
-    fn is_road(&self, x: usize, row: usize) -> bool {
-        Roads::is_road(self, x, row)
-    }
-    fn extra(&self, x: usize, row: usize) -> f32 {
-        Roads::extra(self, x, row)
-    }
 }
 
 #[cfg(test)]
@@ -172,12 +149,22 @@ mod tests {
     fn a_route_over_the_street_goes_by_the_crossing() {
         let (grid, plan) = street();
         let roads = plan.on(&grid, Vector3::zeros());
+        use hydroxus_ai::navigation::{navmesh::NavMesh, walk::route_to_weighted, wander::ROAD_COST};
+        let mesh = NavMesh::build(&grid, Vector3::zeros(), |x, z| u8::from(roads.is_road(x, z)));
+        let dear = |n| if mesh.polygon(n).area == 1 { ROAD_COST } else { 0.0 };
         // From one pavement to the other, both well along from the crossing.
-        let path = grid
-            .route_between_weighted((4, 34), (36, 34), f32::INFINITY, |x, z| roads.extra(x, z))
-            .expect("a way over");
-        let on_road: Vec<_> = path.iter().filter(|&&(x, z)| (16..24).contains(&x) && !(18..22).contains(&z)).collect();
-        assert!(on_road.is_empty(), "off the road but at the crossing: {on_road:?}");
+        let (from, to) = (Vector3::new(2.25, 0.12, 17.25), Vector3::new(18.25, 0.12, 17.25));
+        let route = route_to_weighted(&mesh, from, to, f32::INFINITY, dear);
+        assert!(!route.is_empty(), "a way over");
+        // Every step of the way, as the crow flies between its corners, off the road.
+        let mut at = from;
+        for &next in route.iter().rev() {
+            for k in 0..=20 {
+                let p = at + (next - at) * (k as f32 / 20.0);
+                assert!(!mesh.poly_at(p).is_some_and(|n| mesh.polygon(n).area == 1), "on the road at {p:?}: {route:?}");
+            }
+            at = next;
+        }
     }
 
     #[test]
