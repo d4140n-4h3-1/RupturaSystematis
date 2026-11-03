@@ -126,6 +126,14 @@ PALETTE = {
 }
 WHITE = (0.75, 0.9, 1.0)
 SEGMENT = 3.0                # the longest piece of a line of light the game lights with
+# How much wider the lines of light are than they are drawn at, by how far from the road their
+# building stands: a line thinner than a pixel breaks up into dashes that crawl as the view moves,
+# and at race speed nothing smooths them. The nearest are WIDEN[0] times as wide, and every
+# WIDEN[1] meters further off another time as wide, up to WIDEN[2] - wide enough to stay about a
+# pixel across from the road.
+WIDEN = (1.6, 70.0, 5.0)
+# The floor's grid lines, seen edge on from the road: half their width.
+GRID_HALF = 0.2
 
 
 def night_materials(rc, m):
@@ -175,6 +183,8 @@ class City:
         self.taken = []          # (x, y, r): kept clear of buildings
         self.rng = random.Random(11)
         self.count = {}
+        # How much wider than drawn the lines being made are (see WIDEN): the nearest by default.
+        self.widen = WIDEN[0]
 
     def shade(self):
         return self.glows[self.rng.choice(("cyan", "cyan", "cyan", "orange", "pink", "yellow", "green", "violet"))]
@@ -199,6 +209,10 @@ class City:
         lit with in the game if `light`."""
         b = b or self.lights
         height = width if height is None else height
+        # Wider for a building further off, so as not to break up into dashes from the road; no
+        # thicker, which would only show close up.
+        width *= self.widen
+        height *= min(self.widen, 2.0)
         d = q - p
         if d.length < 1e-4:
             return
@@ -438,6 +452,7 @@ class City:
             if near > CITY_MARGIN:
                 continue
             h = rng.uniform(30, 70) + 120 * max(0.0, 1 - near / 160) * rng.uniform(0.4, 1.0)
+            self.widen = min(WIDEN[0] + near / WIDEN[1], WIDEN[2])
             kind = rng.choice(kinds)
             if kind == "dome":
                 self.dome(x, y, r)
@@ -455,7 +470,7 @@ class City:
         x0, y0, x1, y1 = x0 - GROUND_MARGIN, y0 - GROUND_MARGIN, x1 + GROUND_MARGIN, y1 + GROUND_MARGIN
         self.ground.face([Vector((x0, y0, -0.05)), Vector((x1, y0, -0.05)), Vector((x1, y1, -0.05)), Vector((x0, y1, -0.05))],
                          self.floor)
-        w = 0.08
+        w = GRID_HALF
         gx = math.ceil(x0 / GRID) * GRID
         while gx < x1:
             self.ground.face([Vector((gx - w, y0, -0.04)), Vector((gx + w, y0, -0.04)), Vector((gx + w, y1, -0.04)),

@@ -733,8 +733,8 @@ def main():
         objs += build_scenery(secs, m, bounds, crowd)
         objs.append(build_ground(m, bounds))
     objs += crowd.objs
-    sections = sum(1 for o in crowd.objs if o.name.startswith("Crowd_"))
-    print(f"[race] crowd: {crowd.figures} on {crowd.stands} stands, in {sections} sections; {crowd.monitors} monitors")
+    crowd_sections = sum(1 for o in crowd.objs if o.name.startswith("Crowd_"))
+    print(f"[race] crowd: {crowd.figures} on {crowd.stands} stands, in {crowd_sections} sections; {crowd.monitors} monitors")
     checkpoints = place_markers(secs)
     highest = max(s.centre.z for s in secs)
     banked = max(abs(s.bank) for s in secs)
