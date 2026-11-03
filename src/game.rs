@@ -5178,7 +5178,8 @@ impl MazeGame {
         }
     }
 
-    /// In Story mode, the `n`th droid, gone down, drops what it was carrying where it fell.
+    /// In Story mode, the `n`th droid, gone down, drops what it was carrying where it fell - if it
+    /// was carrying anything: not every one is (see [`chips::CARRIES`]).
     fn drop_purse(&mut self, n: usize) {
         if !self.story {
             return;
@@ -5187,6 +5188,10 @@ impl MazeGame {
             return;
         };
         let rng = self.rng();
+        if !chips::carries(rng.below(100)) {
+            Log::info(format!("Credits: droid {n} was carrying none"));
+            return;
+        }
         let purse = Credits::purse(|k| rng.below(k));
         if let Some(rng) = self.rng.as_mut() {
             self.chips.drop_credits(feet, purse, rng);

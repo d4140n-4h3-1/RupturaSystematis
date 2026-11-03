@@ -15,7 +15,8 @@
 //! round starts again.
 //!
 //! And more are dropped ([`Chips::drop_credits`]): a droid that goes down scatters what it was
-//! carrying where it fell ([`Credits::purse`]); the player, deleted or arrested, drops half of
+//! carrying where it fell ([`Credits::purse`]) - if it was carrying any, as most are
+//! ([`CARRIES`]); the player, deleted or arrested, drops half of
 //! theirs where it happened ([`DROPPED`]), for them to go back for. Those lie there until they are
 //! picked up, the next round too.
 
@@ -62,6 +63,13 @@ const SHOWN_WITHIN: f32 = 75.0;
 const IN_A_SQUARE: [(usize, usize); 4] = [(0, 20), (1, 40), (2, 30), (3, 10)];
 /// How many cells a square tries for each chip, to find one with floor all round.
 const TRIES: usize = 12;
+/// How likely a droid is to have been carrying credits, to drop where it goes down, in hundredths:
+/// the rest carried none.
+pub const CARRIES: usize = 60;
+/// Whether a droid that went down was carrying credits, for `roll`, a number from 0 to 99.
+pub fn carries(roll: usize) -> bool {
+    roll < CARRIES
+}
 /// How much of what they carry the player drops, deleted or arrested; and into how many chips at
 /// most anything dropped scatters, how far round where it fell.
 pub const DROPPED: f64 = 0.5;
@@ -501,6 +509,13 @@ mod tests {
             assert_eq!(split.iter().map(|c| c.0).sum::<u64>(), total.0);
         }
         assert_eq!(pieces(Credits::new(3, 50)).len(), 3);
+    }
+
+    #[test]
+    fn some_droids_carry_credits_and_some_do_not() {
+        let carrying = (0..100).filter(|&roll| carries(roll)).count();
+        assert_eq!(carrying, CARRIES);
+        assert!(carrying > 0 && carrying < 100);
     }
 
     #[test]
