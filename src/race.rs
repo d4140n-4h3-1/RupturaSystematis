@@ -163,9 +163,6 @@ const LANDING: f32 = 3.0;
 const CLUNK: f32 = 2.0;
 const SCREECH_EVERY: f32 = 0.25;
 
-/// How far ahead a droid sees a speed pad and makes for it, and how far off its line it goes to.
-const PAD_SEEN: f32 = 45.0;
-const PAD_DETOUR: f32 = 6.0;
 /// How many chevrons a pad has, each its own mesh in the track (`SpeedPadChevron1`, the hindmost,
 /// on: see `data/arena/race_circuit.py`); how long each is lit, in seconds, before the next one on
 /// is; and how bright an unlit one's colour is, of a lit one's.
@@ -346,15 +343,9 @@ impl Progress {
     }
 }
 
-/// What the rider asks of the bike this frame.
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
-pub struct Controls {
-    /// Forward (1) or brake and back (-1).
-    pub throttle: f32,
-    /// Left (1) or right (-1).
-    pub steer: f32,
-    pub boost: bool,
-}
+/// What the rider asks of the bike this frame: the player, at the keys, or a droid
+/// ([`hydroxus_ai::racing`]).
+pub use hydroxus_ai::racing::Controls;
 
 /// Something a ray met: how far along, where, and which way the surface faces.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -670,9 +661,6 @@ const PLAYER_GRID: usize = 3;
 /// were coming together at they keep, bounced apart.
 const CONTACT: f32 = 1.5;
 const CONTACT_BOUNCE: f32 = 0.3;
-/// How far ahead a droid looks for a bike in its way, and how far it pulls out to pass one.
-const TRAFFIC_AHEAD: f32 = 12.0;
-const TRAFFIC_SWERVE: f32 = 3.5;
 
 /// What the race says to the game as it goes.
 #[derive(Debug, Clone, PartialEq)]
@@ -1055,7 +1043,7 @@ impl Race {
                 (true, true) if steering => keyed,
                 (true, true) => Controls::default(),
                 (true, false) => {
-                    let line = racer.line + traffic(&racer.handling, n, &bikes);
+                    let line = racer.line + hydroxus_ai::racing::swerve(n, &bikes);
                     autopilot(&racer.handling, &self.track, &racer.progress, line, racer.pace)
                 }
             };
@@ -1799,25 +1787,6 @@ fn recoloured(original: &MaterialResource, colour: Color) -> Option<MaterialReso
     Some(MaterialResource::new_embedded(copy))
 }
 
-/// How far racer `n` pulls out of its line to get by a bike just ahead of it in `bikes` (where each
-/// is and which way it points): away from it, the side it is on.
-fn traffic(handling: &Handling, n: usize, bikes: &[(Vector3<f32>, Vector3<f32>)]) -> f32 {
-    let ahead = handling.ahead();
-    let left = Vector3::new(ahead.z, 0.0, -ahead.x);
-    let mut swerve = 0.0;
-    for (m, &(at, _)) in bikes.iter().enumerate() {
-        if m == n {
-            continue;
-        }
-        let to = at - handling.position;
-        let (front, side) = (to.dot(&ahead), to.dot(&left));
-        if front > 0.0 && front < TRAFFIC_AHEAD && side.abs() < 2.5 && to.y.abs() < 3.0 {
-            swerve = if side > 0.0 { -TRAFFIC_SWERVE } else { TRAFFIC_SWERVE };
-        }
-    }
-    swerve
-}
-
 /// Bikes that have come together pushed apart, bouncing off each other: where each pair met, and
 /// how fast they were coming together.
 fn bump(racers: &mut [Racer]) -> Vec<(Vector3<f32>, f32)> {
@@ -1857,64 +1826,19 @@ fn chase(handling: &Handling, speed: f32) -> (Vector3<f32>, Vector3<f32>) {
     (eye, target)
 }
 
-/// Steers for the checkpoints ahead, `line` meters off their middles (left positive): flat out
-/// where the way on is straight, easing off and braking into the turns - the harder `pace` is
-/// over 1, the less.
+/// Steers for the checkpoints ahead, `line` meters off their middles (left positive), as a droid
+/// rides (see [`hydroxus_ai::racing::autopilot`]): flat out where the way on is straight, easing
+/// off and braking into the turns - the harder `pace` is over 1, the less - and over the speed pads
+/// just ahead.
 pub fn autopilot(handling: &Handling, track: &Track, progress: &Progress, line: f32, pace: f32) -> Controls {
-    let n = track.gates.len();
-    let near = track.gates[progress.next % n];
-    let far = track.gates[(progress.next + 1) % n];
-    // Its line: off the middle of the road, square across the way on.
-    let way = (far - near).try_normalize(1e-5).unwrap_or_else(Vector3::z);
-    let left = Vector3::new(way.z, 0.0, -way.x);
-    let (near_on, far_on) = (near + left * line, far + left * line);
-    // Through the next gate towards the one after, a little, the nearer it is.
-    let to_near = Vector3::new(near_on.x - handling.position.x, 0.0, near_on.z - handling.position.z).norm();
-    let blend = (1.0 - to_near / 25.0).clamp(0.0, 1.0);
-    let mut aim = near_on + (far_on - near_on).try_normalize(1e-5).unwrap_or_default() * 8.0 * blend;
-    // A speed pad just ahead, not far off its line and pointing its way: over it.
-    let heading = handling.ahead();
-    let side = Vector3::new(heading.z, 0.0, -heading.x);
-    let pad = track
-        .pads
-        .iter()
-        .filter(|&&(at, way)| {
-            let to = at - handling.position;
-            let front = to.dot(&heading);
-            front > PAD_HALF.0 && front < PAD_SEEN && to.dot(&side).abs() < PAD_DETOUR && to.y.abs() < PAD_HEIGHT * 2.0 && way.dot(&heading) > 0.8
-        })
-        .min_by(|a, b| (a.0 - handling.position).norm().total_cmp(&(b.0 - handling.position).norm()));
-    if let Some(&(at, way)) = pad {
-        // Through its middle along it, rather than across it.
-        aim = at + way * PAD_HALF.0;
-    }
-    let off = wrap(yaw_towards(handling.position, aim) - handling.yaw);
-    // How sharp the way on turns at the next gate, and at the one after it, as the bike nears
-    // each: slow enough for the sharper, in time to make it.
-    let after = track.gates[(progress.next + 2) % n];
-    let at_near = wrap(yaw_towards(near, far) - yaw_towards(handling.position, near)).abs();
-    let at_far = wrap(yaw_towards(far, after) - yaw_towards(near, far)).abs();
-    let to_far = to_near + (far - near).norm();
-    let soon = |bend: f32, distance: f32| bend * (1.0 - distance / 70.0).clamp(0.0, 1.0);
-    let bend = soon(at_near, to_near).max(soon(at_far, to_far));
-    let speed = handling.speed();
-    let wanted = TOP_SPEED * (1.0 - bend * 0.9 / pace.max(0.1)).clamp(0.3, 1.0);
-    // Pointed well off, it slows and comes round at a crawl, rather than backing up - which
-    // would steer it the other way.
-    let throttle = if off.abs() > 1.2 {
-        if speed > 10.0 { -1.0 } else { 0.4 }
-    } else if speed > wanted + 3.0 {
-        -1.0
-    } else if speed > wanted {
-        0.0
-    } else {
-        1.0
+    let bike = hydroxus_ai::racing::Bike {
+        at: handling.position,
+        yaw: handling.yaw,
+        speed: handling.speed(),
+        top_speed: TOP_SPEED,
     };
-    Controls {
-        throttle,
-        steer: (off * 2.5).clamp(-1.0, 1.0),
-        boost: off.abs() < 0.08 && bend < 0.1 * pace,
-    }
+    let course = hydroxus_ai::racing::Course { gates: &track.gates, pads: &track.pads, pad_half: PAD_HALF.0, pad_height: PAD_HEIGHT };
+    hydroxus_ai::racing::autopilot(&bike, &course, progress.next, line, pace)
 }
 
 /// The first thing a ray from `from` along `way` meets within `reach`, but `skip`.

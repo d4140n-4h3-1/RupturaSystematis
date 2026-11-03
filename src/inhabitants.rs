@@ -100,6 +100,7 @@ use crate::{ferry::Crossing, roads::Roads, train::Doors};
 use hydroxus_ai::{
     flat, forward, heading_of,
     group::{about_leader, ABOUT_LEADER, BESIDE},
+    grid::Reach,
     hearing::Heard,
     join::{could_see_other, joiners, Watch},
     pace::{pace, sprints},
@@ -108,6 +109,7 @@ use hydroxus_ai::{
     sight::{Sight, Stance},
     steer::{make_way, step_aside},
     threat::{pointed_at, stage_after, CALM},
+    ride::{take_train, Rides, Riding, Ride},
     trip::{self, Doing, Trip},
 };
 use crate::{
@@ -822,37 +824,6 @@ pub struct Inhabitants {
     reachable: Reach,
 }
 
-/// Which of a grid's cells can be got to, a bit each by index - or, empty, all of them.
-#[derive(Debug, Default, Clone, PartialEq)]
-struct Reach(Vec<u64>);
-
-impl Reach {
-    fn of(cells: impl Iterator<Item = bool>) -> Self {
-        let mut bits = Vec::new();
-        for (i, can) in cells.enumerate() {
-            if i % 64 == 0 {
-                bits.push(0);
-            }
-            if can {
-                *bits.last_mut().unwrap() |= 1 << (i % 64);
-            }
-        }
-        Self(bits)
-    }
-
-    /// Whether the cell `index` can be got to.
-    fn can(&self, index: usize) -> bool {
-        self.0.is_empty() || self.0.get(index / 64).is_some_and(|bits| bits & (1 << (index % 64)) != 0)
-    }
-
-    /// Whether there is any way to `to` over `grid`, whose corner is at `origin`, at all: if not,
-    /// a search for one would go over every cell it could within its bound before it gave up -
-    /// for a droid's, the tenth part of a second and more.
-    fn to(&self, (grid, origin): (&WalkGrid, Vector3<f32>), to: Vector3<f32>) -> bool {
-        self.0.is_empty() || grid.walkable_cell(origin, to).is_some_and(|(x, z)| self.can(z * grid.width + x))
-    }
-}
-
 /// A foot chase in a city: one of its security after one of a gang, which runs for it - and if
 /// it is caught, stands for being held at pistol point a while.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1066,184 +1037,9 @@ const SEARCH_APART: f32 = 4.0;
 /// cut them off, in meters; and how near it has to be to go straight at them instead.
 const CUT_OFF: f32 = 10.0;
 const CLOSE_IN: f32 = 4.0;
-/// Taking a train: how near a station a droid has to be, setting off somewhere, to think of it,
-/// and how likely it is to then, one in so many; how many can be taking each train at once; and how
-/// long one waits on the platform for it at most, in seconds.
-const TRAIN_REACH: f32 = 150.0;
+/// Taking a train (see [`hydroxus_ai::ride`]): how likely a droid near a station setting off
+/// somewhere is to, one in so many.
 const TRAIN_CHANCE: usize = 3;
-const RIDERS: usize = 8;
-const TRAIN_WAIT: f32 = 200.0;
-/// How far out on the platform from a doorway it waits, and how far in from it it stands aboard,
-/// in meters; and how near where it waits it has to be to be there.
-const PLATFORM_OUT: f32 = 1.1;
-const STAND_IN: f32 = 0.8;
-const AT_PLATFORM: f32 = 1.2;
-/// How far out from the middle of the train one getting off has to be, in meters, to be clear of
-/// its doorway: off the sill, its side past the car's.
-const CLEAR_OF_DOORS: f32 = 3.0;
-/// How fast it gets on and off, at least, in meters per second, and how long the doors have to
-/// stay open for it to set off to, on top of the time that takes, in seconds.
-const BOARDING_PACE: f32 = 1.0;
-const TIME_TO_SPARE: f32 = 1.0;
-
-/// A droid's ride on a train: from one station to another.
-#[derive(Debug, Clone, Copy, PartialEq)]
-struct Ride {
-    /// Which train it takes, as the game counts them.
-    train: usize,
-    /// Which stations it gets on at and off at, as the train counts them.
-    from: usize,
-    to: usize,
-    /// Which of the train's doorways it gets on and off by, and where it stands in the car, from
-    /// the middle of the beam's top under the train.
-    doorway: usize,
-    spot: Vector3<f32>,
-    /// Where it waits on the platform it gets on from, and where it goes on the one it gets off on.
-    wait: Vector3<f32>,
-    off: Vector3<f32>,
-    stage: Riding,
-    /// How long it has been waiting on the platform, in seconds.
-    waited: f32,
-}
-
-/// Where along the way a droid taking the train is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Riding {
-    /// On its way up to the platform.
-    ToPlatform,
-    /// Waiting there for the doors to open.
-    Waiting,
-    /// Getting on, the doors open.
-    Boarding,
-    /// On, standing where it stands.
-    Aboard,
-    /// Getting off, at the station it is going to.
-    Leaving,
-}
-
-/// What a droid taking the train does this frame.
-#[derive(Debug, Clone, PartialEq)]
-enum Rides {
-    /// Goes its own way, on to the platform.
-    Own,
-    /// Goes where the route says, the next point last: getting on or off, or nowhere.
-    Go(Vec<Vector3<f32>>),
-    /// Is done with the ride, or gives it up.
-    Off,
-}
-
-impl Ride {
-    /// Whether it is off the grid's floor for the train: getting on, on, or getting off.
-    fn aboard(&self) -> bool {
-        matches!(self.stage, Riding::Boarding | Riding::Aboard | Riding::Leaving)
-    }
-
-    /// Moves the ride on for a droid at `feet` with `route` ahead of it - on its way to the
-    /// platform - the train as `train` has it, after `dt`.
-    fn step(&mut self, feet: Vector3<f32>, route: &[Vector3<f32>], train: &Doors, dt: f32) -> Rides {
-        let doorway = train.at + train.doorways[self.doorway];
-        let spot = train.at + self.spot;
-        let within = train.within(feet);
-        // Whether the doors are open at `station`, and stay open long enough for it to get to `to`.
-        let in_time = |station: usize, to: Vector3<f32>| {
-            let takes = flat(to - feet).norm() / BOARDING_PACE + TIME_TO_SPARE;
-            train.open.is_some_and(|(at, left)| at == station && left > takes)
-        };
-        let shut = train.open.is_none();
-        let waiting = flat(self.wait - feet).norm() < AT_PLATFORM;
-        // Kept aboard, the doors shut: it stands where it is till they open again.
-        let stay = |ride: &mut Self| {
-            ride.spot = Vector3::new(feet.x - train.at.x, train.doorways[ride.doorway].y, feet.z - train.at.z);
-            ride.stage = Riding::Aboard;
-            Rides::Go(Vec::new())
-        };
-        match self.stage {
-            Riding::ToPlatform if waiting => {
-                self.stage = Riding::Waiting;
-                Rides::Go(Vec::new())
-            }
-            Riding::ToPlatform if route.is_empty() => Rides::Off,
-            Riding::ToPlatform => Rides::Own,
-            Riding::Waiting => {
-                self.waited += dt;
-                if self.waited > TRAIN_WAIT {
-                    Rides::Off
-                } else if in_time(self.from, spot) {
-                    self.stage = Riding::Boarding;
-                    Rides::Go(vec![spot, doorway])
-                } else {
-                    Rides::Go(if waiting { Vec::new() } else { vec![self.wait] })
-                }
-            }
-            Riding::Boarding if within && flat(spot - feet).norm() < 2.0 * ARRIVED => {
-                self.stage = Riding::Aboard;
-                Rides::Go(Vec::new())
-            }
-            Riding::Boarding if shut && within => stay(self),
-            Riding::Boarding if shut => {
-                // Too late: back to waiting for it to come round again.
-                self.stage = Riding::Waiting;
-                Rides::Go(vec![self.wait])
-            }
-            Riding::Boarding => Rides::Go(if within { vec![spot] } else { vec![spot, doorway] }),
-            Riding::Aboard if in_time(self.to, self.off) => {
-                self.stage = Riding::Leaving;
-                Rides::Go(vec![self.off, doorway])
-            }
-            Riding::Aboard => Rides::Go(Vec::new()),
-            Riding::Leaving
-                if train.out(feet).abs() > CLEAR_OF_DOORS && flat(self.off - feet).norm() < AT_PLATFORM =>
-            {
-                Rides::Off
-            }
-            // Not off in time: on round again.
-            Riding::Leaving if within && shut => stay(self),
-            Riding::Leaving => Rides::Go(if within { vec![self.off, doorway] } else { vec![self.off] }),
-        }
-    }
-}
-
-/// A ride on one of `trains` for a droid at `feet`, over `grid` whose corner is at `origin`: on the
-/// train with a station nearest it, near enough to think of, that has room - fewer than [`RIDERS`]
-/// and a doorway no one is taking it by, those `taken` as (train, doorway) - from that station to
-/// another of its stations: the way up to the platform beside the doorway, and the ride.
-fn take_train(
-    (grid, origin): (&WalkGrid, Vector3<f32>),
-    feet: Vector3<f32>,
-    trains: &[Doors],
-    taken: &[(usize, usize)],
-    rng: &mut Rng,
-) -> Option<(Vec<Vector3<f32>>, Ride)> {
-    let away = |train: &Doors, n: usize| flat(train.station(n) - feet).norm();
-    let room = |k: usize| {
-        let riding = taken.iter().filter(|&&(t, _)| t == k).count();
-        riding < RIDERS && (0..trains[k].doorways.len()).any(|n| !taken.contains(&(k, n))) && trains[k].stations() >= 2
-    };
-    // Each train's station nearest it, nearest first; the first of those with room.
-    let mut near: Vec<(usize, usize, f32)> = (0..trains.len())
-        .filter_map(|k| {
-            let train = &trains[k];
-            let n = (0..train.stations()).min_by(|&a, &b| away(train, a).total_cmp(&away(train, b)))?;
-            Some((k, n, away(train, n)))
-        })
-        .filter(|&(_, _, d)| d <= TRAIN_REACH)
-        .collect();
-    near.sort_by(|a, b| a.2.total_cmp(&b.2));
-    let (which, from, _) = near.into_iter().find(|&(k, _, _)| room(k))?;
-    let train = &trains[which];
-    let free: Vec<usize> = (0..train.doorways.len()).filter(|&n| !taken.contains(&(which, n))).collect();
-    let to = (from + 1 + rng.below(train.stations() - 1)) % train.stations();
-    let doorway = free[rng.below(free.len())];
-    let wait = trip::floor_near(grid, origin, train.platform(from, doorway, PLATFORM_OUT))?;
-    let off = trip::floor_near(grid, origin, train.platform(to, doorway, PLATFORM_OUT))?;
-    let route = route_to((grid, origin), feet, wait, CHASE_REACH);
-    if route.is_empty() {
-        return None;
-    }
-    let inward = -train.doorways[doorway].dot(&train.across).signum();
-    let spot = train.doorways[doorway] + train.across * inward * STAND_IN + train.along * between(rng, (-0.5, 0.5));
-    Some((route, Ride { train: which, from, to, doorway, spot, wait, off, stage: Riding::ToPlatform, waited: 0.0 }))
-}
 
 /// The square of the ground `at` is in (see [`NEIGHBOURS`]).
 fn square_of(at: Vector3<f32>) -> (i32, i32) {
@@ -4919,15 +4715,6 @@ mod tests {
     }
 
     #[test]
-    fn what_can_be_got_to_is_kept_a_bit_a_cell_and_empty_is_anywhere() {
-        let reach = Reach::of((0..130).map(|i| i % 3 == 0));
-        assert!(reach.can(0) && reach.can(63) && reach.can(129));
-        assert!(!reach.can(1) && !reach.can(64) && !reach.can(128));
-        assert!(!reach.can(10_000), "past the end");
-        assert!(Reach::default().can(10_000), "anywhere, with nothing known");
-    }
-
-    #[test]
     fn a_droid_going_about_its_business_does_not_set_off_for_where_it_cannot_get_to() {
         // Two pavements, a path between them; the far one, as if walled off, not to be got to.
         let mut grid = WalkGrid::new(40, 10, 1.0);
@@ -4957,114 +4744,5 @@ mod tests {
                 .any(|at| at.x >= 25.0)
         });
         assert!(anywhere, "the far side is there to go to");
-    }
-
-    /// The train at the first station with one doorway, on its right, its doors open there for as
-    /// long as `open_for` says; and a ride by it to the last station, waiting on the platform.
-    fn at_the_station(open_for: Option<f32>) -> (Doors, Ride) {
-        let mut train = Doors {
-            line: crate::train::LINES[0],
-            at: Vector3::zeros(),
-            doorways: vec![Vector3::new(2.53, -1.25, 2.75)],
-            across: Vector3::x(),
-            along: Vector3::z(),
-            open: None,
-        };
-        train.at = train.station(0);
-        train.open = open_for.map(|left| (0, left));
-        let to = train.stations() - 1;
-        let (wait, off) = (train.platform(0, 0, PLATFORM_OUT), train.platform(to, 0, PLATFORM_OUT));
-        let spot = train.doorways[0] + Vector3::new(-STAND_IN, 0.0, 0.0);
-        (train, Ride { train: 0, from: 0, to, doorway: 0, spot, wait, off, stage: Riding::Waiting, waited: 0.0 })
-    }
-
-    /// Moves the ride on a step of `dt`, the droid walking where it says as it would: on to each
-    /// point of the way, past it once near; aboard, where it stands.
-    fn ride_a_step(ride: &mut Ride, train: &Doors, feet: &mut Vector3<f32>, dt: f32) -> Rides {
-        let rides = ride.step(*feet, &[], train, dt);
-        if let Rides::Go(route) = &rides {
-            let mut route = route.clone();
-            while route.len() > 1 && flat(route[route.len() - 1] - *feet).norm() < REACHED {
-                route.pop();
-            }
-            if let Some(&next) = route.last() {
-                let to = flat(next - *feet);
-                if to.norm() > 1.0e-4 {
-                    *feet += to.normalize() * (FALLBACK_PACE * dt).min(to.norm());
-                }
-            }
-        }
-        if ride.stage == Riding::Aboard {
-            *feet = train.at + ride.spot;
-        }
-        rides
-    }
-
-    #[test]
-    fn a_ride_on_the_train_gets_on_at_one_station_and_off_at_another() {
-        let (mut train, mut ride) = at_the_station(None);
-        let station = train.at;
-        let mut feet = ride.wait;
-        let dt = 0.1;
-        // The doors shut, it waits.
-        for _ in 0..20 {
-            assert_eq!(ride_a_step(&mut ride, &train, &mut feet, dt), Rides::Go(Vec::new()));
-        }
-        assert_eq!(ride.stage, Riding::Waiting);
-        // They open, it gets on.
-        train.open = Some((0, 15.0));
-        for _ in 0..100 {
-            ride_a_step(&mut ride, &train, &mut feet, dt);
-        }
-        assert_eq!(ride.stage, Riding::Aboard);
-        assert!(train.within(feet), "{feet:?}");
-        // Off it goes, and it with it.
-        train.open = None;
-        let there = train.station(ride.to);
-        for k in 0..=50 {
-            train.at = station.lerp(&there, k as f32 / 50.0);
-            ride_a_step(&mut ride, &train, &mut feet, dt);
-            assert_eq!(feet, train.at + ride.spot);
-        }
-        // At a station on the way, it stays on.
-        train.open = Some((1, 15.0));
-        for _ in 0..20 {
-            ride_a_step(&mut ride, &train, &mut feet, dt);
-        }
-        assert_eq!(ride.stage, Riding::Aboard);
-        // At the one it is going to, the doors open: off it gets, onto its platform.
-        train.open = Some((ride.to, 15.0));
-        let mut off = false;
-        for _ in 0..100 {
-            if ride_a_step(&mut ride, &train, &mut feet, dt) == Rides::Off {
-                off = true;
-                break;
-            }
-        }
-        assert!(off, "{:?} at {feet:?}", ride.stage);
-        assert!((feet.x - train.at.x).abs() > CLEAR_OF_DOORS && flat(feet - ride.off).norm() < AT_PLATFORM);
-    }
-
-    #[test]
-    fn a_ride_on_the_train_gets_on_only_with_time_to_and_waits_for_the_next_if_too_late() {
-        // Too little time left to get on: it goes on waiting.
-        let (train, mut ride) = at_the_station(Some(0.5));
-        let mut feet = ride.wait;
-        ride_a_step(&mut ride, &train, &mut feet, 0.1);
-        assert_eq!(ride.stage, Riding::Waiting);
-        // Shut on it before it is on: back to waiting.
-        let (mut train, mut ride) = at_the_station(Some(10.0));
-        let mut feet = ride.wait;
-        ride_a_step(&mut ride, &train, &mut feet, 0.1);
-        assert_eq!(ride.stage, Riding::Boarding);
-        train.open = None;
-        ride_a_step(&mut ride, &train, &mut feet, 0.1);
-        assert_eq!(ride.stage, Riding::Waiting);
-        // Kept waiting too long, it gives up.
-        let (train, mut ride) = at_the_station(None);
-        let mut feet = ride.wait;
-        let steps = (TRAIN_WAIT / 1.0) as usize + 1;
-        let gave_up = (0..steps).any(|_| ride_a_step(&mut ride, &train, &mut feet, 1.0) == Rides::Off);
-        assert!(gave_up);
     }
 }

@@ -83,6 +83,8 @@ use fyrox::{
     },
 };
 use hydroxus_ai::sight::Sight;
+#[cfg(test)]
+use hydroxus_ai::flight::{CLIMB_STEP, FLIGHT_CLEARANCE};
 use serde::Deserialize;
 use std::{collections::HashMap, f32::consts::PI};
 
@@ -322,15 +324,9 @@ const SLEW: f32 = 2.0;
 /// to rest, still for the physics, as a fallen droid is.
 const WRECK_STILL: (f32, f32) = (0.05, 0.1);
 const WRECK_SETTLES: f32 = 0.5;
-/// Flying free (see [`flight`]): how far it keeps from anything solid on its way, in meters - its
-/// rotors' guards reach 0.69 m out; how far up it looks for a way over what is in its way, and in
-/// steps of how much; how many cuts it tries across the corners of a way along the floor; and
-/// how far from anything solid its body has to stay as it flies, or it stops and finds another
-/// way - its body's ball, so as to get along a corridor narrower than its guards.
-const FLIGHT_CLEARANCE: f32 = 0.75;
-const CLIMB: f32 = 80.0;
-const CLIMB_STEP: f32 = 1.5;
-const SHORTCUTS: usize = 40;
+/// Flying free (see [`flight`]): how far from anything solid its body has to stay as it flies, or
+/// it stops and finds another way - its body's ball, so as to get along a corridor narrower than
+/// its guards (see [`hydroxus_ai::flight::FLIGHT_CLEARANCE`] for how far off it keeps, finding its way).
 /// How near anyone it comes, flying, in meters between its body and theirs.
 const CLEARANCE: f32 = 0.05;
 /// How near a bolt has to fly past its body to be taken as shot at, in meters.
@@ -1494,74 +1490,16 @@ fn clear(air: Air, from: Vector3<f32>, to: Vector3<f32>, radius: f32) -> bool {
         .is_none()
 }
 
-/// How far a drone could rise from `at` through the `air`, up to `most`, keeping
-/// [`FLIGHT_CLEARANCE`] from anything in its way.
-fn headroom(air: Air, at: Vector3<f32>, most: f32) -> f32 {
-    let (mut low, mut high) = (0.0, most);
-    if clear(air, at, at + Vector3::new(0.0, most, 0.0), FLIGHT_CLEARANCE) {
-        return most;
-    }
-    // Halving the way to whatever is overhead.
-    for _ in 0..8 {
-        let middle = (low + high) / 2.0;
-        match clear(air, at, at + Vector3::new(0.0, middle, 0.0), FLIGHT_CLEARANCE) {
-            true => low = middle,
-            false => high = middle,
-        }
-    }
-    low
-}
-
 /// The way a quadcopter flies from `from` to `to`, through the `air` at any height - past the
-/// leaves, too - as a route: points in the air, the last one first, keeping [`FLIGHT_CLEARANCE`] from
-/// anything solid. Straight there, if nothing is in the way. If something is - a wall, a building
-/// - up as little as it can, over it and down on the other side: as long as there is nothing
-/// overhead, up to [`CLIMB`] above the higher of the two. Under a roof, along its `ground` route -
-/// along the floor, the last point first, as the walk grid has it - at its height over the floor,
-/// its corners cut where they can be. Empty if there is no way: none overhead, and none along the
-/// floor.
+/// leaves, too - as a route, the last point first: [`hydroxus_ai::flight::flight`], with [`clear`]
+/// saying what is in its way and `ground` its way along the floor, under a roof.
 fn flight(
     air: Air,
     from: Vector3<f32>,
     to: Vector3<f32>,
     ground: impl FnOnce() -> Vec<Vector3<f32>>,
 ) -> Vec<Vector3<f32>> {
-    if clear(air, from, to, FLIGHT_CLEARANCE) {
-        return vec![to];
-    }
-    // As high as it can rise at either end, and the lowest it can cross between at that height.
-    let top = (from.y + headroom(air, from, CLIMB)).min(to.y + headroom(air, to, CLIMB));
-    let mut height = from.y.max(to.y) + CLIMB_STEP;
-    while height <= top {
-        let (up, over) = (Vector3::new(from.x, height, from.z), Vector3::new(to.x, height, to.z));
-        if clear(air, up, over, FLIGHT_CLEARANCE) {
-            return vec![to, over, up];
-        }
-        height += CLIMB_STEP;
-    }
-    // Along the floor, first point first, cutting straight across to the furthest point it can.
-    let along: Vec<Vector3<f32>> = ground().into_iter().rev().map(|at| at + Vector3::new(0.0, HOVER, 0.0)).collect();
-    let mut way = Vec::with_capacity(along.len());
-    let (mut at, mut next, mut tries) = (from, 0, 0);
-    while next < along.len() {
-        let mut furthest = next;
-        while furthest + 1 < along.len() && tries < SHORTCUTS {
-            tries += 1;
-            if !clear(air, at, along[furthest + 1], FLIGHT_CLEARANCE) {
-                break;
-            }
-            furthest += 1;
-        }
-        way.push(along[furthest]);
-        at = along[furthest];
-        next = furthest + 1;
-        if tries >= SHORTCUTS {
-            way.extend_from_slice(&along[next..]);
-            break;
-        }
-    }
-    way.reverse();
-    way
+    hydroxus_ai::flight::flight(&|a, b, radius| clear(air, a, b, radius), from, to, HOVER, ground)
 }
 
 /// Whether the drone whose body is `hull`, its middle at `at`, would run into anyone - the player

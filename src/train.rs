@@ -132,57 +132,28 @@ const HALF_LENGTH: f32 = 19.0;
 const PLATFORM: f32 = 8.0 - BEAM_TOP;
 
 /// The train as the droids go by it: where it is, where its doorways are on it, and whether its
-/// doors are open to get on and off by.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Doors {
-    /// The line it runs, and where along it it stands at each of its stations (see [`LINES`]).
-    pub line: Line,
-    /// The middle of the beam's top under it, where it will be at the end of this step.
-    pub at: Vector3<f32>,
-    /// The middle of each doorway, on the floor in it, from `at`, in the world's terms.
-    pub doorways: Vec<Vector3<f32>>,
-    /// Which way, in the world, is across it, to its right-hand side; and which way along it.
-    pub across: Vector3<f32>,
-    pub along: Vector3<f32>,
-    /// While its doors are wide open, at which station, and for how much longer, in seconds.
-    pub open: Option<(usize, f32)>,
-}
+/// doors are open to get on and off by (see [`hydroxus_ai::ride`], by which they take it).
+pub use hydroxus_ai::ride::Doors;
 
-impl Doors {
-    /// How many stations there are.
-    pub fn stations(&self) -> usize {
-        self.line.stations.len()
-    }
-
-    /// Where the train stands at the `n`th station, its doors open.
-    pub fn station(&self, n: usize) -> Vector3<f32> {
-        self.line.at(self.line.stations[n])
-    }
-
-    /// How far out to the side of it `at` is, to its right-hand side, in meters - to its left,
-    /// less than nothing.
-    pub fn out(&self, at: Vector3<f32>) -> f32 {
-        (at - self.at).dot(&self.across)
-    }
-
-    /// Whether `at` is in one of its cars, by the plan - not out on the platform beside it.
-    pub fn within(&self, at: Vector3<f32>) -> bool {
-        let off = at - self.at;
-        off.dot(&self.across).abs() < INSIDE && off.dot(&self.along).abs() < HALF_LENGTH
-    }
-
-    /// The height of its floor.
-    pub fn floor(&self) -> f32 {
-        self.at.y + FLOOR
-    }
-
-    /// The platform beside the `n`th doorway at the `station`, `out` meters out from it.
-    pub fn platform(&self, station: usize, n: usize, out: f32) -> Vector3<f32> {
-        let doorway = self.doorways[n];
-        let side = doorway.dot(&self.across).signum();
-        let mut at = self.station(station) + doorway + self.across * side * out;
-        at.y = self.station(station).y + PLATFORM;
-        at
+/// A train on `line` as the droids go by it: at `at`, the middle of the beam's top under it, its
+/// `doorways` from there, `across` it and `along` it, and its doors `open` or not.
+pub fn doors_on(
+    line: Line,
+    at: Vector3<f32>,
+    doorways: Vec<Vector3<f32>>,
+    (across, along): (Vector3<f32>, Vector3<f32>),
+    open: Option<(usize, f32)>,
+) -> Doors {
+    Doors {
+        stations: line.stations.iter().map(|&along| line.at(along)).collect(),
+        at,
+        doorways,
+        across,
+        along,
+        open,
+        inside: [INSIDE, HALF_LENGTH],
+        floor: FLOOR,
+        platform: PLATFORM,
     }
 }
 
@@ -333,14 +304,13 @@ impl Train {
     /// The train as the droids go by it, as of the end of this step.
     pub fn doors(&self) -> Doors {
         let turn = self.line.turn();
-        Doors {
-            line: self.line,
-            at: self.line.at(along_line(self.line.stations, self.clock)),
-            doorways: self.doorways.iter().map(|doorway| turn * doorway).collect(),
-            across: turn * Vector3::x(),
-            along: turn * Vector3::z(),
-            open: wide_open(self.line.stations, self.clock),
-        }
+        doors_on(
+            self.line,
+            self.line.at(along_line(self.line.stations, self.clock)),
+            self.doorways.iter().map(|doorway| turn * doorway).collect(),
+            (turn * Vector3::x(), turn * Vector3::z()),
+            wide_open(self.line.stations, self.clock),
+        )
     }
 
     fn pose(&self, graph: &mut Graph) {
@@ -566,14 +536,13 @@ mod tests {
     fn the_platform_is_beside_the_doorway_out_from_it() {
         let line = LINES[0];
         let stations = line.stations;
-        let doors = Doors {
+        let doors = doors_on(
             line,
-            at: Vector3::new(0.0, BEAM_TOP, stations[1]),
-            doorways: vec![Vector3::new(BLOCKER_OUT, FLOOR, 2.75), Vector3::new(-BLOCKER_OUT, FLOOR, -8.5)],
-            across: Vector3::x(),
-            along: Vector3::z(),
-            open: Some((1, 10.0)),
-        };
+            Vector3::new(0.0, BEAM_TOP, stations[1]),
+            vec![Vector3::new(BLOCKER_OUT, FLOOR, 2.75), Vector3::new(-BLOCKER_OUT, FLOOR, -8.5)],
+            (Vector3::x(), Vector3::z()),
+            Some((1, 10.0)),
+        );
         let right = doors.platform(1, 0, 1.0);
         assert!((right.x - (BLOCKER_OUT + 1.0)).abs() < 1e-5 && right.y == 8.0 && right.z == stations[1] + 2.75);
         assert!(doors.platform(1, 1, 1.0).x < -BLOCKER_OUT, "the other side");
@@ -588,14 +557,13 @@ mod tests {
         // Turned along the world's x: what is across the train there is along the world's z.
         let line = LINES[2];
         let turn = line.turn();
-        let doors = Doors {
+        let doors = doors_on(
             line,
-            at: line.at(line.stations[0]),
-            doorways: vec![turn * Vector3::new(BLOCKER_OUT, FLOOR, 2.75)],
-            across: turn * Vector3::x(),
-            along: turn * Vector3::z(),
-            open: Some((0, 10.0)),
-        };
+            line.at(line.stations[0]),
+            vec![turn * Vector3::new(BLOCKER_OUT, FLOOR, 2.75)],
+            (turn * Vector3::x(), turn * Vector3::z()),
+            Some((0, 10.0)),
+        );
         assert!((doors.along - Vector3::x()).norm() < 1e-5, "along the world's x: {:?}", doors.along);
         let out = doors.platform(0, 0, 1.0);
         assert!((out.x - (line.stations[0] + 2.75)).abs() < 1e-4, "beside the doorway: {out:?}");

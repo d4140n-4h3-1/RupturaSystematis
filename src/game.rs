@@ -1452,7 +1452,7 @@ impl MazeGame {
         let mut pick = || rng.below(1 << 16) as f32 / (1 << 16) as f32;
         let scene = &mut ctx.scenes[self.scene];
         let graph = &scene.graph;
-        let mut cast = |from: Vector3<f32>, way: Vector3<f32>, reach: f32| race::first_hit(graph, from, way, reach, skip);
+        let mut cast = |from: Vector3<f32>, way: Vector3<f32>, reach: f32| race::first_hit(graph, from, way, reach, skip).map(|hit| hit.point);
         let started = std::time::Instant::now();
         network.survey(&mut cast, &mut || pick() * traffic::CYCLE);
         Log::info(format!(
