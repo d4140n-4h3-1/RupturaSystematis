@@ -720,7 +720,15 @@ impl Drone {
         else {
             return false;
         };
-        let routes = grid.routes_from(start, f32::INFINITY);
+        // Anywhere well away from the player, on a city's grid: a cell picked at random will do -
+        // every walkable cell can be walked to, the survey having found it by walking - rather
+        // than routes worked out to every one of millions, which took seconds.
+        let picked = within.is_infinite().then(|| far_cell(grid, start, rng)).flatten();
+        if let Some(cell) = picked {
+            return self.put_at(graph, (grid, origin), feet, cell, rng);
+        }
+        // Within so far of them: routes as far as that, and no further.
+        let routes = grid.routes_from(start, within.max(AWAY_FROM_PLAYER));
         let reached: Vec<(usize, f32)> = routes.reached().collect();
         let away: Vec<usize> = reached
             .iter()
@@ -735,6 +743,19 @@ impl Drone {
                 None => return false,
             },
         };
+        self.put_at(graph, (grid, origin), feet, cell, rng)
+    }
+
+    /// Puts it down over cell `cell` - an index into `grid`, whose corner is at `origin` - calm
+    /// and whole, the player's `feet` where they are.
+    fn put_at(
+        &mut self,
+        graph: &mut Graph,
+        (grid, origin): (&WalkGrid, Vector3<f32>),
+        feet: Vector3<f32>,
+        cell: usize,
+        rng: &mut Rng,
+    ) -> bool {
         let (x, z) = (cell % grid.width, cell / grid.width);
         self.at = grid.center(origin, (x, z)) + Vector3::new(0.0, grid.floor(x, z) + HOVER, 0.0);
         self.heading = inhabitants::between(rng, (-PI, PI));
@@ -1631,6 +1652,32 @@ pub(crate) fn claim_glows(graph: &mut Graph, nodes: &[Handle<Node>]) -> Vec<(Mat
     claimed.into_iter().map(|(_, copy, colour)| (copy, colour)).collect()
 }
 
+
+/// How many cells a grid has to have for a drone's spot well away from the player to be picked at
+/// random rather than from routes to everywhere (see [`far_cell`]): a city's.
+const BIG_GRID: usize = 4_000_000;
+/// How many random cells are tried for one, before routes are worked out after all.
+const FAR_TRIES: usize = 2000;
+
+/// On a big grid, a walkable cell at least [`AWAY_FROM_PLAYER`] cells from `start` as the crow
+/// flies, picked at random by `rng`, as an index into `grid`; none on a small one, or if none
+/// turns up.
+fn far_cell(grid: &WalkGrid, start: (usize, usize), rng: &mut Rng) -> Option<usize> {
+    if grid.width * grid.rows() < BIG_GRID {
+        return None;
+    }
+    let (sx, sz) = grid.plan(start);
+    for _ in 0..FAR_TRIES {
+        let (x, z) = (rng.below(grid.width), rng.below(grid.depth));
+        let over: Vec<(usize, usize)> = grid.cells_over((x, z)).collect();
+        if over.is_empty() || (x as f32 - sx as f32).hypot(z as f32 - sz as f32) < AWAY_FROM_PLAYER {
+            continue;
+        }
+        let (cx, row) = over[rng.below(over.len())];
+        return Some(row * grid.width + cx);
+    }
+    None
+}
 
 #[cfg(test)]
 mod tests {

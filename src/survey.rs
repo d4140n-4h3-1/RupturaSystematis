@@ -74,30 +74,38 @@ pub fn survey(
     let caster = &caster;
     // Each column looked down on its own, so as many at once as there are cores: a band of rows
     // each, put back together in order. In a city, millions of columns - most of the survey.
-    let threads = std::thread::available_parallelism().map_or(1, |n| n.get()).clamp(1, 64);
+    // On the web there are no threads to be had: one band, looked down here.
+    let threads = if cfg!(target_arch = "wasm32") {
+        1
+    } else {
+        std::thread::available_parallelism().map_or(1, |n| n.get()).clamp(1, 64)
+    };
     let band = depth.div_ceil(threads).max(1);
-    let columns: Vec<(Vec<Vec<f32>>, Vec<bool>)> = std::thread::scope(|scope| {
-        let workers: Vec<_> = (0..depth)
-            .step_by(band)
-            .map(|z0| {
-                scope.spawn(move || {
-                    let rows = z0..(z0 + band).min(depth);
-                    let mut floors = Vec::with_capacity(rows.len() * width);
-                    let mut open = Vec::with_capacity(rows.len() * width);
-                    for z in rows {
-                        for x in 0..width {
-                            let spot = cell_center(origin, x, z);
-                            let (cell, is_open) = floors_at(caster, maze, spot, (max.y + 1.0, bottom), open_sky);
-                            floors.push(cell);
-                            open.push(is_open);
-                        }
-                    }
-                    (floors, open)
-                })
-            })
-            .collect();
-        workers.into_iter().map(|worker| worker.join().expect("a survey thread panicked")).collect()
-    });
+    let look = |rows: std::ops::Range<usize>| {
+        let mut floors = Vec::with_capacity(rows.len() * width);
+        let mut open = Vec::with_capacity(rows.len() * width);
+        for z in rows {
+            for x in 0..width {
+                let spot = cell_center(origin, x, z);
+                let (cell, is_open) = floors_at(caster, maze, spot, (max.y + 1.0, bottom), open_sky);
+                floors.push(cell);
+                open.push(is_open);
+            }
+        }
+        (floors, open)
+    };
+    let columns: Vec<(Vec<Vec<f32>>, Vec<bool>)> = if threads == 1 {
+        vec![look(0..depth)]
+    } else {
+        std::thread::scope(|scope| {
+            let look = &look;
+            let workers: Vec<_> = (0..depth)
+                .step_by(band)
+                .map(|z0| scope.spawn(move || look(z0..(z0 + band).min(depth))))
+                .collect();
+            workers.into_iter().map(|worker| worker.join().expect("a survey thread panicked")).collect()
+        })
+    };
     let mut floors: Vec<Vec<f32>> = Vec::with_capacity(width * depth);
     // Whether each cell's topmost floor is the first floor down, with open air over it.
     let mut open: Vec<bool> = Vec::with_capacity(width * depth);
@@ -211,11 +219,23 @@ pub fn open_direction(grid: &WalkGrid, origin: Vector3<f32>, cell: (usize, usize
     const REACH: u32 = 8;
     // Where cells are on the plan, whichever storey they are on.
     let center = grid.center(origin, cell);
-    let distances = grid.distances_from(cell);
     let mut sum = Vector3::zeros();
-    for (i, distance) in distances.iter().enumerate() {
-        if distance.is_some_and(|d| d > 0 && d <= REACH) {
-            sum += grid.center(origin, (i % grid.width, i / grid.width)) - center;
+    // Out to REACH steps and no further, as the grid's own walk does it: its distances to every
+    // cell of a city took seconds, for the few dozen nearby.
+    if grid.is_walkable(cell.0, cell.1) {
+        let mut seen = std::collections::HashSet::from([cell]);
+        let mut ring = vec![cell];
+        for _ in 0..REACH {
+            let mut next = Vec::new();
+            for &at in &ring {
+                for there in grid.steps(at) {
+                    if seen.insert(there) {
+                        sum += grid.center(origin, there) - center;
+                        next.push(there);
+                    }
+                }
+            }
+            ring = next;
         }
     }
     if sum.norm_squared() > 0.0 {

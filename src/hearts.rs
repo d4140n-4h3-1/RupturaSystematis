@@ -121,6 +121,9 @@ pub fn spots(grid: &WalkGrid, start: (usize, usize), count: usize, rng: &mut Rng
             (-ROOM..=ROOM).all(|dz| (dx, dz) == (0, 0) || grid.step_to((x, z), dx as isize, dz as isize).is_some())
         })
     };
+    if grid.width * grid.rows() >= BIG_GRID {
+        return sampled_spots(grid, start, count, rng, open);
+    }
     let distances = grid.distances_from(start);
     let fits: Vec<(usize, usize)> = distances
         .iter()
@@ -160,6 +163,67 @@ pub fn spots(grid: &WalkGrid, start: (usize, usize), count: usize, rng: &mut Rng
             continue;
         }
         spots.push(far[rng.below(far.len())]);
+    }
+    spots
+}
+
+/// How many cells a grid has to have for the hearts' spots to be picked at random (see
+/// [`sampled_spots`]) rather than from the walking distance to every cell: a city's.
+const BIG_GRID: usize = 4_000_000;
+/// How many random cells are tried for each spot.
+const SAMPLE_TRIES: usize = 4000;
+
+/// Where `count` hearts go on a big grid, as [`spots`] has them on a small one - on open floor
+/// (`open`), away from the start, the first near it, as far apart as there is room for - but from
+/// cells picked at random, how far each is reckoned as the crow flies: working out the walk to
+/// every one of a city's millions took seconds. Every walkable cell can be walked to, the survey
+/// having found it by walking.
+fn sampled_spots(
+    grid: &WalkGrid,
+    start: (usize, usize),
+    count: usize,
+    rng: &mut Rng,
+    open: impl Fn(usize, usize) -> bool,
+) -> Vec<(usize, usize)> {
+    let (sx, sz) = grid.plan(start);
+    let from_start = |(x, z): (usize, usize)| {
+        let (x, z) = grid.plan((x, z));
+        (x as f32 - sx as f32).hypot(z as f32 - sz as f32)
+    };
+    // A walkable cell picked at random: within `reach` cells of the start, or anywhere.
+    let pick = |rng: &mut Rng, reach: Option<u32>| -> Option<(usize, usize)> {
+        let (x, z) = match reach {
+            Some(r) => {
+                let r = r as isize;
+                let x = sx as isize + rng.below(2 * r as usize + 1) as isize - r;
+                let z = sz as isize + rng.below(2 * r as usize + 1) as isize - r;
+                if x < 0 || z < 0 || x as usize >= grid.width || z as usize >= grid.depth {
+                    return None;
+                }
+                (x as usize, z as usize)
+            }
+            None => (rng.below(grid.width), rng.below(grid.depth)),
+        };
+        let over: Vec<(usize, usize)> = grid.cells_over((x, z)).collect();
+        let cell = *over.get(rng.below(over.len().max(1)))?;
+        (from_start(cell) >= AWAY_FROM_START as f32 && open(cell.0, cell.1)).then_some(cell)
+    };
+    let mut spots: Vec<(usize, usize)> = Vec::new();
+    if count > 0 {
+        if let Some(near) = (0..SAMPLE_TRIES).find_map(|_| pick(rng, Some(NEAR_START)).filter(|&c| from_start(c) <= NEAR_START as f32)) {
+            spots.push(near);
+        }
+    }
+    let mut apart = APART;
+    while spots.len() < count && apart >= 1.0 {
+        let far_enough = |&(x, z): &(usize, usize), spots: &[(usize, usize)]| {
+            spots.iter().all(|&(sx, sz)| (x as f32 - sx as f32).hypot(z as f32 - sz as f32) >= apart)
+        };
+        match (0..SAMPLE_TRIES).find_map(|_| pick(rng, None).filter(|c| far_enough(c, &spots))) {
+            Some(spot) => spots.push(spot),
+            // No room that far apart: nearer, then.
+            None => apart /= 2.0,
+        }
     }
     spots
 }
