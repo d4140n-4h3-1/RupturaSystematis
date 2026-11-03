@@ -458,6 +458,11 @@ pub struct MazeGame {
     #[visit(skip)]
     #[reflect(hidden)]
     ray_tracing: [fyrox_gfx::Switch; 2],
+    /// Whether what is far off is blurred (see [`fyrox_gfx::DistanceBlur`]): on a night race
+    /// track, where far lines of light crawl at speed.
+    #[visit(skip)]
+    #[reflect(hidden)]
+    distance_blur: Option<fyrox_gfx::Switch>,
     /// The level's lines of light, lighting what is round them, if it has any (see [`glow`]).
     #[visit(skip)]
     #[reflect(hidden)]
@@ -893,6 +898,14 @@ impl MazeGame {
         }
     }
 
+    /// The game, turning the blurring of what is far off on and off through `switch`: on a night
+    /// race track only - off until then.
+    pub fn with_distance_blur(mut self, switch: fyrox_gfx::Switch) -> Self {
+        switch.set_enabled(false);
+        self.distance_blur = Some(switch);
+        self
+    }
+
     fn build_scene(&mut self, ctx: &mut PluginContext) {
         let mut scene = Scene::new();
         scene.rendering_options.ambient_lighting_color = AMBIENT;
@@ -1000,6 +1013,11 @@ impl MazeGame {
         let night = model.as_deref().and_then(ctf::map_at).is_some_and(|map| map.night);
         for switch in &self.ray_tracing {
             switch.set_enabled(!night);
+        }
+        // Far off blurred on a night race track: its far lines of light crawl at speed.
+        let raced = model.as_deref().is_some_and(|path| ctf::RACE_MAPS.iter().any(|map| map.path == path));
+        if let Some(switch) = &self.distance_blur {
+            switch.set_enabled(night && raced);
         }
         match model {
             Some(path) => {

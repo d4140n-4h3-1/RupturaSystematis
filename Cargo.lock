@@ -1616,7 +1616,7 @@ dependencies = [
 [[package]]
 name = "fyrox-gfx"
 version = "0.1.0"
-source = "git+https://github.com/d4140n-4h3-1/fyrox-gfx.git?branch=main#61ae40d396cbf39cabd1107ebefc399b74258a9d"
+source = "git+https://github.com/d4140n-4h3-1/fyrox-gfx.git?branch=main#24d59224089abd42ee6a71594c5128ba444cae39"
 dependencies = [
  "fyrox",
  "fyrox-graphics-wgpu",

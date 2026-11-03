@@ -31,8 +31,10 @@ fn main() {
     let area_lights = effects.area_lights();
     // And where nothing should cast shadows or reflect: the cities traced in light.
     let switches = [effects.shadow_switch(), effects.reflection_switch()];
+    // And where to blur what is far off: a night race through a city traced in light.
+    let distance_blur = effects.distance_blur_switch();
     executor.add_plugin(effects);
-    executor.add_plugin(MazeGame::new(moving, area_lights, switches));
+    executor.add_plugin(MazeGame::new(moving, area_lights, switches).with_distance_blur(distance_blur));
     executor.run()
 }
 
@@ -69,7 +71,15 @@ fn graphics_effects() -> GraphicsEffects {
         .with_anti_aliasing(fyrox_gfx::AntiAliasing {
             fxaa: platform::var("MAZE_FXAA").as_deref() != Some("0"),
             temporal: true,
-        });
+        })
+        // Far off, a city's lines of light are thinner than a pixel, and at race speed they crawl:
+        // blurred there, more the further off, they hold still as a soft glow. Switched on by
+        // the game where it is wanted (see `MazeGame::with_distance_blur`); MAZE_DISTANCE_BLUR=0
+        // never.
+        .with_distance_blur(fyrox_gfx::DistanceBlur::default());
+    if platform::var("MAZE_DISTANCE_BLUR").as_deref() == Some("0") {
+        effects = effects.with_distance_blur(fyrox_gfx::DistanceBlur { radius: 0.0, ..Default::default() });
+    }
     // MAZE_SHADOW_BUDGET=0 lets every lamp in range draw shadow maps, which stops their shadows
     // switching on and off as the nearest four change, at the cost of a shadow map per lamp. It
     // only matters when shadows are not traced.
