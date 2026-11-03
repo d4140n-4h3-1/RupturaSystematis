@@ -21,7 +21,10 @@ use fyrox::{
     },
     scene::{
         collider::Collider,
-        graph::{physics::RayCastOptions, Graph},
+        graph::{
+            physics::{RayCastOptions, RayCaster},
+            Graph,
+        },
         node::Node,
     },
 };
@@ -66,17 +69,43 @@ pub fn survey(
     // Each cell's floors, if it has any, bottom up: looked for from over everything down to under
     // it all, and never less far down than a meter under the ground.
     let bottom = (min.y - 1.0).min(-1.0);
+    // The colliders, to cast rays at from many threads: the scene itself cannot be shared.
+    let caster = graph.physics.ray_caster();
+    let caster = &caster;
+    // Each column looked down on its own, so as many at once as there are cores: a band of rows
+    // each, put back together in order. In a city, millions of columns - most of the survey.
+    let threads = std::thread::available_parallelism().map_or(1, |n| n.get()).clamp(1, 64);
+    let band = depth.div_ceil(threads).max(1);
+    let columns: Vec<(Vec<Vec<f32>>, Vec<bool>)> = std::thread::scope(|scope| {
+        let workers: Vec<_> = (0..depth)
+            .step_by(band)
+            .map(|z0| {
+                scope.spawn(move || {
+                    let rows = z0..(z0 + band).min(depth);
+                    let mut floors = Vec::with_capacity(rows.len() * width);
+                    let mut open = Vec::with_capacity(rows.len() * width);
+                    for z in rows {
+                        for x in 0..width {
+                            let spot = cell_center(origin, x, z);
+                            let (cell, is_open) = floors_at(caster, maze, spot, (max.y + 1.0, bottom), open_sky);
+                            floors.push(cell);
+                            open.push(is_open);
+                        }
+                    }
+                    (floors, open)
+                })
+            })
+            .collect();
+        workers.into_iter().map(|worker| worker.join().expect("a survey thread panicked")).collect()
+    });
     let mut floors: Vec<Vec<f32>> = Vec::with_capacity(width * depth);
     // Whether each cell's topmost floor is the first floor down, with open air over it.
     let mut open: Vec<bool> = Vec::with_capacity(width * depth);
-    for z in 0..depth {
-        for x in 0..width {
-            let spot = cell_center(origin, x, z);
-            let (cell, is_open) = floors_at(graph, maze, spot, (max.y + 1.0, bottom), open_sky);
-            floors.push(cell);
-            open.push(is_open);
-        }
+    for (f, o) in columns {
+        floors.extend(f);
+        open.extend(o);
     }
+    let looked = crate::platform::nanos_now();
     let storeys = floors.iter().map(Vec::len).max().unwrap_or(1).clamp(1, MOST_STOREYS);
     let mut grid = WalkGrid::with_storeys(width, depth, storeys, CELL_SIZE);
     for (i, cell) in floors.iter().enumerate() {
@@ -125,11 +154,12 @@ pub fn survey(
                     && (floor - here).abs() <= MAX_CLIMB
                     && !tried[crow * width + cx]
                     && ((here_first && first((nx, nz), storey))
-                        || passage(graph, grid.on_floor(origin, cell), grid.on_floor(origin, (cx, crow))))
+                        || passage(caster, grid.on_floor(origin, cell), grid.on_floor(origin, (cx, crow))))
                 {
-                    // Room round it, asked once.
+                    // Room round it, asked once - and not at all of a first floor down, whose
+                    // room was asked as the columns were looked down (see `floors_at`).
                     tried[crow * width + cx] = true;
-                    if !roomy(graph, cell_center(origin, nx, nz), floor) {
+                    if !first((nx, nz), storey) && !roomy(caster, cell_center(origin, nx, nz), floor) {
                         continue;
                     }
                     grid.set(cx, crow, true);
@@ -142,12 +172,13 @@ pub fn survey(
     let upper = grid.walkable_cells().filter(|&cell| grid.storey(cell) > 0).count();
     Log::info(format!(
         "Maze: {width}x{depth} cells over {:.1}x{:.1} m, {walkable} walkable, {} of them up off the ground, \
-         {upper} on {} storeys over others, in {:.1} s",
+         {upper} on {} storeys over others, in {:.1} s ({:.1} s looking down the columns on {threads} threads)",
         max.x - min.x,
         max.z - min.z,
         walkable - ground,
         storeys - 1,
-        crate::platform::nanos_now().saturating_sub(started) as f32 / 1.0e9
+        crate::platform::nanos_now().saturating_sub(started) as f32 / 1.0e9,
+        looked.saturating_sub(started) as f32 / 1.0e9
     ));
     Some((grid, origin))
 }
@@ -227,7 +258,7 @@ pub fn draw_map(grid: &WalkGrid, start: (usize, usize), exit: (usize, usize)) ->
 /// above - the ground floor of a house under its first floor - is one too, but only where the
 /// air over it is open, not the inside of something solid (see [`floors_of`]).
 fn floors_at(
-    graph: &Graph,
+    caster: &RayCaster,
     maze: Handle<Collider>,
     spot: Vector3<f32>,
     (top, bottom): (f32, f32),
@@ -242,7 +273,7 @@ fn floors_at(
         let below = Vector3::new(spot.x, from, spot.z);
         // The maze's surfaces only: the floor under everything is solid, and a ray starting in
         // it meets it where it starts - a centimeter at a time through it, before.
-        let Some(hit) = maze_hit(graph, maze, below, -Vector3::y(), from - bottom) else {
+        let Some(hit) = maze_hit(caster, maze, below, -Vector3::y(), from - bottom) else {
             break;
         };
         heights.push(hit.y);
@@ -252,7 +283,7 @@ fn floors_at(
     // those under it are not the first floor down either: they may be inside something solid -
     // under a street too close to a wall, a platform's underside - and can only be walked to.
     let mut floors = floors_of(&heights, open_sky);
-    let open = floors.first().is_some_and(|&floor| roomy(graph, spot, floor));
+    let open = floors.first().is_some_and(|&floor| roomy(caster, spot, floor));
     if !open && !floors.is_empty() {
         floors.remove(0);
     }
@@ -262,21 +293,21 @@ fn floors_at(
 
 /// Whether there is room round the middle of a cell at `spot` to stand on `floor`: nothing
 /// within reach at chest height. Asked only of floors the survey walks to - most are never.
-fn roomy(graph: &Graph, spot: Vector3<f32>, floor: f32) -> bool {
+fn roomy(caster: &RayCaster, spot: Vector3<f32>, floor: f32) -> bool {
     let chest = Vector3::new(spot.x, floor + 1.0, spot.z);
     [Vector3::x(), -Vector3::x(), Vector3::z(), -Vector3::z()]
         .iter()
-        .all(|dir| first_hit(graph, chest, *dir, 0.45).is_none())
+        .all(|dir| first_hit(caster, chest, *dir, 0.45).is_none())
 }
 
 /// Whether someone can walk from the middle of the cell at `from` to the middle of its neighbour
 /// at `to`, each on its floor: nothing in the way at chest height. A floor inside something solid
 /// - the ground under stairs built solid down to it - has the solid's sides all round it.
-fn passage(graph: &Graph, from: Vector3<f32>, to: Vector3<f32>) -> bool {
+fn passage(caster: &RayCaster, from: Vector3<f32>, to: Vector3<f32>) -> bool {
     let (from, to) = (from + Vector3::new(0.0, 1.0, 0.0), to + Vector3::new(0.0, 1.0, 0.0));
     let way = to - from;
     let length = way.norm();
-    length < 1.0e-4 || first_hit(graph, from, way / length, length).is_none()
+    length < 1.0e-4 || first_hit(caster, from, way / length, length).is_none()
 }
 
 /// The floors among `heights`, the surfaces a ray dropped from over everything meets, top down:
@@ -319,7 +350,7 @@ fn floor_of(heights: &[f32], open_sky: bool) -> Option<f32> {
 /// Where a ray from `origin` along `direction` first meets the maze, `maze`, within `length`, if
 /// it does: past anything else.
 fn maze_hit(
-    graph: &Graph,
+    caster: &RayCaster,
     maze: Handle<Collider>,
     origin: Vector3<f32>,
     direction: Vector3<f32>,
@@ -327,7 +358,7 @@ fn maze_hit(
 ) -> Option<Vector3<f32>> {
     HITS.with(|hits| {
         let mut hits = hits.borrow_mut();
-        graph.physics.cast_ray(
+        caster.cast_ray(
             RayCastOptions {
                 ray_origin: Point3::from(origin),
                 ray_direction: direction,
@@ -348,14 +379,14 @@ thread_local! {
 }
 
 fn first_hit(
-    graph: &Graph,
+    caster: &RayCaster,
     origin: Vector3<f32>,
     direction: Vector3<f32>,
     length: f32,
 ) -> Option<(Vector3<f32>, Handle<Collider>)> {
     HITS.with(|hits| {
         let mut hits = hits.borrow_mut();
-        graph.physics.cast_ray(
+        caster.cast_ray(
             RayCastOptions {
                 ray_origin: Point3::from(origin),
                 ray_direction: direction,
