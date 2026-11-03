@@ -98,9 +98,7 @@ pub use hydroxus_ai::tactics::threat::Threat;
 pub(crate) use hydroxus_ai::navigation::route::{between, plan, route_to, spot_near};
 use crate::{ferry::Crossing, roads::Roads, train::Doors};
 use hydroxus_ai::{
-    crowd::{self, Crowd, CROWD_AT_ONCE, CROWD_BACK, CROWD_EVERY, CROWD_GONE, CROWD_REST},
     flat, forward, heading_of,
-    group::{about_leader, ABOUT_LEADER, BESIDE},
     navigation::{
         reach::Reach,
         ride::{take_train, Rides, Riding, Ride, TRAIN_CHANCE},
@@ -125,7 +123,12 @@ use hydroxus_ai::{
         search::SearchMap,
         threat::{pointed_at, stage_after, CALM},
     },
-    talk::within_talking,
+    social::{
+        crowd::{self, Crowd, CROWD_AT_ONCE, CROWD_BACK, CROWD_EVERY, CROWD_GONE, CROWD_REST},
+        group::{self, about_leader, Groups, ABOUT_LEADER, BESIDE},
+        report::{hears_alarm, Telling, Witness},
+        talk::{self, within_talking},
+    },
 };
 use crate::{
     ctf::{self, Side},
@@ -170,13 +173,12 @@ pub const HOSTILE_MODEL: &str = "data/droid_hostile.glb";
 /// How many droids live in a maze, unless the conversations or MAZE_INHABITANTS say otherwise.
 const COUNT: usize = 6;
 /// A pair walking about together (see [`BESIDE`]): how far off where it keeps that the one
-/// keeping beside its partner hurries to catch up; and how far behind the one leading lets it
-/// get before waiting for it.
+/// keeping beside its partner hurries to catch up. (How far behind the one leading lets it get
+/// before waiting for it is [`group::WAIT_FOR`].)
 const CATCH_UP: f32 = 3.0;
 /// How far ahead of where its partner is, in seconds of its walking, the one keeping beside it
 /// makes for: where it will be by the time it gets there.
 const LEAD: f32 = 1.0;
-const WAIT_FOR: f32 = 6.0;
 /// How often a droid is moved and posed in the scene, by how far it is from the player: within
 /// each distance in meters, at most this often in seconds - every frame, near. A city has a
 /// hundred droids or more, nearly all of them a long way off and small, and a droid's every bone
@@ -245,8 +247,6 @@ const LOOK_SWEEP: f32 = 70.0 * std::f32::consts::PI / 180.0;
 const SEARCH_TRIP: (f32, f32) = (10.0, 40.0);
 /// How far above its feet, in meters, the middle of the view is taken to be pointed at a droid.
 const CHEST: f32 = 1.2;
-/// How far off, in meters, droids that answer an alarm hear it.
-const ALARM_RANGE: f32 = 40.0;
 /// How often a hostile droid that can see the player works out its way to them again, in
 /// seconds.
 const REPLAN: f32 = 0.4;
@@ -317,29 +317,6 @@ const DOWN_HEIGHT: f32 = 1.1;
 const WITNESS_REACH: f32 = 30.0;
 const BODY_SIGHT: f32 = 15.0;
 const BODY_LOOK_EVERY: f32 = 0.5;
-/// How far off, in meters, a witness looks for a sentry to tell, and how near it has to get to
-/// tell it; how long it hides, with none about, looking for one now and then, before it gives up,
-/// and how often it looks, in seconds.
-const REPORT_REACH: f32 = 150.0;
-const REPORT_NEAR: f32 = 2.5;
-const HIDE_FOR: f32 = 30.0;
-const REPORT_LOOK_EVERY: f32 = 1.0;
-
-/// A droid that has seen what the player did, on its way to tell a sentry of it (see
-/// [`Inhabitants::report`]). Shot down before it gets there, it tells no one.
-#[derive(Debug, Clone, Copy, PartialEq)]
-struct Witness {
-    /// Where it was done: where the player stood, or the one they shot down lies, for the sentry
-    /// to search from.
-    at: Vector3<f32>,
-    /// Whether it knows who did it.
-    knows: bool,
-    /// The sentry it is making for, as an index, if it has found one; and how long until it
-    /// looks for one again, or gives up, in seconds.
-    to: Option<usize>,
-    look_in: f32,
-    left: f32,
-}
 
 /// What came of the witnesses' going to tell a sentry (see [`Inhabitants::report`]).
 #[derive(Debug, Default, Clone, PartialEq)]
@@ -501,12 +478,6 @@ struct Inhabitant {
     fire_mode: FireMode,
     burst_left: u8,
     fired_seen: u32,
-    /// The droid it walks about with, if it is one of a pair, as an index; and whether it leads
-    /// the way, or keeps beside the other.
-    partner: Option<usize>,
-    leads: bool,
-    /// Keeping about the one leading its group, where (see [`ABOUT_LEADER`]).
-    slot: usize,
     /// Its part in a foot chase, if it is in one (see [`Chase`]).
     pursuit: Option<Pursuit>,
     /// Where the shooting it is taking cover from is, a bystander to a shootout, and whether it
@@ -744,6 +715,8 @@ struct Partner {
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct Inhabitants {
     droids: Vec<Inhabitant>,
+    /// Who of them walks about with whom, by the same index (see [`group::Groups`]).
+    groups: Groups,
     /// What each kind of droid looks like, by its index into the conversations' characters.
     liveries: Vec<Livery>,
     /// How each kind walks about, alone, in pairs or in groups, by the same index.
@@ -848,8 +821,6 @@ const CHASE_FOR: f32 = 45.0;
 const HELD_FOR: f32 = 6.0;
 /// How long after the guard the thief says what it has to say back, in seconds.
 const REPLY_AFTER: f32 = 1.8;
-/// How near the player, in meters, what those in a chase call out is heard.
-const CHASE_HEARD: f32 = 40.0;
 
 /// A shootout in a city: six of its security against a gang of six, where the gang keeps to.
 #[derive(Debug, Clone, PartialEq)]
@@ -1063,6 +1034,7 @@ impl Inhabitants {
                 ragdoll.remove(graph);
             }
         }
+        self.groups.clear();
         self.populated = false;
         self.reachable = Reach::default();
         self.chase = None;
@@ -1217,25 +1189,20 @@ impl Inhabitants {
                     break;
                 }
                 let other = self.droids.len() - 1;
-                if self.droids[leader].partner.is_none() {
-                    self.droids[leader].partner = Some(other);
-                }
-                self.droids[leader].leads = true;
-                self.droids[other].partner = Some(leader);
-                self.droids[other].slot = s;
+                self.groups.keep_about(leader, other, s);
                 slot = s + 1;
             }
             // Some groups keep to where they are, as their turf.
-            if let Some((share, reach)) = turf.filter(|_| self.droids[leader].leads) {
+            if let Some((share, reach)) = turf.filter(|_| self.groups.leads(leader)) {
                 if (rng.below(1000) as f32) < share * 1000.0 {
-                    for m in self.group_of(leader) {
+                    for m in self.groups.group_of(leader) {
                         self.droids[m].turf = Some((feet, reach));
                     }
                 }
             }
         }
-        let groups = self.droids.iter().filter(|droid| droid.leads).count();
-        let turfs = self.droids.iter().filter(|droid| droid.leads && droid.turf.is_some()).count();
+        let groups = self.groups.leaders().count();
+        let turfs = self.groups.leaders().filter(|&n| self.droids[n].turf.is_some()).count();
         Log::info(format!(
             "Maze: {} inhabitants, {groups} pairs or groups of them, {turfs} keeping to turf of their own",
             self.droids.len()
@@ -1286,7 +1253,7 @@ impl Inhabitants {
             let droids = &self.droids;
             let mut pairs: Vec<(usize, usize)> = Vec::new();
             for (t, thief) in droids.iter().enumerate() {
-                if !thieves(thief.character) || thief.leads || !calm(thief) {
+                if !thieves(thief.character) || self.groups.leads(t) || !calm(thief) {
                     continue;
                 }
                 for (g, guard) in droids.iter().enumerate() {
@@ -1588,27 +1555,7 @@ impl Inhabitants {
     /// Has the `n`th droid leave its pair or group, for good: another of those keeping about it
     /// leads the rest, if it led them.
     fn leave_group(&mut self, n: usize) {
-        let Some(partner) = self.droids[n].partner.take() else {
-            return;
-        };
-        let kept = |m: usize, leader: usize| m != leader && !self.droids[m].leads && self.droids[m].partner == Some(leader);
-        if self.droids[n].leads {
-            let rest: Vec<usize> = (0..self.droids.len()).filter(|&m| kept(m, n)).collect();
-            if let Some((&leader, others)) = rest.split_first() {
-                self.droids[leader].partner = others.first().copied();
-                self.droids[leader].leads = !others.is_empty();
-                self.droids[leader].slot = 0;
-                for &m in others {
-                    self.droids[m].partner = Some(leader);
-                }
-            }
-        } else if self.droids[partner].partner == Some(n) {
-            let next = (0..self.droids.len()).find(|&m| kept(m, partner));
-            self.droids[partner].partner = next;
-            self.droids[partner].leads = next.is_some();
-        }
-        self.droids[n].leads = false;
-        self.droids[n].slot = 0;
+        self.groups.leave(n);
         self.droids[n].turf = None;
     }
 
@@ -1616,44 +1563,24 @@ impl Inhabitants {
     /// grouping says, and no more than can keep about the one leading it (see [`ABOUT_LEADER`]);
     /// one, for a kind that does not walk about in groups.
     fn group_size(&self, character: usize, rng: &mut Rng) -> usize {
-        let most = self.groupings.get(character).map_or(0, |g| g.groups_of).min(ABOUT_LEADER.len() + 1);
-        match most >= 2 {
-            true => 2 + rng.below(most - 1),
-            false => 1,
-        }
+        group::size(self.groupings.get(character).map_or(0, |g| g.groups_of), rng)
     }
 
     /// Has each of `joining`, walking about by itself, keep about the `leader` - in the places
     /// about it not already kept, as many as there are - and to its turf, if it has one.
     fn join_group(&mut self, leader: usize, joining: &[usize]) {
-        let mut kept: Vec<usize> = self
-            .group_of(leader)
-            .into_iter()
-            .skip(1)
-            .filter(|&m| !self.droids[m].down)
-            .map(|m| self.droids[m].slot)
-            .collect();
+        let droids = &self.droids;
+        let joined = self.groups.join(leader, joining, |m| droids[m].down);
         let turf = self.droids[leader].turf;
-        for &m in joining {
-            let Some(slot) = (0..ABOUT_LEADER.len()).find(|s| !kept.contains(s)) else {
-                break;
-            };
-            kept.push(slot);
-            let droid = &mut self.droids[m];
-            droid.partner = Some(leader);
-            droid.leads = false;
-            droid.slot = slot;
-            droid.turf = turf;
-            let leader = &mut self.droids[leader];
-            leader.partner = leader.partner.or(Some(m));
-            leader.leads = true;
+        for m in joined {
+            self.droids[m].turf = turf;
         }
     }
 
     /// Those of `said` near enough the `player`'s feet to be heard (see [`CHASE_HEARD`]).
     fn heard_near(&self, said: Vec<(usize, &'static str)>, player: Vector3<f32>) -> Vec<(usize, &'static str)> {
         said.into_iter()
-            .filter(|&(n, _)| flat(self.droids[n].feet - player).norm() < CHASE_HEARD)
+            .filter(|&(n, _)| talk::heard(self.droids[n].feet, player))
             .collect()
     }
 
@@ -1662,14 +1589,13 @@ impl Inhabitants {
     /// it calm, and minding nothing - to talk among itself: up to three of it, the one leading
     /// it first.
     pub fn talkers(&self, player: Vector3<f32>, reach: f32, talks: impl Fn(usize) -> bool) -> Option<Vec<usize>> {
-        (0..self.droids.len())
-            .filter(|&n| self.droids[n].leads && talks(self.droids[n].character))
-            .map(|n| self.group_of(n).into_iter().filter(|&m| !self.droids[m].down).take(3).collect::<Vec<_>>())
-            .filter(|members| members.len() >= 2 && self.at_ease(members, player, reach))
-            .min_by(|a, b| {
-                let away = |members: &Vec<usize>| flat(self.droids[members[0]].feet - player).norm();
-                away(a).total_cmp(&away(b))
-            })
+        let groups = self
+            .groups
+            .leaders()
+            .filter(|&n| talks(self.droids[n].character))
+            .map(|n| self.groups.group_of(n).into_iter().filter(|&m| !self.droids[m].down).take(3).collect::<Vec<_>>())
+            .filter(|members| members.len() >= 2 && self.at_ease(members, player, reach));
+        talk::nearest_group(groups, |n| self.droids[n].feet, player)
     }
 
     /// Whether all of `members` are going about their business within `reach` meters of the
@@ -1695,19 +1621,15 @@ impl Inhabitants {
     /// about by themselves - not one of a pair or a group - going about their business, and have
     /// come within `near` meters of each other: to stop and talk, if they will.
     pub fn meeting(&self, player: Vector3<f32>, reach: f32, near: f32) -> Option<(usize, usize)> {
-        let lone: Vec<usize> = (0..self.droids.len())
+        let lone: Vec<(usize, Vector3<f32>)> = (0..self.droids.len())
             .filter(|&n| {
                 let droid = &self.droids[n];
-                !droid.leads && droid.partner.is_none() && droid.witness.is_none() && droid.with.is_none()
+                self.groups.alone(n) && droid.witness.is_none() && droid.with.is_none()
             })
             .filter(|&n| self.at_ease(&[n], player, reach))
+            .map(|n| (n, self.droids[n].feet))
             .collect();
-        let away = |n: usize| flat(self.droids[n].feet - player).norm();
-        lone.iter()
-            .enumerate()
-            .flat_map(|(i, &n)| lone[i + 1..].iter().map(move |&m| (n, m)))
-            .filter(|&(n, m)| flat(self.droids[n].feet - self.droids[m].feet).norm() < near)
-            .min_by(|a, b| (away(a.0) + away(a.1)).total_cmp(&(away(b.0) + away(b.1))))
+        talk::meeting(&lone, player, near)
     }
 
     /// Whether the `n`th droid and the `m`th, stopped to talk with each other, are still at it -
@@ -1741,25 +1663,9 @@ impl Inhabitants {
     /// Whether the `n`th droid speaks for its pair or group: the first of them still standing -
     /// the one leading it, unless that is down - or one walking about by itself.
     pub fn speaks_for_group(&self, n: usize) -> bool {
-        self.group_of(n).into_iter().find(|&m| !self.droids[m].down) == Some(n)
+        self.groups.speaks_for(n, |m| self.droids[m].down)
     }
 
-    /// The `n`th droid's group: the one leading it first, then those keeping about it - or the
-    /// droid alone, walking about by itself.
-    fn group_of(&self, n: usize) -> Vec<usize> {
-        let Some(droid) = self.droids.get(n) else {
-            return Vec::new();
-        };
-        let leader = match droid.leads {
-            true => n,
-            false => droid.partner.unwrap_or(n),
-        };
-        std::iter::once(leader)
-            .chain((0..self.droids.len()).filter(|&m| {
-                m != leader && !self.droids[m].leads && self.droids[m].partner == Some(leader)
-            }))
-            .collect()
-    }
 
     /// In a city, has those of its crowd that have got far from the `player`'s feet, going about
     /// their business, turn up again as others nearer by, on the floor of `grid` whose corner is
@@ -1815,14 +1721,13 @@ impl Inhabitants {
             if moved >= CROWD_AT_ONCE {
                 break;
             }
-            let droid = &self.droids[n];
             // A pair or a group goes together, the one leading taking the rest along; one whose
             // leader is down goes on its own from now.
-            if !droid.leads && droid.partner.is_some_and(|p| !self.droids[p].down) {
+            if self.groups.leader_of(n).is_some_and(|p| !self.droids[p].down) {
                 continue;
             }
-            let members: Vec<usize> = match droid.leads {
-                true => self.group_of(n).into_iter().filter(|&m| !self.droids[m].down).collect(),
+            let members: Vec<usize> = match self.groups.leads(n) {
+                true => self.groups.group_of(n).into_iter().filter(|&m| !self.droids[m].down).collect(),
                 false => vec![n],
             };
             let gone = |droid: &Inhabitant| {
@@ -1831,9 +1736,8 @@ impl Inhabitants {
             if !members.iter().all(|&m| gone(&self.droids[m])) {
                 continue;
             }
-            if members.len() == 1 && self.droids[n].partner.is_some() {
-                self.droids[n].partner = None;
-                self.droids[n].leads = false;
+            if members.len() == 1 && self.groups.partner(n).is_some() {
+                self.groups.disband(n);
             }
             // One of a kind that walks about in groups, left by itself - the others of its group
             // down, or itself gone off from them - makes a group afresh with others of its kind
@@ -1848,8 +1752,7 @@ impl Inhabitants {
                         let droid = &self.droids[m];
                         !members.contains(&m)
                             && droid.character == kind
-                            && droid.partner.is_none()
-                            && !droid.leads
+                            && self.groups.alone(m)
                             && gone(droid)
                     })
                     .take(size - members.len())
@@ -1872,7 +1775,7 @@ impl Inhabitants {
             let Some(crowd) = self.crowd.as_ref() else {
                 return;
             };
-            let slots: Vec<usize> = members.iter().skip(1).map(|&m| self.droids[m].slot).collect();
+            let slots: Vec<usize> = members.iter().skip(1).map(|&m| self.groups.slot(m)).collect();
             let spot = crowd.spot((grid, origin), player, &slots, rng, |at| hidden(graph, at));
             let Some((feet, heading, about)) = spot else {
                 continue;
@@ -1981,6 +1884,7 @@ impl Inhabitants {
         // number, and drawing nothing more from `rng`, so that whatever else is picked with it is
         // as it was.
         let code = 10 + rng.below(90) as u32;
+        self.groups.add();
         self.droids.push(Inhabitant {
             body,
             collider,
@@ -2042,9 +1946,6 @@ impl Inhabitants {
             reload: 0.0,
             armed_left: 0.0,
             aimed_at: None,
-            partner: None,
-            leads: false,
-            slot: 0,
             pursuit: None,
             cover: None,
             turf: None,
@@ -2373,11 +2274,9 @@ impl Inhabitants {
         // Those lying where they went down are in no one's way.
         let down: Vec<bool> = self.droids.iter().map(|droid| droid.down).collect();
         // Each one's partner, if it walks about with one, as of the start of this frame.
-        let partners: Vec<Option<Partner>> = self
-            .droids
-            .iter()
-            .map(|droid| {
-                let other = &self.droids[droid.partner?];
+        let partners: Vec<Option<Partner>> = (0..self.droids.len())
+            .map(|n| {
+                let other = &self.droids[self.groups.partner(n)?];
                 Some(Partner {
                     feet: other.feet,
                     heading: other.heading,
@@ -2495,13 +2394,13 @@ impl Inhabitants {
         // Which of those leading have one of their pair or group to wait for: kept talking, or
         // fallen behind.
         let mut waits = vec![false; self.droids.len()];
-        for droid in &self.droids {
-            let Some(leader) = droid.partner.filter(|_| !droid.leads) else {
+        for (n, droid) in self.droids.iter().enumerate() {
+            let Some(leader) = self.groups.leader_of(n) else {
                 continue;
             };
             let about = !droid.down && matches!(droid.alert, None | Some(Alert::Caution));
             let held = droid.talking || droid.warned > 0;
-            if about && (held || flat(droid.feet - self.droids[leader].feet).norm() > WAIT_FOR) {
+            if group::waits_for(self.droids[leader].feet, droid.feet, about, held) {
                 waits[leader] = true;
             }
         }
@@ -2515,8 +2414,9 @@ impl Inhabitants {
         let turfs: Vec<((usize, usize), f32)> = self
             .droids
             .iter()
-            .filter(|droid| !droid.down && (droid.leads || droid.partner.is_none()))
-            .filter_map(|droid| {
+            .enumerate()
+            .filter(|&(n, droid)| !droid.down && (self.groups.leads(n) || self.groups.partner(n).is_none()))
+            .filter_map(|(_, droid)| {
                 let (at, reach) = droid.turf?;
                 Some((survey::cell_at(grid, origin, at)?, reach / grid.cell_size))
             })
@@ -2526,6 +2426,7 @@ impl Inhabitants {
         // The trains' doorways those taking them are getting on and off by.
         let mut taken: Vec<(usize, usize)> =
             self.droids.iter().filter_map(|droid| droid.ride.map(|ride| (ride.train, ride.doorway))).collect();
+        let groups = &self.groups;
         for (me, droid) in self.droids.iter_mut().enumerate() {
             droid.avatar.fly_voxels(graph, dt);
             // In the hostile droid's colours while it is after the player; it goes down in
@@ -2879,7 +2780,7 @@ impl Inhabitants {
                         }
                     }
                 }
-            } else if let Some(sentry) = droid.witness.and_then(|witness| witness.to) {
+            } else if let Some(sentry) = droid.witness.and_then(|witness| witness.sentry()) {
                 // A witness, on its way to tell a sentry: the way to it worked out again every
                 // so often as it walks about.
                 droid.replan -= dt;
@@ -2920,7 +2821,7 @@ impl Inhabitants {
                         droid.heading = to.x.atan2(to.z);
                     }
                 }
-            } else if let Some(leader) = partners[me].filter(|leader| leader.about && !droid.leads) {
+            } else if let Some(leader) = partners[me].filter(|leader| leader.about && !groups.leads(me)) {
                 // Keeping beside its partner, on its right and a step behind - or, one of a
                 // group, wherever about the one leading it it keeps (see [`ABOUT_LEADER`]) - where
                 // that is going to be in a moment, as it walks; or else behind it, with no floor
@@ -2930,8 +2831,8 @@ impl Inhabitants {
                     floor_at(at)
                         && !survey::cell_at(grid, origin, at).is_some_and(|(x, z)| roads.is_some_and(|r| r.is_road(x, z)))
                 };
-                let behind = leader.feet + ahead - forward(leader.heading) * (BESIDE.0 + 0.8 * droid.slot as f32);
-                let slot = [about_leader(leader.feet + ahead, leader.heading, droid.slot), behind]
+                let behind = leader.feet + ahead - forward(leader.heading) * (BESIDE.0 + 0.8 * groups.slot(me) as f32);
+                let slot = [about_leader(leader.feet + ahead, leader.heading, groups.slot(me)), behind]
                     .into_iter()
                     .find(|&slot| keeps_off(slot))
                     .unwrap_or(behind);
@@ -2986,7 +2887,7 @@ impl Inhabitants {
                                 // Not one of a kind that keeps in groups, gone off by itself:
                                 // it is to make a group afresh with others of its kind.
                                 None => match (!self.trains.is_empty()
-                                    && droid.partner.is_none()
+                                    && groups.partner(me).is_none()
                                     && self.groupings.get(droid.character).is_none_or(|g| g.groups_of < 2)
                                     && droid.side.is_none()
                                     && !droid.sentry
@@ -3021,7 +2922,7 @@ impl Inhabitants {
             // Taking cover, it runs for it, and once there crouches in it.
             let sheltering = droid.cover.is_some() && droid.alert.is_none() && !droid.talking;
             let sheltered = sheltering && droid.route.is_empty();
-            let reporting = droid.witness.is_some_and(|witness| witness.to.is_some());
+            let reporting = droid.witness.is_some_and(|witness| witness.sentry().is_some());
             let after = droid.alert == Some(Alert::Alert) || fighting.is_some() || running || sheltering || reporting;
             // Called to a shootout, it hurries there.
             let called = matches!(droid.side, Some(Side::Security | Side::Gang))
@@ -3090,7 +2991,7 @@ impl Inhabitants {
             }
 
             // Leading the way, it waits for its partner or group, kept talking or fallen behind.
-            let waiting_for_partner = droid.leads && matches!(droid.alert, None | Some(Alert::Caution)) && waits[me];
+            let waiting_for_partner = groups.leads(me) && matches!(droid.alert, None | Some(Alert::Caution)) && waits[me];
             let mut wanted = 0.0;
             if let Some(&next) = droid.route.last().filter(|_| !waiting_for_partner) {
                 let to = flat(next - droid.feet);
@@ -3428,7 +3329,7 @@ impl Inhabitants {
                 .turf
                 .is_some_and(|(at, reach)| flat(player - at).norm() < reach && (player.y - at.y).abs() < CATCH_HEIGHT);
             let near = !droid.down && (over || trespassing) && in_sight(droid.feet);
-            if let Some(voice) = near.then(|| self.group_of(m).into_iter().find(|&v| !self.droids[v].down)).flatten() {
+            if let Some(voice) = near.then(|| self.groups.group_of(m).into_iter().find(|&v| !self.droids[v].down)).flatten() {
                 crowding[voice] = true;
             }
         }
@@ -3505,7 +3406,7 @@ impl Inhabitants {
                 && answers(droid.character)
                 && !droid.down
                 && matches!(droid.alert, None | Some(Alert::Caution))
-                && (droid.feet - from).norm() < ALARM_RANGE;
+                && hears_alarm(from, droid.feet);
             if !answering {
                 continue;
             }
@@ -3647,7 +3548,7 @@ impl Inhabitants {
     /// `knows` - go and tell a sentry of it (see [`Inhabitants::report`]).
     pub fn witness(&mut self, n: usize, at: Vector3<f32>, knows: bool) {
         if let Some(droid) = self.droids.get_mut(n).filter(|droid| !droid.down) {
-            droid.witness = Some(Witness { at, knows, to: None, look_in: 0.0, left: HIDE_FOR });
+            droid.witness = Some(Witness::new(at, knows));
             droid.warned = 0;
             droid.threat = 0.0;
             droid.route.clear();
@@ -3657,9 +3558,10 @@ impl Inhabitants {
 
     /// Sees the witnesses on, `dt` seconds on from the last time: each makes for the nearest
     /// sentry - of the kinds `sentry` says are - standing, within
-    /// [`REPORT_REACH`], and tells it once it is within [`REPORT_NEAR`] of it. With none about,
+    /// [`REPORT_REACH`](hydroxus_ai::social::report::REPORT_REACH), and tells it once it is within
+    /// [`REPORT_NEAR`](hydroxus_ai::social::report::REPORT_NEAR) of it. With none about,
     /// it hides, running from where it was done, and looks again now and then, till
-    /// [`HIDE_FOR`] is up. What came of it.
+    /// [`HIDE_FOR`](hydroxus_ai::social::report::HIDE_FOR) is up. What came of it.
     pub fn report(&mut self, dt: f32, sentry: impl Fn(usize) -> bool) -> Reports {
         let mut reports = Reports::default();
         let sentries: Vec<(usize, Vector3<f32>)> = self
@@ -3690,29 +3592,18 @@ impl Inhabitants {
             if droid.talking {
                 continue;
             }
-            // Its sentry, if it still stands; or, now and then, the nearest there is.
-            let to = witness.to.and_then(|to| sentries.iter().find(|&&(s, _)| s == to)).copied();
-            witness.look_in -= dt;
-            let to = match to {
-                Some(to) => Some(to),
-                None if witness.look_in <= 0.0 => {
-                    witness.look_in = REPORT_LOOK_EVERY;
-                    sentries
-                        .iter()
-                        .copied()
-                        .filter(|&(_, feet)| flat(feet - droid.feet).norm() < REPORT_REACH)
-                        .min_by(|a, b| flat(a.1 - droid.feet).norm().total_cmp(&flat(b.1 - droid.feet).norm()))
+            // Its sentry, if it still stands; or, now and then, the nearest there is - or, with
+            // none about, it hides, till it gives up.
+            match witness.step(dt, droid.feet, &sentries) {
+                Telling::MakingFor { afresh, .. } => {
+                    if afresh {
+                        droid.route.clear();
+                        droid.replan = 0.0;
+                    }
+                    droid.cover = None;
                 }
-                None => None,
-            };
-            if let Some((s, feet)) = to {
-                if witness.to != Some(s) {
-                    droid.route.clear();
-                    droid.replan = 0.0;
-                }
-                witness.to = Some(s);
-                droid.cover = None;
-                if flat(feet - droid.feet).norm() < REPORT_NEAR {
+                Telling::Told(s) => {
+                    droid.cover = None;
                     droid.witness = None;
                     droid.route.clear();
                     droid.resting = REST.1;
@@ -3720,10 +3611,7 @@ impl Inhabitants {
                     reports.told.push((n, s, witness.at, witness.knows));
                     continue;
                 }
-            } else {
-                witness.to = None;
-                witness.left -= dt;
-                if witness.left <= 0.0 {
+                Telling::GaveUp => {
                     droid.witness = None;
                     droid.cover = None;
                     droid.route.clear();
@@ -3731,9 +3619,11 @@ impl Inhabitants {
                     reports.gave_up.push(n);
                     continue;
                 }
-                if droid.cover.is_none() {
-                    droid.cover = Some((witness.at, false));
-                    droid.route.clear();
+                Telling::Hiding => {
+                    if droid.cover.is_none() {
+                        droid.cover = Some((witness.at, false));
+                        droid.route.clear();
+                    }
                 }
             }
             droid.witness = Some(witness);
@@ -4071,7 +3961,7 @@ impl Inhabitants {
     /// Turns the `n`th droid on the player - and the rest of its pair or group with it:
     /// after a moment they hunt them, and cannot be talked to any more.
     pub fn set_hostile(&mut self, n: usize) {
-        for m in self.group_of(n) {
+        for m in self.groups.group_of(n) {
             if let Some(droid) = self.droids.get_mut(m).filter(|droid| !droid.down && droid.hunts_player()) {
                 droid.alert = Some(Alert::Alert);
                 droid.windup = WINDUP;
@@ -4235,7 +4125,7 @@ impl Inhabitants {
             .filter(|&i| self.droids[i].with.is_none())
             // On its way to tell a sentry what the player did, it stops to be questioned - but not
             // while it is in hiding, with no sentry to make for.
-            .filter(|&i| self.droids[i].witness.is_none_or(|witness| witness.to.is_some()))
+            .filter(|&i| self.droids[i].witness.is_none_or(|witness| witness.sentry().is_some()))
             // In the middle of a shootout, it has no time for them.
             .filter(|&i| !matches!(self.droids[i].side, Some(Side::Security | Side::Gang)))
             .find(|&i| in_sight(self.droids[i].feet))
