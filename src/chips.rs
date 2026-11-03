@@ -31,7 +31,7 @@ use fyrox::{
         pool::Handle,
     },
     graph::SceneGraph,
-    material::{Material, MaterialResource},
+    material::{Material, MaterialProperty, MaterialResource},
     resource::model::ModelResource,
     resource::texture::{Texture, TextureKind, TexturePixelKind, TextureResource},
     scene::{
@@ -148,6 +148,8 @@ pub struct Chips {
     sound: Option<(SoundBufferResource, f32)>,
     /// A number the city's squares are worked out from, the same for each square every time.
     seed: u64,
+    /// Whether one of each worth has been put down in front of the player, with MAZE_CHIPS.
+    shown_off: bool,
 }
 
 impl PartialEq for Chips {
@@ -190,6 +192,24 @@ impl Chips {
         }
         // To be brought in, if the player is near.
         self.around = None;
+    }
+
+    /// With MAZE_CHIPS, to look at them: once a game, one of each worth - 2, 12 and 40 credits -
+    /// put down in a row 2.5 m in front of the player, standing at `feet` facing `yaw`, a meter
+    /// apart, the cheapest on their left.
+    pub fn show_off(&mut self, feet: Vector3<f32>, yaw: f32) {
+        if std::mem::replace(&mut self.shown_off, true) {
+            return;
+        }
+        let ahead = Vector3::new(yaw.sin(), 0.0, yaw.cos());
+        let left = Vector3::new(ahead.z, 0.0, -ahead.x);
+        for (k, whole) in [2, 12, 40].into_iter().enumerate() {
+            let at = feet + ahead * 2.5 + left * (1.0 - k as f32) + Vector3::new(0.0, HOVER, 0.0);
+            self.dropped.push((self.next_dropped, at, Credits::new(whole, 0)));
+            self.next_dropped += 1;
+        }
+        self.around = None;
+        Log::info("Credit chips: one of each worth put down in front of the player (MAZE_CHIPS)");
     }
 
     /// The chips a square of the city has: where, on `grid` with its corner at `origin`, and what
@@ -291,10 +311,20 @@ impl Chips {
                 .map(|mut surface| {
                     let recoloured = {
                         let state = surface.material().state();
-                        state.data_ref().filter(|material| crate::fixtures::glow_strength(material).is_some()).map(|material| {
+                        state.data_ref().and_then(|material| {
+                            // The glTF importer gives a glow's strength per channel - the model's
+                            // own cyan, times its strength - and the engine scales it by the
+                            // surface's colour: made even, as strong as its strongest channel,
+                            // so that the colour is the worth's alone.
+                            let strength = match crate::fixtures::glow_strength(material)? {
+                                MaterialProperty::Vector3(v) => v.max(),
+                                MaterialProperty::Float(f) => f,
+                                _ => GLOW,
+                            };
                             let mut copy = material.clone();
                             copy.set_property("diffuseColor", colour);
-                            MaterialResource::new_embedded(copy)
+                            copy.set_property(crate::fixtures::EMISSION_STRENGTH, Vector3::repeat(strength));
+                            Some(MaterialResource::new_embedded(copy))
                         })
                     };
                     if let Some(material) = recoloured {
@@ -314,10 +344,11 @@ impl Chips {
         self.sound = sound;
     }
 
-    /// The chips on `dt` seconds, the player at `player` - their middle - in the city on `grid`:
-    /// those near brought into the scene and those gone far taken out, each spinning and bobbing,
-    /// and the ones the player walks into picked up. What those were worth, all told, if any were.
-    pub fn update(&mut self, graph: &mut Graph, dt: f32, player: Vector3<f32>, grid: (&WalkGrid, Vector3<f32>)) -> Option<Credits> {
+    /// The chips on `dt` seconds, the player at `player` - their middle - on `grid`: those near
+    /// brought into the scene and those gone far taken out, each spinning and bobbing, and the
+    /// ones the player walks into picked up - the city's own among them, if it is a `city`, or only
+    /// those dropped. What those picked up were worth, all told, if any were.
+    pub fn update(&mut self, graph: &mut Graph, dt: f32, player: Vector3<f32>, grid: (&WalkGrid, Vector3<f32>), city: bool) -> Option<Credits> {
         self.time += dt;
         if std::mem::take(&mut self.remake) {
             self.clear_scene(graph);
@@ -326,7 +357,7 @@ impl Chips {
         let here = (here, ((player.z - grid.1.z) / CHUNK).floor() as i64);
         if self.around != Some(here) {
             self.around = Some(here);
-            self.bring_in(graph, player, grid, here);
+            self.bring_in(graph, player, grid, here, city);
         }
         // Spinning and bobbing.
         for shown in &self.shown {
@@ -376,7 +407,7 @@ impl Chips {
 
     /// Brings into the scene the chips within [`SHOWN_WITHIN`] of `player`, in square `here`, that
     /// are not taken, and takes out those further off.
-    fn bring_in(&mut self, graph: &mut Graph, player: Vector3<f32>, grid: (&WalkGrid, Vector3<f32>), here: (i64, i64)) {
+    fn bring_in(&mut self, graph: &mut Graph, player: Vector3<f32>, grid: (&WalkGrid, Vector3<f32>), here: (i64, i64), city: bool) {
         let near = |at: Vector3<f32>| Vector3::new(at.x - player.x, 0.0, at.z - player.z).norm() < SHOWN_WITHIN;
         // Out of it, the far ones.
         let mut k = 0;
@@ -391,7 +422,7 @@ impl Chips {
             }
         }
         // Into it, the near ones not in it yet.
-        let reach = (SHOWN_WITHIN / CHUNK).ceil() as i64;
+        let reach = if city { (SHOWN_WITHIN / CHUNK).ceil() as i64 } else { -1 };
         let mut wanted: Vec<(Key, Vector3<f32>, Credits)> = Vec::new();
         for sx in here.0 - reach..=here.0 + reach {
             for sz in here.1 - reach..=here.1 + reach {
@@ -512,14 +543,14 @@ mod tests {
         chips.drop_credits(Vector3::new(50.0, 0.0, 50.0), Credits::new(2, 0), &mut rng);
         // Far off, nothing.
         let far = Vector3::new(10.0, 1.0, 10.0);
-        let got = chips.update(&mut graph, 0.1, far, (&grid, Vector3::zeros()));
+        let got = chips.update(&mut graph, 0.1, far, (&grid, Vector3::zeros()), true);
         let city_got = got.unwrap_or_default();
         // Over to each dropped chip in turn.
         let spots: Vec<Vector3<f32>> = chips.dropped.iter().map(|&(_, at, _)| at).collect();
         assert_eq!(spots.len(), 2);
         let mut picked = Credits::default();
         for at in spots {
-            picked += chips.update(&mut graph, 0.1, at, (&grid, Vector3::zeros())).unwrap_or_default();
+            picked += chips.update(&mut graph, 0.1, at, (&grid, Vector3::zeros()), true).unwrap_or_default();
         }
         assert!(picked >= Credits::new(2, 0), "{picked} {city_got}");
         assert!(chips.dropped.is_empty());
@@ -527,10 +558,10 @@ mod tests {
         let (shown, _) = chips.counts();
         if let Some(first) = chips.shown.first().cloned() {
             let before = shown;
-            chips.update(&mut graph, 0.1, first.at, (&grid, Vector3::zeros()));
+            chips.update(&mut graph, 0.1, first.at, (&grid, Vector3::zeros()), true);
             assert!(chips.taken.contains(&first.key));
             chips.clear_scene(&mut graph);
-            chips.update(&mut graph, 0.1, first.at + Vector3::new(0.0, 0.0, 0.01), (&grid, Vector3::zeros()));
+            chips.update(&mut graph, 0.1, first.at + Vector3::new(0.0, 0.0, 0.01), (&grid, Vector3::zeros()), true);
             assert!(chips.shown.iter().all(|shown| shown.key != first.key));
             assert!(chips.shown.len() < before + 1);
         }

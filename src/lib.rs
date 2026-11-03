@@ -17,7 +17,7 @@
 //! the walkable map the game made of the level, `MAZE_SEED=<n>` makes every maze identical,
 //! `MAZE_WINDOWED=1` opens a window instead of filling the screen, and `MAZE_MODEL=<path>` plays a
 //! fixed maze model instead, such as `data/maze_full.fbx`; with a race track, such as
-//! `data/arena/race_circuit.glb`, `MAZE_RACE_AUTOPILOT=1` drives the bike round it by itself. In a browser these go in the page's
+//! `data/arena/race_circuit.glb`, `MAZE_RACE_AUTOPILOT=1` drives the bike round it by itself, and `MAZE_CHIPS=1` puts a credit chip of each worth in front of the player - straight into a maze, or in Story mode with Urbs as the model. In a browser these go in the page's
 //! address instead, as `?MAZE_SEED=7` (see [`platform::var`]).
 
 //!

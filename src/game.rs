@@ -5149,9 +5149,11 @@ impl MazeGame {
     }
 
     /// In Story mode, the credit chips about the player: brought in and out of the scene as they
-    /// go, and those they walk into picked up, their credits theirs.
+    /// go, and those they walk into picked up, their credits theirs. With MAZE_CHIPS, in any
+    /// maze, those put down in front of them to look at.
     fn update_chips(&mut self, ctx: &mut PluginContext) {
-        if !self.story || self.phase != Phase::Playing || self.menu.is_open() {
+        let showing = platform::var("MAZE_CHIPS").is_some();
+        if !(self.story || showing) || self.phase != Phase::Playing || self.menu.is_open() {
             return;
         }
         // Made from their model once it has loaded.
@@ -5165,7 +5167,11 @@ impl MazeGame {
         };
         let graph = &mut ctx.scenes[self.scene].graph;
         let player = self.player.position(graph);
-        if let Some(got) = self.chips.update(graph, ctx.dt, player, (grid, *origin)) {
+        // With MAZE_CHIPS, one of each worth in front of the player, to look at.
+        if platform::var("MAZE_CHIPS").is_some() {
+            self.chips.show_off(self.player.feet(graph), self.player.yaw());
+        }
+        if let Some(got) = self.chips.update(graph, ctx.dt, player, (grid, *origin), self.story) {
             self.credits += got;
             chips::log_pickup(got, self.credits);
             self.hud.show_note(format!("+{got}    {} in all", self.credits));
@@ -5336,9 +5342,10 @@ impl Plugin for MazeGame {
             .inspect_err(|error| Log::err(format!("Maze: the quadcopters speak as the drones: {error}")))
             .ok();
         self.menu = PauseMenu::build(ctx.user_interfaces.first_mut(), "Start again");
-        // Over the pause menu. With a model to play from MAZE_MODEL, straight into the maze.
+        // Over the pause menu. With a model to play from MAZE_MODEL - or with MAZE_CHIPS, to look
+        // at the credit chips in a maze - straight into the maze.
         self.main_menu = MainMenu::build(ctx.user_interfaces.first_mut());
-        if platform::var("MAZE_MODEL").is_some() {
+        if platform::var("MAZE_MODEL").is_some() || platform::var("MAZE_CHIPS").is_some() {
             self.play(&mut ctx, Game::Maze);
         } else {
             self.main_menu.set_open(ctx.user_interfaces.first(), true);
