@@ -100,7 +100,7 @@ mod tests {
 
     #[test]
     fn a_shot_is_heard_from_further_down_the_corridors_than_anything_else() {
-        use hydroxus_ai::{grid::WalkGrid, hearing::Heard};
+        use hydroxus_ai::{navigation::grid::WalkGrid, perception::hearing::Heard};
         let loudest = [SPRINT_NOISE, LANDING_NOISE, IMPACT_NOISE].into_iter().fold(0.0, f32::max);
         assert!(SHOT_NOISE > 2.0 * loudest);
         // A corridor 40 m long and 4 m wide; the one listening down the middle of it, 25 m from

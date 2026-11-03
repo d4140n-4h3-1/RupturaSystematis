@@ -46,7 +46,7 @@ struct Ferry {
     half: f32,
 }
 
-pub use hydroxus_ai::trip::Crossing;
+pub use hydroxus_ai::navigation::trip::Crossing;
 
 /// The places a ferry goes through, from one end to the other.
 #[derive(Debug, Clone, PartialEq)]

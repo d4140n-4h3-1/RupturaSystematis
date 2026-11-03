@@ -7,11 +7,11 @@
 //! the ground, or a stair, or a floor up above. A cell holds one floor, so ground under a floor
 //! up above is left out. A level out in the open, with no ceiling over it, has the sky for its
 //! ceiling: a cell's floor there is the first surface down. Of those, the walkable cells are the ground and whatever can be climbed
-//! to from it a stair's step at a time ([`hydroxus_ai::grid::MAX_CLIMB`]) - not the tops of
+//! to from it a stair's step at a time ([`hydroxus_ai::navigation::grid::MAX_CLIMB`]) - not the tops of
 //! crates or walls, which no stairs lead up to.
 
 use crate::layout::WalkGrid;
-use hydroxus_ai::grid::MAX_CLIMB;
+use hydroxus_ai::navigation::grid::MAX_CLIMB;
 use std::collections::VecDeque;
 use fyrox::{
     core::{
@@ -193,7 +193,7 @@ pub fn survey(
 
 /// The middle of cell `(x, z)` of the survey's grid, whose corner is at `origin`.
 pub fn cell_center(origin: Vector3<f32>, x: usize, z: usize) -> Vector3<f32> {
-    hydroxus_ai::grid::cell_center(origin, CELL_SIZE, x, z)
+    hydroxus_ai::navigation::grid::cell_center(origin, CELL_SIZE, x, z)
 }
 
 /// The cell of `grid` that `position` is in, if it is on the grid at all.

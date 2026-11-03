@@ -148,6 +148,40 @@ pub struct Doors {
     pub open: Option<(usize, f32)>,
 }
 
+/// What a droid taking the train goes by (see [`hydroxus_ai::navigation::ride`]).
+impl hydroxus_ai::navigation::ride::Train for Doors {
+    fn at(&self) -> Vector3<f32> {
+        self.at
+    }
+    fn doorways(&self) -> &[Vector3<f32>] {
+        &self.doorways
+    }
+    fn across(&self) -> Vector3<f32> {
+        self.across
+    }
+    fn along(&self) -> Vector3<f32> {
+        self.along
+    }
+    fn open(&self) -> Option<(usize, f32)> {
+        self.open
+    }
+    fn stations(&self) -> usize {
+        Doors::stations(self)
+    }
+    fn station(&self, n: usize) -> Vector3<f32> {
+        Doors::station(self, n)
+    }
+    fn within(&self, at: Vector3<f32>) -> bool {
+        Doors::within(self, at)
+    }
+    fn out(&self, at: Vector3<f32>) -> f32 {
+        Doors::out(self, at)
+    }
+    fn platform(&self, station: usize, n: usize, out: f32) -> Vector3<f32> {
+        Doors::platform(self, station, n, out)
+    }
+}
+
 impl Doors {
     /// How many stations there are.
     pub fn stations(&self) -> usize {

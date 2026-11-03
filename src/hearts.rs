@@ -26,6 +26,7 @@ use crate::{
     fixtures::{property, DIFFUSE_COLOR},
     layout::{Rng, WalkGrid},
 };
+use hydroxus_ai::navigation::route::BIG_GRID;
 use fyrox_gfx::{replace_materials, GlassMaterial};
 use fyrox::{
     core::{
@@ -121,6 +122,7 @@ pub fn spots(grid: &WalkGrid, start: (usize, usize), count: usize, rng: &mut Rng
             (-ROOM..=ROOM).all(|dz| (dx, dz) == (0, 0) || grid.step_to((x, z), dx as isize, dz as isize).is_some())
         })
     };
+    // A city's, as big as for a drone's spot (see [`BIG_GRID`]).
     if grid.width * grid.rows() >= BIG_GRID {
         return sampled_spots(grid, start, count, rng, open);
     }
@@ -167,9 +169,6 @@ pub fn spots(grid: &WalkGrid, start: (usize, usize), count: usize, rng: &mut Rng
     spots
 }
 
-/// How many cells a grid has to have for the hearts' spots to be picked at random (see
-/// [`sampled_spots`]) rather than from the walking distance to every cell: a city's.
-const BIG_GRID: usize = 4_000_000;
 /// How many random cells are tried for each spot.
 const SAMPLE_TRIES: usize = 4000;
 

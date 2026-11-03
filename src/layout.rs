@@ -7,7 +7,7 @@
 //! line distance through the walls. The maze's inhabitants find their way about on the same grid
 //! (see [`WalkGrid::routes_from`]). The grid itself is `hydroxus-ai`'s.
 
-pub use hydroxus_ai::grid::{Rng, WalkGrid};
+pub use hydroxus_ai::navigation::grid::{Rng, WalkGrid};
 
 /// Picks a start and an exit for a round on `grid`: the start is chosen by `pick` among the
 /// cells of the largest connected area, and the exit is as far from it as the maze allows.

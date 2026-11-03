@@ -24,6 +24,7 @@
 //! goes in only while nothing is crossing it the other way.
 
 use crate::race::{Bike, Hit};
+use hydroxus_ai::navigation::drive::{self, Obstacle};
 use fyrox::{
     core::{
         algebra::{UnitQuaternion, Vector3},
@@ -78,12 +79,8 @@ const TURN_SPEED: f32 = 6.0;
 const ACCEL: f32 = 3.5;
 const EASE: f32 = 4.0;
 const BRAKE: f32 = 9.0;
-/// How far ahead a bike looks for someone in its way, how far to either side of its line, and how
-/// far short of them it stops: a bike, a body's length and more; anyone on foot, a little more.
-const LOOK: f32 = 24.0;
-const WIDE: f32 = 1.6;
-const GAP_BIKE: f32 = 4.5;
-const GAP_FOOT: f32 = 3.5;
+/// How far ahead a bike looks for someone in its way, and how far short of them it stops, is
+/// [`drive::room_ahead`]'s.
 /// How long a bike waits behind another before it goes on round it all the same: two waiting for
 /// each other across a junction - one turning left, one coming the other way - would wait for
 /// ever. It never goes on into anyone on foot.
@@ -430,13 +427,6 @@ pub struct Rider {
     bike: Option<(Handle<Node>, Bike)>,
 }
 
-/// Someone a bike stops for.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Obstacle {
-    Bike(Vector3<f32>),
-    Foot(Vector3<f32>),
-}
-
 /// The traffic: the streets, the bikes on them and the stop lights at their junctions.
 #[derive(Debug, Default, PartialEq)]
 pub struct Traffic {
@@ -604,7 +594,6 @@ impl Traffic {
         inside: &[Vec<usize>],
     ) -> (f32, bool, bool) {
         let rider = &self.riders[n];
-        let mut blocked = false;
         let impatient = rider.waited > PATIENCE;
         let mut target = rider.cruise;
         let mut hold = false;
@@ -615,51 +604,34 @@ impl Traffic {
                 let from = l.way;
                 // Easing off for the turn ahead.
                 if rider.next != from {
-                    target = target.min((TURN_SPEED * TURN_SPEED + 2.0 * EASE * left).sqrt());
+                    target = target.min(drive::easing_for(TURN_SPEED, left, EASE));
                 }
                 hold = match self.light_for(l.to, from) {
                     Some(Light::Green) => false,
                     // On amber, stopping if it can, without braking hard.
-                    Some(Light::Amber) => rider.speed * rider.speed / (2.0 * EASE) < left + 0.5,
+                    Some(Light::Amber) => drive::stops_on_amber(rider.speed, left, EASE),
                     Some(Light::Red) => true,
                     // No lights: in while nothing is crossing the other way.
                     None => inside[l.to].iter().any(|&w| w % 2 != from % 2),
                 };
                 if hold {
-                    target = target.min((2.0 * EASE * (left - 0.3).max(0.0)).sqrt());
+                    target = target.min(drive::easing_for(0.0, (left - 0.3).max(0.0), EASE));
                 }
             }
             Leg::Turn { .. } => target = target.min(TURN_SPEED),
         }
         // Whoever is in the way before it: the bike in front, keeping its distance; anyone on
         // foot, stopping short of them.
-        let right = right_of(rider.ahead);
         let obstacles = bikes
             .iter()
             .enumerate()
             .filter(|&(m, _)| m != n)
-            .map(|(_, &(at, _))| Obstacle::Bike(at))
+            .map(|(_, &(at, _))| Obstacle::Vehicle(at))
             .chain(people.iter().map(|&p| Obstacle::Foot(p)));
-        for obstacle in obstacles {
-            let (at, gap, bike) = match obstacle {
-                Obstacle::Bike(at) => (at, GAP_BIKE, true),
-                Obstacle::Foot(at) => (at, GAP_FOOT, false),
-            };
-            if bike && impatient {
-                continue;
-            }
-            let to = at - rider.at;
-            if to.y.abs() > 3.0 {
-                continue;
-            }
-            let (front, side) = (to.dot(&rider.ahead), to.dot(&right));
-            if front > 0.0 && front < LOOK && side.abs() < WIDE {
-                let slow = (2.0 * BRAKE * (front - gap).max(0.0)).sqrt();
-                if slow < target {
-                    target = slow;
-                    blocked |= bike;
-                }
-            }
+        let (anyone, bikes_ahead) = drive::room_ahead(rider.at, rider.ahead, obstacles, BRAKE, impatient);
+        let blocked = bikes_ahead.is_some_and(|slow| slow < target);
+        if let Some(slow) = anyone {
+            target = target.min(slow);
         }
         (target, hold, blocked)
     }
@@ -1021,7 +993,7 @@ mod tests {
         }
         let rider = &traffic.riders[0];
         let short = (person - rider.at).dot(&ahead);
-        assert!(rider.speed < 0.1 && short > 2.0 && short < GAP_FOOT + 1.0, "{short} at {}", rider.speed);
+        assert!(rider.speed < 0.1 && short > 2.0 && short < drive::GAP_FOOT + 1.0, "{short} at {}", rider.speed);
         // Off the road, it goes on.
         for _ in 0..(2.0 / dt) as usize {
             traffic.step(dt, &[]);

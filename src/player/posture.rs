@@ -37,7 +37,7 @@ pub enum Posture {
 }
 
 /// How the player holds themselves, as the droids see them.
-impl From<Posture> for hydroxus_ai::sight::Stance {
+impl From<Posture> for hydroxus_ai::perception::sight::Stance {
     fn from(posture: Posture) -> Self {
         match posture {
             Posture::Standing => Self::Standing,

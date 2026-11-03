@@ -80,7 +80,11 @@ use fyrox::{
     },
     window::WindowAttributes,
 };
-use hydroxus_ai::{prelude::*, route::route_to_weighted};
+use hydroxus_ai::{
+    navigation::route::route_to_weighted,
+    prelude::*,
+    tactics::team::{self, Exposure, Intel, Stuck, EXPOSURE_EVERY, SUPPRESSED_FOR, SUPPRESS_NEAR},
+};
 use maze::{
     dismember,
     player::{
@@ -156,33 +160,8 @@ const RESPAWN_TIME: f32 = 5.0;
 const RETREAT_HEALTH: f32 = 35.0;
 /// How far a droid will go to reach cover, in grid steps (edges count double).
 const COVER_REACH: f32 = 30.0;
-/// How long what a team saw of an enemy stays worth acting on.
-const INTEL_TIME: f32 = 8.0;
-/// How far apart, in grid cells, the team works out which ground its enemies can see, and how
-/// often, in seconds; how dear a route counts each step into ground one enemy can see, in
-/// steps; and how far off an enemy sees that far, in meters.
-const EXPOSURE_STEP: usize = 4;
-const EXPOSURE_EVERY: f32 = 1.0;
-const EXPOSURE_COST: f32 = 6.0;
-const EXPOSURE_RANGE: f32 = 45.0;
-/// How far round from the rest of its team a flanker goes, in radians, and how far from the
-/// enemy it makes for, in meters.
-const FLANK_ANGLE: f32 = 1.2;
-const FLANK_DISTANCE: f32 = 14.0;
-/// How near a teammate, in meters, makes cover crowded; and how much worse it counts cover that
-/// is crowded, or seen by an enemy other than the one it is taken from, in the cover's terms.
-const CROWDED: f32 = 3.0;
-const CROWDED_COST: f32 = 4.0;
-const SEEN_COST: f32 = 8.0;
-/// How recently an enemy has to have been seen, in seconds, to fire at where it was; and how near
-/// a bolt has to land or pass, in meters, to keep a droid down, and for how long, in seconds.
-const SUPPRESS_SEEN: f32 = 3.0;
-const SUPPRESS_NEAR: f32 = 2.0;
-const SUPPRESSED_FOR: f32 = 1.5;
-/// How far a droid has to get in how long, in meters and seconds, not to count as stuck.
-const STUCK: (f32, f32) = (0.5, 3.0);
-/// How far a droid caught without cover sidesteps, in meters.
-const SIDESTEP: f32 = 2.5;
+/// How the teams fight as teams - what they know of the enemy, which ground it sees, flanking,
+/// cover and covering fire - is hydroxus-ai's (`hydroxus_ai::tactics::team`).
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Team {
@@ -311,7 +290,7 @@ struct Droid {
     /// Whether it goes round the side, and which side: 1 or -1.
     flank: Option<f32>,
     /// Where it was, and how long ago, to tell if it is stuck.
-    stuck_from: (Vector3<f32>, f32),
+    stuck_from: Stuck,
 }
 
 impl Droid {
@@ -406,14 +385,14 @@ struct Battle {
     /// Whether each team, red and cyan, fights as a team (see the top), or as it used to.
     smart: [bool; 2],
     /// For each team, how many of the enemies it knows of can see each coarse cell of the
-    /// ground - every [`EXPOSURE_STEP`]th cell each way - and how long till it is worked out again.
-    exposure: [Vec<u8>; 2],
+    /// ground (see [`Exposure`]) - and how long till it is worked out again.
+    exposure: [Exposure; 2],
     exposure_in: f32,
     /// The bolts everyone fires, and those on their way to someone they will hit.
     bolts: Option<Bolts>,
     arrivals: Vec<Arrival>,
     /// Where each team last saw each enemy, and how long ago.
-    intel: [Vec<Option<(Vector3<f32>, f32)>>; 2],
+    intel: [Intel; 2],
     score: [u32; 2],
     phase: Phase,
     paused: bool,
@@ -790,7 +769,7 @@ impl Battle {
                 let Some(floor) = Self::top_floor(graph, spot, bounds.max.y + 1.0) else {
                     continue;
                 };
-                if (floor - grid.floor(x, z)).abs() <= hydroxus_ai::grid::MAX_CLIMB && roomy(spot, floor) {
+                if (floor - grid.floor(x, z)).abs() <= hydroxus_ai::navigation::grid::MAX_CLIMB && roomy(spot, floor) {
                     grid.set(nx, nz, true);
                     grid.set_floor(nx, nz, floor);
                     queue.push_back((nx, nz));
@@ -888,7 +867,7 @@ impl Battle {
         for i in 0..self.droids.len() {
             self.respawn(i);
         }
-        self.intel = [vec![None; self.droids.len()], vec![None; self.droids.len()]];
+        self.intel = [Intel::new(self.droids.len()), Intel::new(self.droids.len())];
     }
 
     /// One of the team's droids, made from its model, standing where it is put. None if the
@@ -944,7 +923,7 @@ impl Battle {
             suppressed: 0.0,
             suppress_at: None,
             flank: None,
-            stuck_from: (Vector3::zeros(), 0.0),
+            stuck_from: Stuck::default(),
         })
     }
 
@@ -972,7 +951,7 @@ impl Battle {
         droid.objective = None;
         droid.suppressed = 0.0;
         droid.suppress_at = None;
-        droid.stuck_from = (droid.position, 0.0);
+        droid.stuck_from = Stuck::at(droid.position);
         // Two of each team's five go round the side, one each way.
         droid.flank = match i % PER_TEAM {
             1 => Some(1.0),
@@ -1017,8 +996,8 @@ impl Battle {
     }
 
     fn think(&mut self, graph: &mut Graph, dt: f32) {
-        for intel in self.intel.iter_mut().flatten().flatten() {
-            intel.1 += dt;
+        for intel in &mut self.intel {
+            intel.age(dt);
         }
         self.exposure_in -= dt;
         if self.exposure_in <= 0.0 {
@@ -1053,7 +1032,7 @@ impl Battle {
         let visible: Vec<usize> = self.enemies_of(i).filter(|&j| self.sees(graph, i, j)).collect();
         let team = self.droids[i].team.index();
         for &j in &visible {
-            self.intel[team][j] = Some((self.droids[j].position, 0.0));
+            self.intel[team].saw(j, self.droids[j].position);
         }
         let me = self.droids[i].position;
         if !self.smart(i) {
@@ -1067,21 +1046,10 @@ impl Battle {
         // to the one it has unless another is clearly better.
         let worth = |j: usize| {
             let them = &self.droids[j];
-            let mut score = (them.position - me).norm() / 10.0 + them.health / HEALTH * 1.5;
-            if them.target == Some(i) {
-                score -= 1.5;
-            }
-            if !them.crouched && them.cover_spot().is_none() {
-                score -= 0.8;
-            }
-            score
+            let in_the_open = !them.crouched && them.cover_spot().is_none();
+            team::target_worth((them.position - me).norm(), them.health / HEALTH, them.target == Some(i), in_the_open)
         };
-        let best = visible.iter().copied().min_by(|&a, &b| worth(a).total_cmp(&worth(b)));
-        let current = self.droids[i].target.filter(|j| visible.contains(j));
-        self.droids[i].target = match (current, best) {
-            (Some(current), Some(best)) if worth(current) <= worth(best) + 0.5 => Some(current),
-            (_, best) => best,
-        };
+        self.droids[i].target = team::target(&visible, self.droids[i].target, worth);
     }
 
     /// Whether droid `i`'s team fights as a team.
@@ -1093,53 +1061,23 @@ impl Battle {
     /// cell of the ground, how many of them could see a droid standing there.
     fn survey_exposure(&mut self, graph: &Graph) {
         let Some((grid, origin)) = &self.grid else { return };
-        let (cols, rows) = (grid.width.div_ceil(EXPOSURE_STEP), grid.depth.div_ceil(EXPOSURE_STEP));
-        for team in [Team::Red, Team::Cyan] {
-            let t = team.index();
-            let mut exposure = vec![0u8; cols * rows];
-            if self.smart[t] {
-                let seen: Vec<Vector3<f32>> = self.intel[t]
-                    .iter()
-                    .enumerate()
-                    .filter(|(j, _)| self.droids.get(*j).is_some_and(|d| d.alive()))
-                    .filter_map(|(_, intel)| intel.filter(|(_, age)| *age < INTEL_TIME).map(|(p, _)| p))
-                    .collect();
-                for (c, value) in exposure.iter_mut().enumerate() {
-                    let cell = ((c % cols) * EXPOSURE_STEP, (c / cols) * EXPOSURE_STEP);
-                    if !grid.is_walkable(cell.0, cell.1) {
-                        continue;
-                    }
-                    let at = grid.on_floor(*origin, cell) + Vector3::y() * CHEST_STANDING;
-                    let seeing = seen
-                        .iter()
-                        .filter(|enemy| (**enemy - at).norm() < EXPOSURE_RANGE)
-                        .filter(|enemy| Self::clear(graph, **enemy + Vector3::y() * EYES_STANDING, at))
-                        .count();
-                    *value = seeing.min(255) as u8;
-                }
-            }
-            self.exposure[t] = exposure;
+        for t in 0..2 {
+            self.exposure[t] = if self.smart[t] {
+                let alive = |j: usize| self.droids.get(j).is_some_and(|d| d.alive());
+                let seen = self.intel[t].known(alive);
+                Exposure::survey((grid, *origin), &seen, CHEST_STANDING, |enemy, at| {
+                    Self::clear(graph, enemy + Vector3::y() * EYES_STANDING, at)
+                })
+            } else {
+                Exposure::default()
+            };
         }
-    }
-
-    /// How many enemies droid `i`'s team knows of can see the cell `(x, z)`, going by its nearest
-    /// coarse cell.
-    fn exposure_at(&self, team: usize, (x, z): (usize, usize)) -> u8 {
-        let Some((grid, _)) = &self.grid else { return 0 };
-        let cols = grid.width.div_ceil(EXPOSURE_STEP);
-        let (cx, cz) = ((x + EXPOSURE_STEP / 2) / EXPOSURE_STEP, (z + EXPOSURE_STEP / 2) / EXPOSURE_STEP);
-        self.exposure[team].get(cz * cols + cx).copied().unwrap_or(0)
     }
 
     /// Where droid `i` believes the nearest enemy is, from what its team has seen lately.
     fn nearest_known_enemy(&self, i: usize) -> Option<Vector3<f32>> {
         let me = &self.droids[i];
-        self.intel[me.team.index()]
-            .iter()
-            .enumerate()
-            .filter(|(j, _)| self.droids[*j].alive())
-            .filter_map(|(_, intel)| intel.filter(|(_, age)| *age < INTEL_TIME).map(|(p, _)| p))
-            .min_by(|a, b| (a - me.position).norm().total_cmp(&(b - me.position).norm()))
+        self.intel[me.team.index()].nearest(me.position, |j| self.droids[j].alive())
     }
 
     fn decide(&mut self, graph: &Graph, i: usize, dt: f32) {
@@ -1176,17 +1114,11 @@ impl Battle {
                 }
                 // Getting nowhere: somewhere else.
                 if self.smart(i) {
-                    let (from, since) = self.droids[i].stuck_from;
                     let here = self.droids[i].position;
-                    if flat(here - from).norm() > STUCK.0 {
-                        self.droids[i].stuck_from = (here, 0.0);
-                    } else if since + dt > STUCK.1 {
-                        self.droids[i].stuck_from = (here, 0.0);
+                    if self.droids[i].stuck_from.step(here, dt) {
                         self.droids[i].objective = None;
                         self.droids[i].going_to = None;
                         self.droids[i].route.clear();
-                    } else {
-                        self.droids[i].stuck_from = (from, since + dt);
                     }
                 }
             }
@@ -1304,8 +1236,8 @@ impl Battle {
         }
     }
 
-    /// Where droid `i`, going round the side, makes for against a `threat`: off to its side of the
-    /// line from the rest of its team to the threat, [`FLANK_DISTANCE`] from it, on the ground.
+    /// Where droid `i`, going round the side, makes for against a `threat` (see
+    /// [`team::flank_point`]).
     fn flank_point(&self, i: usize, threat: Vector3<f32>) -> Option<Vector3<f32>> {
         let side = self.droids[i].flank?;
         let team = self.droids[i].team;
@@ -1315,26 +1247,16 @@ impl Battle {
             .filter(|d| d.team == team && d.alive())
             .map(|d| d.position)
             .collect();
-        let middle = mates.iter().sum::<Vector3<f32>>() / mates.len().max(1) as f32;
-        let from_threat = heading_of(middle - threat)?;
-        let point = threat + forward(from_threat + side * FLANK_ANGLE) * FLANK_DISTANCE;
         let (grid, origin) = self.grid.as_ref()?;
-        let cell = grid.nearest_walkable(*origin, point)?;
-        // Close enough already: straight at them from here.
-        let there = grid.on_floor(*origin, cell);
-        (flat(there - self.droids[i].position).norm() > 3.0).then_some(there)
+        team::flank_point((grid, *origin), self.droids[i].position, &mates, threat, side)
     }
 
     /// Has droid `i`, with no cover to be had, step aside across the line from `threat`, one way
     /// or the other, rather than stand there.
     fn sidestep(&mut self, i: usize, threat: Vector3<f32>) {
-        let me = self.droids[i].position;
-        let Some(across) = flat(threat - me).try_normalize(1.0e-3).map(right_of) else { return };
         let side = if self.random((0.0, 1.0)) < 0.5 { 1.0 } else { -1.0 };
         let Some((grid, origin)) = &self.grid else { return };
-        let to = me + across * side * SIDESTEP;
-        if let Some(cell) = grid.walkable_cell(*origin, to) {
-            let to = grid.on_floor(*origin, cell);
+        if let Some(to) = team::sidestep_to((grid, *origin), self.droids[i].position, threat, side) {
             self.walk_to(i, to);
         }
     }
@@ -1342,35 +1264,29 @@ impl Battle {
     /// The enemy droid `i`'s team last saw lately enough to fire at, and near enough, and where:
     /// the chest of one standing there.
     fn recently_seen(&self, i: usize) -> Option<(usize, Vector3<f32>)> {
-        let me = self.droids[i].position;
+        let alive = |j: usize| self.droids.get(j).is_some_and(|d| d.alive());
         self.intel[self.droids[i].team.index()]
-            .iter()
-            .enumerate()
-            .filter(|(j, _)| self.droids.get(*j).is_some_and(|d| d.alive()))
-            .filter_map(|(j, intel)| intel.filter(|(_, age)| *age < SUPPRESS_SEEN).map(|(p, _)| (j, p)))
-            .filter(|(_, p)| (p - me).norm() < EXPOSURE_RANGE)
-            .min_by(|a, b| (a.1 - me).norm().total_cmp(&(b.1 - me).norm()))
+            .recently_seen(self.droids[i].position, alive)
             .map(|(j, p)| (j, p + Vector3::y() * CHEST_STANDING))
     }
 
     /// Whether droid `i` has a teammate firing to cover it as it moves - or no teammate near
-    /// enough to, or it has waited long enough: it goes a quarter of the times it asks anyway.
+    /// enough to, or it has waited long enough (see [`team::covered`]).
     fn covered(&mut self, i: usize) -> bool {
-        let me = self.droids[i].position;
         let team = self.droids[i].team;
-        let mates: Vec<&Droid> = self
+        let mates: Vec<(Vector3<f32>, bool)> = self
             .droids
             .iter()
             .enumerate()
             .filter(|(j, d)| *j != i && d.team == team && d.alive())
-            .map(|(_, d)| d)
-            .filter(|d| (d.position - me).norm() < 30.0)
+            .map(|(_, d)| {
+                let firing = matches!(d.task, Task::Peeking { .. } | Task::Standing { .. })
+                    && (d.target.is_some() || d.suppress_at.is_some());
+                (d.position, firing)
+            })
             .collect();
-        let firing = mates.iter().any(|d| {
-            matches!(d.task, Task::Peeking { .. } | Task::Standing { .. })
-                && (d.target.is_some() || d.suppress_at.is_some())
-        });
-        mates.is_empty() || firing || self.random((0.0, 1.0)) < 0.25
+        let roll = self.random((0.0, 1.0));
+        team::covered(self.droids[i].position, mates, roll)
     }
 
     /// Whether droid `j`, from where it stands, could see a crouched droid at `spot`.
@@ -1436,16 +1352,8 @@ impl Battle {
                 let cost = routes.cost(cell.1 * grid.width + cell.0)?;
                 let to_threat = flat(threat - cover.position);
                 let distance = to_threat.norm();
-                if distance < 4.0 {
-                    return None;
-                }
-                let dir = to_threat / distance;
-                if !cover.shields.iter().any(|s| s.dot(&dir) > 0.92) {
-                    return None;
-                }
-                // Best fought from 10-22 m; retreating, the further the better.
-                let range = if retreat { -distance } else { (distance - 16.0).abs() };
-                Some((cost * 0.5 + range, s))
+                let rank = team::cover_rank(cost, distance, retreat)?;
+                team::shields_from(&cover.shields, to_threat / distance).then_some((rank, s))
             })
             .collect();
         candidates.sort_by(|a, b| a.0.total_cmp(&b.0));
@@ -1455,10 +1363,8 @@ impl Battle {
         let smart = self.smart(i);
         let others: Vec<Vector3<f32>> = if smart {
             self.intel[self.droids[i].team.index()]
-                .iter()
-                .enumerate()
-                .filter(|(j, _)| self.droids.get(*j).is_some_and(|d| d.alive()))
-                .filter_map(|(_, intel)| intel.filter(|(_, age)| *age < INTEL_TIME).map(|(p, _)| p))
+                .known(|j| self.droids.get(j).is_some_and(|d| d.alive()))
+                .into_iter()
                 .filter(|p| flat(p - threat).norm() > 2.0)
                 .map(|p| p + Vector3::y() * EYES_STANDING)
                 .collect()
@@ -1483,9 +1389,9 @@ impl Battle {
                 continue;
             }
             let crouched = spot + Vector3::y() * EYES_CROUCHED;
-            let seen = others.iter().filter(|eyes| Self::clear(graph, **eyes, crouched)).count() as f32;
-            let crowded = mates.iter().any(|m| flat(m - spot).norm() < CROWDED);
-            let worth = rank + seen * SEEN_COST + if crowded { CROWDED_COST } else { 0.0 };
+            let seen = others.iter().filter(|eyes| Self::clear(graph, **eyes, crouched)).count();
+            let crowded = mates.iter().any(|m| flat(m - spot).norm() < team::CROWDED);
+            let worth = team::cover_worth(rank, seen, crowded);
             if best.is_some_and(|(b, _, _)| b <= worth) {
                 continue;
             }
@@ -1545,9 +1451,8 @@ impl Battle {
         // Fighting as a team, the way that keeps out of the enemy's sight where it can.
         let team = droid.team.index();
         let route = if self.smart[team] && !self.exposure[team].is_empty() {
-            route_to_weighted((grid, *origin), droid.position, goal, f32::INFINITY, |x, z| {
-                self.exposure_at(team, (x, z)) as f32 * EXPOSURE_COST
-            })
+            let exposure = &self.exposure[team];
+            route_to_weighted((grid, *origin), droid.position, goal, f32::INFINITY, |x, z| exposure.cost((x, z)))
         } else {
             route_to((grid, *origin), droid.position, goal, f32::INFINITY)
         };
@@ -1804,7 +1709,7 @@ impl Battle {
                 self.score[1]
             ));
             for intel in &mut self.intel {
-                intel[j] = None;
+                intel.forget(j);
             }
         } else {
             // Shot at out in the open: get to cover. Badly hurt anywhere: fall back.
@@ -2160,5 +2065,5 @@ fn angle_between(a: f32, b: f32) -> f32 {
 
 /// The right-hand side of `ahead`, along the ground.
 fn right_of(ahead: Vector3<f32>) -> Vector3<f32> {
-    hydroxus_ai::steer::right_of(ahead)
+    hydroxus_ai::navigation::steer::right_of(ahead)
 }

@@ -21,7 +21,7 @@ use fyrox::{
         HorizontalAlignment, Thickness, UiNode, UserInterface, VerticalAlignment,
     },
 };
-use hydroxus_ai::grid::Rng;
+use hydroxus_ai::navigation::grid::Rng;
 use std::f32::consts::{PI, TAU};
 
 /// How near the slot a port has to be to latch, in radians either side.

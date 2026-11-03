@@ -125,6 +125,16 @@ impl Roads {
     }
 }
 
+/// The road a droid going about its business keeps off (see [`hydroxus_ai::navigation::wander`]).
+impl hydroxus_ai::navigation::wander::Roads for Roads {
+    fn is_road(&self, x: usize, row: usize) -> bool {
+        Roads::is_road(self, x, row)
+    }
+    fn extra(&self, x: usize, row: usize) -> f32 {
+        Roads::extra(self, x, row)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
