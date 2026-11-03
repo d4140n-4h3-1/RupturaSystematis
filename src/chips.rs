@@ -1,6 +1,10 @@
 //! Credit chips: credits lying about in Story mode, to be picked up by walking into them. Each is
-//! a little six-sided coin on its edge, spinning and bobbing over the floor, glowing by what it is
-//! worth - cyan for a few credits, gold for more, violet for a good deal - and bigger the more.
+//! a hexagonal token on its edge ([`CHIP_MODEL`], made in Blender by
+//! ~/Documents/blender/collectibles/credit_chip/build_credit_chip.py: a graphite frame round a
+//! glass face, traces of light out from a raised CR, gold contacts round its edge), spinning and
+//! bobbing over the floor, its lights the colour of what it is worth - cyan for a few credits,
+//! gold for more, violet for a good deal - and bigger the more. Until the model has loaded, or
+//! without it, a plain six-sided coin stands in for it.
 //! Picked up, a chip's credits go straight into the player's, as a hacked computer's do: there is
 //! nothing to carry, and no limit to how many.
 //!
@@ -28,13 +32,14 @@ use fyrox::{
     },
     graph::SceneGraph,
     material::{Material, MaterialResource},
+    resource::model::ModelResource,
     resource::texture::{Texture, TextureKind, TexturePixelKind, TextureResource},
     scene::{
         base::BaseBuilder,
         graph::Graph,
         mesh::{
-            surface::{SurfaceBuilder, SurfaceData, SurfaceResource},
-            MeshBuilder,
+            surface::{Surface, SurfaceBuilder, SurfaceData, SurfaceResource},
+            Mesh, MeshBuilder,
         },
         node::Node,
         sound::{SoundBufferResource, SoundBuilder, Status},
@@ -43,6 +48,10 @@ use fyrox::{
 };
 use std::collections::{HashMap, HashSet};
 
+/// The chip's model: one mesh, its lights one material, `ChipGlow`, recoloured here by worth.
+pub const CHIP_MODEL: &str = "data/credit_chip.glb";
+/// How big the model is shown at its smallest, of how big it was made (0.26 m across).
+const MODEL_SCALE: f32 = 0.85;
 /// Where the chips' sound is described.
 pub const CHIP_SOUNDS: &str = "data/sounds/credits_formants.json";
 /// How big a square of the city has its own chips, in meters; how far from the player the city's
@@ -129,7 +138,11 @@ pub struct Chips {
     /// The square the player was in when the chips were last brought in and out of the scene.
     around: Option<(i64, i64)>,
     time: f32,
-    /// Their shape, each worth's material, and the sound of one picked up.
+    /// The model's surfaces for each worth, its lights in that worth's colour, once it has
+    /// loaded; and whether the chips in the scene are to be made again from it.
+    model: Option<[Vec<Surface>; 3]>,
+    remake: bool,
+    /// The plain coin's shape, each worth's material, and the sound of one picked up.
     shape: Option<SurfaceResource>,
     materials: Vec<MaterialResource>,
     sound: Option<(SoundBufferResource, f32)>,
@@ -148,8 +161,8 @@ impl Chips {
     /// afresh from `seed`. Whatever was in `graph` taken out of it.
     pub fn reset(&mut self, graph: &mut Graph, seed: u64) {
         self.clear_scene(graph);
-        let (shape, materials, sound) = (self.shape.take(), std::mem::take(&mut self.materials), self.sound.take());
-        *self = Self { shape, materials, sound, seed, ..Default::default() };
+        let (shape, materials, sound, model) = (self.shape.take(), std::mem::take(&mut self.materials), self.sound.take(), self.model.take());
+        *self = Self { shape, materials, sound, model, seed, ..Default::default() };
     }
 
     /// Takes the chips out of the scene - for a new round - keeping which are taken and dropped,
@@ -254,6 +267,48 @@ impl Chips {
         self.sound.is_none()
     }
 
+    /// Whether the chips are made from the model yet.
+    pub fn has_model(&self) -> bool {
+        self.model.is_some()
+    }
+
+    /// Makes the chips from `model`, its mesh's surfaces, from now on - those in the scene made
+    /// again - each worth's lights in its colour: a copy of whatever material of it glows.
+    pub fn set_model(&mut self, model: &ModelResource) {
+        let surfaces: Vec<Surface> = {
+            let data = model.data_ref();
+            let graph = &data.get_scene().graph;
+            graph.linear_iter().filter_map(|node| node.cast::<Mesh>()).flat_map(|mesh| mesh.surfaces().to_vec()).collect()
+        };
+        if surfaces.is_empty() {
+            Log::warn(format!("Credit chips: {CHIP_MODEL} has no mesh; plain coins it is"));
+            return;
+        }
+        let tiers = COLOURS.map(|colour| {
+            surfaces
+                .iter()
+                .cloned()
+                .map(|mut surface| {
+                    let recoloured = {
+                        let state = surface.material().state();
+                        state.data_ref().filter(|material| crate::fixtures::glow_strength(material).is_some()).map(|material| {
+                            let mut copy = material.clone();
+                            copy.set_property("diffuseColor", colour);
+                            MaterialResource::new_embedded(copy)
+                        })
+                    };
+                    if let Some(material) = recoloured {
+                        surface.set_material(material);
+                    }
+                    surface
+                })
+                .collect()
+        });
+        self.model = Some(tiers);
+        self.remake = true;
+        Log::info(format!("Credit chips: made from {CHIP_MODEL}, {} surfaces", surfaces.len()));
+    }
+
     /// Sets the sound a chip makes picked up, and how far off it is heard at full volume.
     pub fn set_sound(&mut self, sound: Option<(SoundBufferResource, f32)>) {
         self.sound = sound;
@@ -264,6 +319,9 @@ impl Chips {
     /// and the ones the player walks into picked up. What those were worth, all told, if any were.
     pub fn update(&mut self, graph: &mut Graph, dt: f32, player: Vector3<f32>, grid: (&WalkGrid, Vector3<f32>)) -> Option<Credits> {
         self.time += dt;
+        if std::mem::take(&mut self.remake) {
+            self.clear_scene(graph);
+        }
         let here = ((player.x - grid.1.x) / CHUNK).floor() as i64;
         let here = (here, ((player.z - grid.1.z) / CHUNK).floor() as i64);
         if self.around != Some(here) {
@@ -350,13 +408,16 @@ impl Chips {
                 continue;
             }
             let w = worth(value);
-            let scale = BIGGER.powi(w as i32);
+            let (surfaces, scale) = match &self.model {
+                Some(tiers) => (tiers[w].clone(), MODEL_SCALE * BIGGER.powi(w as i32)),
+                None => (vec![SurfaceBuilder::new(shape.clone()).with_material(self.materials[w].clone()).build()], BIGGER.powi(w as i32)),
+            };
             let node = MeshBuilder::new(
                 BaseBuilder::new()
                     .with_cast_shadows(false)
                     .with_local_transform(TransformBuilder::new().with_local_position(at).with_local_scale(Vector3::repeat(scale)).build()),
             )
-            .with_surfaces(vec![SurfaceBuilder::new(shape.clone()).with_material(self.materials[w].clone()).build()])
+            .with_surfaces(surfaces)
             .build(graph)
             .to_base();
             let phase = (at.x * 0.37 + at.z * 0.61).rem_euclid(1.0);

@@ -725,6 +725,10 @@ pub struct MazeGame {
     #[visit(skip)]
     #[reflect(hidden)]
     heart_model: Option<ModelResource>,
+    /// The credit chips' model, as it loads (see [`chips::CHIP_MODEL`]).
+    #[visit(skip)]
+    #[reflect(hidden)]
+    chip_model: Option<ModelResource>,
     /// The shield the player raises with the 1 key (see [`crate::shield`]), once its model has
     /// loaded and it is in the scene.
     #[visit(skip)]
@@ -966,6 +970,7 @@ impl MazeGame {
         self.rival_models = race::RIVALS.iter().map(|&(_, model, _, _)| resources.request::<Model>(model)).collect();
         self.shot_model = Some(resources.request::<Model>(SHOT_MODEL));
         self.heart_model = Some(resources.request::<Model>(HEART_MODEL));
+        self.chip_model = Some(resources.request::<Model>(chips::CHIP_MODEL));
         self.shield_model = Some(resources.request::<Model>(SHIELD_MODEL));
         self.shield_pickup_model = Some(resources.request::<Model>(SHIELD_PICKUP_MODEL));
         self.shield_cells = Hearts::with_lamp("Shield cells", SHIELD_LAMP);
@@ -5148,6 +5153,12 @@ impl MazeGame {
     fn update_chips(&mut self, ctx: &mut PluginContext) {
         if !self.story || self.phase != Phase::Playing || self.menu.is_open() {
             return;
+        }
+        // Made from their model once it has loaded.
+        if !self.chips.has_model() {
+            if let Some(model) = self.chip_model.as_ref().filter(|model| model.is_ok()) {
+                self.chips.set_model(model);
+            }
         }
         let Some((grid, origin)) = self.level.grid.as_ref() else {
             return;
