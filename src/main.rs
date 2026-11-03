@@ -61,7 +61,15 @@ fn window_attributes() -> WindowAttributes {
 /// environment can change.
 fn graphics_effects() -> GraphicsEffects {
     let mut effects = GraphicsEffects::default()
-        .with_ambient_occlusion(fyrox_gfx::AmbientOcclusion::reaching(0.9));
+        .with_ambient_occlusion(fyrox_gfx::AmbientOcclusion::reaching(0.9))
+        // Temporal anti-aliasing smooths what stands still, frame on frame; but where something
+        // moves - a droid walking, a credit chip spinning - it leans on the frame alone, which
+        // is as jagged as no anti-aliasing at all. FXAA after it smooths those edges too.
+        // MAZE_FXAA=0 leaves it to the temporal pass alone.
+        .with_anti_aliasing(fyrox_gfx::AntiAliasing {
+            fxaa: platform::var("MAZE_FXAA").as_deref() != Some("0"),
+            temporal: true,
+        });
     // MAZE_SHADOW_BUDGET=0 lets every lamp in range draw shadow maps, which stops their shadows
     // switching on and off as the nearest four change, at the cost of a shadow map per lamp. It
     // only matters when shadows are not traced.
