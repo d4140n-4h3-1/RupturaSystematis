@@ -32,11 +32,12 @@
 use crate::{
     credits::Credits,
     formants::{self, Load, Sounds},
-    layout::{Rng, WalkGrid},
+    layout::Rng,
     notes::{self, Entry},
     ragdoll::CHARACTERS,
     survey::CELL_SIZE,
 };
+use hydroxus_ai::navigation::navmesh::NavMesh;
 use fyrox::{
     asset::untyped::ResourceKind,
     core::{
@@ -1285,15 +1286,14 @@ impl Computer {
         })
     }
 
-    /// Puts it at `spot` in the maze whose `grid` has its corner at `origin`, against the wall
-    /// behind, locked, with no files; and takes the floor it stands on out of `grid`, so that
+    /// Puts it at `spot` on `mesh`, against the wall
+    /// behind, locked, with no files; and takes the floor it stands on out of `mesh`, so that
     /// the droids walk round it. The wall is found past any of the computers' `colliders`, which
     /// may still be where they were last round.
     pub fn place(
         &mut self,
         graph: &mut Graph,
-        grid: &mut WalkGrid,
-        origin: Vector3<f32>,
+        mesh: &mut NavMesh,
         (cell, facing): Spot,
         colliders: &[Handle<Collider>],
     ) {
@@ -1302,8 +1302,8 @@ impl Computer {
         self.placed = true;
         let across = (-facing.1, facing.0);
         // Where the cell is on the plan, whichever storey it is on.
-        let at = grid.center(origin, cell);
-        let floor = grid.floor(cell.0, cell.1);
+        let at = mesh.center(cell);
+        let floor = mesh.floor(cell.0, cell.1);
         let yaw = (facing.0 as f32).atan2(facing.1 as f32);
         // Its back just off the wall behind the cell - [`WALL_CLEARANCE`] short of as far as a ray
         // from the cell goes before it hits something that is not anyone, nor the computer
@@ -1334,13 +1334,13 @@ impl Computer {
             .local_transform_mut()
             .set_position(Vector3::new(at.x, floor, at.z))
             .set_rotation(UnitQuaternion::from_axis_angle(&Vector3::y_axis(), yaw));
-        for k in [-1, 0, 1] {
-            let x = cell.0 as i64 + across.0 * k;
-            let z = cell.1 as i64 + across.1 * k;
-            if x >= 0 && z >= 0 && (x as usize) < grid.width && (z as usize) < grid.depth {
-                grid.set(x as usize, z as usize, false);
-            }
-        }
+        let taken: Vec<(usize, usize)> = [-1, 0, 1]
+            .into_iter()
+            .map(|k| (cell.0 as i64 + across.0 * k, cell.1 as i64 + across.1 * k))
+            .filter(|&(x, z)| x >= 0 && z >= 0 && (x as usize) < mesh.width() && (z as usize) < mesh.depth())
+            .map(|(x, z)| (x as usize, z as usize))
+            .collect();
+        mesh.set_walkable(&taken, false);
     }
 
     /// Takes it out of the maze, for a round with nowhere to put it.
@@ -1572,17 +1572,17 @@ impl Computer {
 /// A cell, and which way along the grid something in it faces, as a step across it.
 type Spot = ((usize, usize), (i64, i64));
 
-/// Which way the computer can face in cell `i` of `grid`, if any: with room for it across, a
+/// Which way the computer can face in cell `i` of `mesh`, if any: with room for it across, a
 /// wall right behind it, and floor in front.
-fn facing_at(grid: &WalkGrid, i: usize) -> Option<(i64, i64)> {
+fn facing_at(mesh: &NavMesh, i: usize) -> Option<(i64, i64)> {
     let walkable = |x: i64, z: i64| {
         x >= 0
             && z >= 0
-            && (x as usize) < grid.width
-            && (z as usize) < grid.depth
-            && grid.is_walkable(x as usize, z as usize)
+            && (x as usize) < mesh.width()
+            && (z as usize) < mesh.depth()
+            && mesh.is_walkable(x as usize, z as usize)
     };
-    let (x, z) = ((i % grid.width) as i64, (i / grid.width) as i64);
+    let (x, z) = ((i % mesh.width()) as i64, (i / mesh.width()) as i64);
     [(1, 0), (-1, 0), (0, 1), (0, -1)].into_iter().find(|&facing| {
         let across = (-facing.1, facing.0);
         let wide = (-1..=1).all(|k| walkable(x + across.0 * k, z + across.1 * k));
@@ -1593,29 +1593,29 @@ fn facing_at(grid: &WalkGrid, i: usize) -> Option<(i64, i64)> {
     })
 }
 
-/// Where the first computer goes, from `start` in `grid`: the cell it stands on, and which way it
+/// Where the first computer goes, from `start` on `mesh`: the cell it stands on, and which way it
 /// faces along the grid, as a step across it. The nearest open floor from [`FROM_START`] cells of
 /// walking on that it fits against a wall at.
-pub fn spot(grid: &WalkGrid, start: (usize, usize)) -> Option<Spot> {
-    let distances = grid.distances_from(start);
+pub fn spot(mesh: &NavMesh, start: (usize, usize)) -> Option<Spot> {
+    let distances = mesh.distances_from(start);
     let mut best: Option<(u32, Spot)> = None;
     for (i, distance) in distances.iter().enumerate() {
         let Some(d) = *distance else { continue };
         if d < FROM_START.0 || d > FROM_START.1 || best.is_some_and(|(b, _)| d >= b) {
             continue;
         }
-        if let Some(facing) = facing_at(grid, i) {
-            best = Some((d, ((i % grid.width, i / grid.width), facing)));
+        if let Some(facing) = facing_at(mesh, i) {
+            best = Some((d, ((i % mesh.width(), i / mesh.width()), facing)));
         }
     }
     best.map(|(_, spot)| spot)
 }
 
 /// Where a maze model marks a computer to go, at `position` with its screen facing along `yaw`
-/// (see [`crate::level::Marker`]), on `grid`, whose corner is at `origin`: the nearest cell
+/// (see [`crate::level::Marker`]), on `mesh`: the nearest cell
 /// that is walkable, facing whichever way along the grid is nearest.
-pub fn spot_marked(grid: &WalkGrid, origin: Vector3<f32>, position: Vector3<f32>, yaw: f32) -> Option<Spot> {
-    let cell = grid.nearest_walkable(origin, position)?;
+pub fn spot_marked(mesh: &NavMesh, position: Vector3<f32>, yaw: f32) -> Option<Spot> {
+    let cell = mesh.nearest_walkable(position)?;
     let (x, z) = (yaw.cos(), -yaw.sin());
     let facing = if x.abs() >= z.abs() {
         (x.signum() as i64, 0)
@@ -1625,21 +1625,21 @@ pub fn spot_marked(grid: &WalkGrid, origin: Vector3<f32>, position: Vector3<f32>
     Some((cell, facing))
 }
 
-/// Where another computer goes, from `start` in `grid`, picked by `rng`: anywhere it fits against
+/// Where another computer goes, from `start` on `mesh`, picked by `rng`: anywhere it fits against
 /// a wall at least [`AWAY_FROM_START`] cells of walking on, and [`APART`] cells from each of the
 /// cells `taken` already - or, with nowhere that far, as far as there is room for.
 pub fn spot_away(
-    grid: &WalkGrid,
+    mesh: &NavMesh,
     start: (usize, usize),
     taken: &[(usize, usize)],
     rng: &mut Rng,
 ) -> Option<Spot> {
-    let distances = grid.distances_from(start);
+    let distances = mesh.distances_from(start);
     let fits: Vec<Spot> = distances
         .iter()
         .enumerate()
         .filter(|(_, d)| d.is_some_and(|d| d >= AWAY_FROM_START))
-        .filter_map(|(i, _)| Some(((i % grid.width, i / grid.width), facing_at(grid, i)?)))
+        .filter_map(|(i, _)| Some(((i % mesh.width(), i / mesh.width()), facing_at(mesh, i)?)))
         .collect();
     let mut apart = APART;
     loop {
@@ -1677,6 +1677,7 @@ fn under(graph: &Graph, root: Handle<Node>, node: Handle<Node>) -> Matrix4<f32> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::layout::WalkGrid;
 
     #[test]
     fn each_key_says_what_it_did_for_its_beep() {
@@ -1997,8 +1998,9 @@ mod tests {
                 grid.set(x, z, true);
             }
         }
+        let mesh = NavMesh::build(&grid, Vector3::zeros(), |_, _| 0);
         let start = (6, 6);
-        let ((x, z), facing) = spot(&grid, start).expect("somewhere");
+        let ((x, z), facing) = spot(&mesh, start).expect("somewhere");
         assert!(
             !grid.is_walkable(
                 (x as i64 - facing.0) as usize,

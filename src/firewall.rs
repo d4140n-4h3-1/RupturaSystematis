@@ -13,9 +13,9 @@
 use crate::{
     computer::Computer,
     fixtures::EMISSION_STRENGTH,
-    layout::WalkGrid,
     level::Marker,
 };
+use hydroxus_ai::navigation::navmesh::NavMesh;
 use fyrox::{
     asset::manager::ResourceManager,
     core::{
@@ -55,7 +55,7 @@ const BARRIER_RADIUS: f32 = 1.0;
 const BARRIER_TOP: f32 = 3.5;
 const PLINTH_HALF: f32 = 1.22;
 const PLINTH_HEIGHT: f32 = 0.5;
-/// How far round the middle the floor is taken out of the walk grid, so the droids walk round it.
+/// How far round the middle the floor is taken out of the navmesh, so the droids walk round it.
 const TAKEN: f32 = 1.8;
 /// How close to the middle the player has to come to take the flag, off the plinth's side.
 pub const REACH: f32 = 2.0;
@@ -139,14 +139,8 @@ impl Firewalls {
     }
 
     /// Puts a firewall, with its side's flag in it, at each of the level's `markers` for one,
-    /// in place of any from before, and takes the floor round each out of `grid`.
-    pub fn place(
-        &mut self,
-        scene: &mut Scene,
-        markers: &[Marker],
-        grid: &mut WalkGrid,
-        origin: Vector3<f32>,
-    ) {
+    /// in place of any from before, and takes the floor round each out of `mesh`.
+    pub fn place(&mut self, scene: &mut Scene, markers: &[Marker], mesh: &mut NavMesh) {
         self.clear(&mut scene.graph);
         let Some(firewall) = self.firewall.clone().filter(|m| m.is_ok()) else {
             return;
@@ -159,7 +153,7 @@ impl Firewalls {
                 continue;
             };
             let wall = Firewall::spawn(scene, &firewall, &flag, SIDES[side].0, marker);
-            take_floor(grid, origin, marker.position);
+            take_floor(mesh, marker.position);
             Log::info(format!(
                 "Firewall: {}'s flag at {:.1} {:.1} {:.1}",
                 wall.side, wall.position.x, wall.position.y, wall.position.z
@@ -374,20 +368,23 @@ pub(crate) fn glass() -> MaterialResource {
     .build_resource()
 }
 
-/// Takes the floor within [`TAKEN`] of `at` out of `grid`, whose corner is at `origin`.
-fn take_floor(grid: &mut WalkGrid, origin: Vector3<f32>, at: Vector3<f32>) {
-    let reach = Vector3::new(TAKEN, 0.0, TAKEN);
-    let (Some(low), Some(high)) = (grid.cell_at(origin, at - reach), grid.cell_at(origin, at + reach)) else {
-        return;
-    };
-    for z in low.1..=high.1 {
-        for x in low.0..=high.0 {
-            let middle = crate::survey::cell_center(origin, x, z);
-            if Vector3::new(middle.x - at.x, 0.0, middle.z - at.z).norm() < TAKEN {
-                grid.set(x, z, false);
+/// Takes the floor within [`TAKEN`] of `at`, at its height, out of `mesh`.
+fn take_floor(mesh: &mut NavMesh, at: Vector3<f32>) {
+    let cs = mesh.cell_size;
+    let cell = |v: f32, o: f32| ((v - o) / cs).floor().max(0.0) as usize;
+    let (x0, x1) = (cell(at.x - TAKEN, mesh.origin.x), cell(at.x + TAKEN, mesh.origin.x).min(mesh.width().saturating_sub(1)));
+    let (z0, z1) = (cell(at.z - TAKEN, mesh.origin.z), cell(at.z + TAKEN, mesh.origin.z).min(mesh.depth().saturating_sub(1)));
+    let mut taken = Vec::new();
+    for z in z0..=z1 {
+        for x in x0..=x1 {
+            let middle = mesh.center((x, z));
+            if Vector3::new(middle.x - at.x, 0.0, middle.z - at.z).norm() >= TAKEN {
+                continue;
             }
+            taken.extend(mesh.cells_over((x, z)).filter(|&(x, row)| (mesh.origin.y + mesh.floor(x, row) - at.y).abs() <= 1.0));
         }
     }
+    mesh.set_walkable(&taken, false);
 }
 
 /// How brightly a firewall glows, `time` seconds in, from 0 to 1: two quick waves over each

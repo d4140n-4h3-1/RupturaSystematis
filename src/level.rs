@@ -13,13 +13,12 @@ use crate::{
     ferry::Ferries,
     lift::Lifts,
     locker::Lockers,
-    roads::{RoadPlan, Roads},
+    roads::RoadPlan,
     escape::Tunnels,
     precinct::Precincts,
     vault::Vaults,
     fixtures::{self, Glow},
     generate::Maze,
-    layout::WalkGrid,
     survey,
     tiles::{self, Measured, Prefabs},
 };
@@ -97,11 +96,10 @@ pub struct Level {
     pub goal: Option<Vector3<f32>>,
     /// Where the model says things go that the game puts there itself: see [`Marker`].
     pub markers: Vec<Marker>,
-    /// Where the player can walk, and the world position of that grid's corner, once finished.
-    pub grid: Option<(WalkGrid, Vector3<f32>)>,
-    /// The walkable floor as polygons, made from the grid once it is surveyed - roads their own
-    /// area ([`ROAD_AREA`]) - and kept up with it as doors open and shut (see
-    /// [`Level::sync_navmesh`]): what the droids and drones find their way about by.
+    /// Where the player can walk, once finished: the walkable floor as polygons, made from the
+    /// survey's grid - roads their own area ([`ROAD_AREA`]) - and all that is kept of it; kept up
+    /// as doors open and shut (see [`Level::sync_navmesh`]). What the droids and drones find
+    /// their way about by.
     pub navmesh: Option<NavMesh>,
     /// Its leaves, which stop nothing but keep the quadcopters out (see [`Leaves`]), if it has
     /// any.
@@ -122,8 +120,9 @@ pub struct Level {
     pub lockers: Lockers,
     /// The escape tunnels under a city, and the hatches down to them: see [`Tunnels`].
     pub tunnels: Tunnels,
-    /// The roads the droids keep off but to cross, on a map with streets: see [`Roads`].
-    pub roads: Option<Roads>,
+    /// Whether it has roads, for the droids to keep off but to cross: the polygons of the navmesh
+    /// over them are [`ROAD_AREA`].
+    pub has_roads: bool,
 }
 
 /// The area of a navmesh polygon over road (see [`Level::navmesh`]).
@@ -139,14 +138,10 @@ fn area(roads: Option<&crate::roads::Roads>, x: usize, row: usize) -> u8 {
 }
 
 impl Level {
-    /// Has the navmesh catch up with whatever has changed on the grid since it last did - a door
-    /// opened or shut, a firewall put down. Whether anything had.
+    /// Has the navmesh catch up with whatever has been opened or shut on it since it last did - a
+    /// door, a firewall put down. Whether anything had.
     pub fn sync_navmesh(&mut self) -> bool {
-        let (Some((grid, _)), Some(mesh)) = (self.grid.as_mut(), self.navmesh.as_mut()) else {
-            return false;
-        };
-        let roads = self.roads.as_ref();
-        mesh.sync(grid, |x, row| area(roads, x, row))
+        self.navmesh.as_mut().is_some_and(NavMesh::sync)
     }
 
     /// Puts a random maze into the scene, built from tiles. `doubled` is the surface data already
@@ -319,7 +314,6 @@ impl Level {
             glow,
             goal,
             markers,
-            grid: None,
             navmesh: None,
             leaves,
             culling: None,
@@ -330,7 +324,7 @@ impl Level {
             precincts,
             lockers,
             tunnels,
-            roads: None,
+            has_roads: false,
         }
     }
 
@@ -341,18 +335,19 @@ impl Level {
     pub fn finish(&mut self, graph: &mut Graph, ignore: Handle<Node>, open_sky: bool, roads: Option<&RoadPlan>) {
         // A race track has no one on foot to find their way about it: no walk grid.
         let raced = self.markers.iter().any(|marker| marker.name == "race_start");
-        self.grid = if raced { None } else { survey::survey(graph, self.collider, ignore, open_sky) };
-        if let Some((grid, origin)) = self.grid.as_mut() {
-            self.vaults.keep_out(grid, *origin);
-            self.lifts.keep_out(grid, *origin);
-            self.precincts.keep_out(grid, *origin);
-        }
-        self.roads = roads.zip(self.grid.as_ref()).map(|(plan, (grid, origin))| plan.on(grid, *origin));
-        self.navmesh = self.grid.as_mut().map(|(grid, origin)| {
+        // The grid the survey makes, and which of it is road, are only for making the navmesh:
+        // they go once it is made - in a city, hundreds of megabytes.
+        let surveyed = if raced { None } else { survey::survey(graph, self.collider, ignore, open_sky) };
+        self.has_roads = roads.is_some() && surveyed.is_some();
+        self.navmesh = surveyed.map(|(grid, origin)| {
             let started = std::time::Instant::now();
-            let roads = self.roads.as_ref();
-            let mesh = NavMesh::build(grid, *origin, |x, row| area(roads, x, row));
-            grid.track_changes();
+            let roads = roads.map(|plan| plan.on(&grid, origin));
+            let mut mesh = NavMesh::build(&grid, origin, |x, row| area(roads.as_ref(), x, row));
+            // Doors, shafts and barriers shut: made floor first, so that what opens later can.
+            self.vaults.keep_out(&mut mesh);
+            self.lifts.keep_out(&mut mesh);
+            self.precincts.keep_out(&mut mesh);
+            mesh.sync();
             Log::info(format!(
                 "Maze: navmesh of {} polygons and {} portals, {:.1} MB, in {:.2} s",
                 mesh.len(),

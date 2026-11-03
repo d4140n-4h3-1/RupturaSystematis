@@ -11,6 +11,7 @@
 //! crates or walls, which no stairs lead up to.
 
 use crate::layout::WalkGrid;
+use hydroxus_ai::navigation::navmesh::NavMesh;
 use hydroxus_ai::navigation::grid::MAX_CLIMB;
 use std::collections::VecDeque;
 use fyrox::{
@@ -198,31 +199,27 @@ pub fn cell_center(origin: Vector3<f32>, x: usize, z: usize) -> Vector3<f32> {
 
 
 /// The walkable cell nearest to a point, which is where the player can stand to reach it.
-pub fn nearest_walkable(
-    grid: &WalkGrid,
-    origin: Vector3<f32>,
-    point: Vector3<f32>,
-) -> Option<(usize, usize)> {
-    grid.nearest_walkable(origin, point)
+pub fn nearest_walkable(mesh: &NavMesh, point: Vector3<f32>) -> Option<(usize, usize)> {
+    mesh.nearest_walkable(point)
 }
 
 /// The direction from `cell` towards the walkable floor around it, reached by walking.
-pub fn open_direction(grid: &WalkGrid, origin: Vector3<f32>, cell: (usize, usize)) -> Vector3<f32> {
+pub fn open_direction(mesh: &NavMesh, cell: (usize, usize)) -> Vector3<f32> {
     const REACH: u32 = 8;
     // Where cells are on the plan, whichever storey they are on.
-    let center = grid.center(origin, cell);
+    let center = mesh.center(cell);
     let mut sum = Vector3::zeros();
     // Out to REACH steps and no further, as the grid's own walk does it: its distances to every
     // cell of a city took seconds, for the few dozen nearby.
-    if grid.is_walkable(cell.0, cell.1) {
+    if mesh.is_walkable(cell.0, cell.1) {
         let mut seen = std::collections::HashSet::from([cell]);
         let mut ring = vec![cell];
         for _ in 0..REACH {
             let mut next = Vec::new();
             for &at in &ring {
-                for there in grid.steps(at) {
+                for there in mesh.steps(at) {
                     if seen.insert(there) {
-                        sum += grid.center(origin, there) - center;
+                        sum += mesh.center(there) - center;
                         next.push(there);
                     }
                 }
@@ -240,15 +237,15 @@ pub fn open_direction(grid: &WalkGrid, origin: Vector3<f32>, cell: (usize, usize
 /// The walkable map as text, with the start and the exit marked: the quickest way to see what the
 /// survey made of a new model. Every other row is left out, so that the map is about as tall as
 /// it is wide in a terminal.
-pub fn draw_map(grid: &WalkGrid, start: (usize, usize), exit: (usize, usize)) -> String {
+pub fn draw_map(mesh: &NavMesh, start: (usize, usize), exit: (usize, usize)) -> String {
     let mut text = String::new();
-    for z in (0..grid.depth).step_by(2) {
-        for x in 0..grid.width {
+    for z in (0..mesh.depth()).step_by(2) {
+        for x in 0..mesh.width() {
             let c = if (x, z) == start || (x, z + 1) == start {
                 'S'
             } else if (x, z) == exit || (x, z + 1) == exit {
                 'E'
-            } else if grid.is_walkable(x, z) {
+            } else if mesh.is_walkable(x, z) {
                 '.'
             } else {
                 '#'
@@ -434,7 +431,7 @@ mod tests {
         assert!((grid.center(origin, (8, 5 + depth)).z - grid.center(origin, (8, 5)).z).abs() < 1.0e-5);
         // And the way open from the corridor's west end is along it, east, not off towards where
         // the second storey's rows would be if they were more of the ground.
-        let open = open_direction(&grid, origin, (1, 5));
+        let open = open_direction(&NavMesh::build(&grid, origin, |_, _| 0), (1, 5));
         assert!(open.x > 0.0 && open.z.abs() < 1.0e-3 * open.x.abs().max(1.0), "{open:?}");
     }
 

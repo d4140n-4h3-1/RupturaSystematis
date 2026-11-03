@@ -11,7 +11,8 @@
 //! The survey of the level counts only the level's own collider, so the doorway is taken out of
 //! the droids' grid by hand, open or shut: nobody but the player goes in.
 
-use crate::{layout::WalkGrid, level::Marker};
+use crate::level::Marker;
+use hydroxus_ai::navigation::navmesh::NavMesh;
 use fyrox::{
     core::{
         algebra::{UnitQuaternion, Vector3},
@@ -155,23 +156,24 @@ impl Vaults {
         (Self { vaults }, bodies)
     }
 
-    /// Takes each doorway out of `grid`, whose corner is at `origin`.
-    pub fn keep_out(&self, grid: &mut WalkGrid, origin: Vector3<f32>) {
+    /// Takes each doorway out of `mesh`.
+    pub fn keep_out(&self, mesh: &mut NavMesh) {
+        let cs = mesh.cell_size;
+        let mut taken = Vec::new();
         for vault in &self.vaults {
             let (min, max) = vault.bounds;
-            let step = grid.cell_size * 0.5;
-            let mut x = min.x - grid.cell_size;
-            while x <= max.x + grid.cell_size {
-                let mut z = min.z - grid.cell_size;
-                while z <= max.z + grid.cell_size {
-                    if let Some((cx, cz)) = grid.cell_at(origin, Vector3::new(x, min.y + 0.1, z)) {
-                        grid.set(cx, cz, false);
-                    }
+            let step = cs * 0.5;
+            let mut x = min.x - cs;
+            while x <= max.x + cs {
+                let mut z = min.z - cs;
+                while z <= max.z + cs {
+                    taken.extend(mesh.cell_at(Vector3::new(x, min.y + 0.1, z)));
                     z += step;
                 }
                 x += step;
             }
         }
+        mesh.set_walkable(&taken, false);
     }
 
     /// Shuts every door again, with what is in each strongroom back in it, for a new round.

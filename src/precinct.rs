@@ -13,10 +13,11 @@
 //! escape tunnels (see [`crate::escape`]), at the precinct's hatch there.
 //!
 //! The firewalls and the panel are taken out of the level's static collider, as a vault's door is
-//! (see [`crate::vault`]), each on a body of its own; and out of the droids' grid, so that none of
+//! (see [`crate::vault`]), each on a body of its own; and out of the droids' navmesh, so that none of
 //! them walks into a cell, or out of the tunnel - but for the gate while it is open.
 
-use crate::{firewall, layout::WalkGrid, level::Marker};
+use crate::{firewall, level::Marker};
+use hydroxus_ai::navigation::navmesh::NavMesh;
 use fyrox::{
     core::{algebra::Vector3, log::Log, pool::Handle},
     graph::SceneGraph,
@@ -35,7 +36,7 @@ use fyrox::{
 const WALL: &str = "cell_wall_";
 const PANEL: &str = "tunnel_panel_";
 const GRATE: &str = "cell_grate_";
-/// How far round a tunnel's way out the floor is taken out of the grid, in meters.
+/// How far round a tunnel's way out the floor is taken out of the navmesh, in meters.
 const EXIT_TAKEN: f32 = 1.3;
 /// How far a precinct reaches round its markers, in meters, for whether someone is in it.
 const AROUND: f32 = 3.0;
@@ -51,7 +52,7 @@ pub struct Barrier {
     /// Whether it is a firewall, which goes when opened, or the panel, which slides aside.
     firewall: bool,
     open: bool,
-    /// The cells of the grid it took, to give back when it opens.
+    /// The cells of the navmesh it took, to give back when it opens.
     taken: Vec<(usize, usize)>,
 }
 
@@ -167,9 +168,9 @@ impl Barrier {
     }
 
     /// Opens it or shuts it: a firewall goes or comes back, and the panel slides aside along the
-    /// wall it is in, by its own width, or back; and gives the grid back what it took, or takes it
-    /// again.
-    fn set_open(&mut self, graph: &mut Graph, open: bool, grid: Option<&mut WalkGrid>) {
+    /// wall it is in, by its own width, or back; and gives the navmesh back what it took, or takes
+    /// it again.
+    fn set_open(&mut self, graph: &mut Graph, open: bool, mesh: Option<&mut NavMesh>) {
         self.open = open;
         let (min, max) = self.bounds;
         let centre = (min + max) * 0.5;
@@ -188,31 +189,30 @@ impl Barrier {
                 graph[mesh].set_visibility(!open);
             }
         }
-        if let Some(grid) = grid {
-            for &(x, z) in &self.taken {
-                grid.set(x, z, open);
-            }
+        if let Some(mesh) = mesh {
+            mesh.set_walkable(&self.taken, open);
         }
     }
 
-    /// Takes the floor under it, and a cell round, out of `grid`, whose corner is at `origin`.
-    fn keep_out(&mut self, grid: &mut WalkGrid, origin: Vector3<f32>) {
+    /// Takes the floor under it, and a cell round, out of `mesh`.
+    fn keep_out(&mut self, mesh: &mut NavMesh) {
         let (min, max) = self.bounds;
-        let step = grid.cell_size * 0.5;
-        let mut x = min.x - grid.cell_size;
-        while x <= max.x + grid.cell_size {
-            let mut z = min.z - grid.cell_size;
-            while z <= max.z + grid.cell_size {
-                if let Some((cx, cz)) = grid.cell_at(origin, Vector3::new(x, min.y + 0.1, z)) {
-                    if grid.is_walkable(cx, cz) && !self.taken.contains(&(cx, cz)) {
-                        grid.set(cx, cz, false);
-                        self.taken.push((cx, cz));
+        let cs = mesh.cell_size;
+        let step = cs * 0.5;
+        let mut x = min.x - cs;
+        while x <= max.x + cs {
+            let mut z = min.z - cs;
+            while z <= max.z + cs {
+                if let Some(cell) = mesh.cell_at(Vector3::new(x, min.y + 0.1, z)) {
+                    if !self.taken.contains(&cell) {
+                        self.taken.push(cell);
                     }
                 }
                 z += step;
             }
             x += step;
         }
+        mesh.set_walkable(&self.taken, false);
     }
 }
 
@@ -302,62 +302,63 @@ impl Precincts {
         (Self { precincts, glass: Some(glass) }, bodies)
     }
 
-    /// Takes the firewalls, the panels and the tunnels' ways out out of `grid`, whose corner is
-    /// at `origin`: no droid walks into a cell, through the gate while it is shut, or into a
-    /// tunnel.
-    pub fn keep_out(&mut self, grid: &mut WalkGrid, origin: Vector3<f32>) {
+    /// Takes the firewalls, the panels and the tunnels' ways out out of `mesh`: no droid walks
+    /// into a cell, through the gate while it is shut, or into a tunnel.
+    pub fn keep_out(&mut self, mesh: &mut NavMesh) {
         for precinct in &mut self.precincts {
             for cell in &mut precinct.cells {
-                cell.wall.keep_out(grid, origin);
+                cell.wall.keep_out(mesh);
             }
-            precinct.gate.keep_out(grid, origin);
+            precinct.gate.keep_out(mesh);
             if let Some(tunnel) = precinct.tunnel.as_mut() {
-                tunnel.panel.keep_out(grid, origin);
-                let reach = Vector3::new(EXIT_TAKEN, 0.0, EXIT_TAKEN);
-                let (Some(low), Some(high)) = (grid.cell_at(origin, tunnel.exit - reach), grid.cell_at(origin, tunnel.exit + reach))
-                else {
-                    continue;
-                };
-                for z in low.1..=high.1 {
-                    for x in low.0..=high.0 {
-                        let middle = crate::survey::cell_center(origin, x, z);
-                        if (middle - tunnel.exit).xz().norm() < EXIT_TAKEN {
-                            grid.set(x, z, false);
+                tunnel.panel.keep_out(mesh);
+                // The floor round the way out, at its height.
+                let cs = mesh.cell_size;
+                let cell = |v: f32, o: f32| ((v - o) / cs).floor().max(0.0) as usize;
+                let exit = tunnel.exit;
+                let (x0, x1) = (cell(exit.x - EXIT_TAKEN, mesh.origin.x), cell(exit.x + EXIT_TAKEN, mesh.origin.x).min(mesh.width().saturating_sub(1)));
+                let (z0, z1) = (cell(exit.z - EXIT_TAKEN, mesh.origin.z), cell(exit.z + EXIT_TAKEN, mesh.origin.z).min(mesh.depth().saturating_sub(1)));
+                let mut taken = Vec::new();
+                for z in z0..=z1 {
+                    for x in x0..=x1 {
+                        if (mesh.center((x, z)) - exit).xz().norm() < EXIT_TAKEN {
+                            taken.extend(mesh.cells_over((x, z)).filter(|&(x, row)| (mesh.origin.y + mesh.floor(x, row) - exit.y).abs() <= 1.0));
                         }
                     }
                 }
+                mesh.set_walkable(&taken, false);
             }
         }
     }
 
     /// Shuts everything again, the panels back in place, for a new round.
-    pub fn reset(&mut self, graph: &mut Graph, mut grid: Option<&mut WalkGrid>) {
+    pub fn reset(&mut self, graph: &mut Graph, mut mesh: Option<&mut NavMesh>) {
         for precinct in &mut self.precincts {
             for cell in &mut precinct.cells {
-                cell.wall.set_open(graph, false, grid.as_deref_mut());
+                cell.wall.set_open(graph, false, mesh.as_deref_mut());
                 if let Some(grate) = cell.grate.as_mut() {
                     grate.set_open(graph, false);
                 }
             }
-            precinct.gate.set_open(graph, false, grid.as_deref_mut());
+            precinct.gate.set_open(graph, false, mesh.as_deref_mut());
             if let Some(tunnel) = precinct.tunnel.as_mut() {
-                tunnel.panel.set_open(graph, false, grid.as_deref_mut());
+                tunnel.panel.set_open(graph, false, mesh.as_deref_mut());
                 tunnel.pried = 0.0;
             }
         }
     }
 
     /// Opens the `c`th cell of the `p`th precinct, or shuts it.
-    pub fn set_cell(&mut self, graph: &mut Graph, (p, c): (usize, usize), open: bool, grid: Option<&mut WalkGrid>) {
+    pub fn set_cell(&mut self, graph: &mut Graph, (p, c): (usize, usize), open: bool, mesh: Option<&mut NavMesh>) {
         if let Some(cell) = self.precincts.get_mut(p).and_then(|p| p.cells.get_mut(c)) {
-            cell.wall.set_open(graph, open, grid);
+            cell.wall.set_open(graph, open, mesh);
         }
     }
 
     /// Opens the `p`th precinct's gate, or shuts it.
-    pub fn set_gate(&mut self, graph: &mut Graph, p: usize, open: bool, grid: Option<&mut WalkGrid>) {
+    pub fn set_gate(&mut self, graph: &mut Graph, p: usize, open: bool, mesh: Option<&mut NavMesh>) {
         if let Some(precinct) = self.precincts.get_mut(p) {
-            precinct.gate.set_open(graph, open, grid);
+            precinct.gate.set_open(graph, open, mesh);
         }
     }
 

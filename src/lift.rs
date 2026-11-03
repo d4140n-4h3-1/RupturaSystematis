@@ -13,7 +13,7 @@
 //! The droids keep off the bottom of the shafts, where the car comes down; and the floors up above
 //! are no part of their grid, which only stairs lead up to.
 
-use crate::layout::WalkGrid;
+use hydroxus_ai::navigation::navmesh::NavMesh;
 use fyrox::{
     core::{algebra::Vector3, log::Log, pool::Handle},
     graph::SceneGraph,
@@ -235,24 +235,24 @@ impl Lifts {
     }
 
     /// Takes the bottom of every shaft, where the cars come down, and a cell round it, out of
-    /// `grid`, whose corner is at `origin`.
-    pub fn keep_out(&self, grid: &mut WalkGrid, origin: Vector3<f32>) {
+    /// `mesh`.
+    pub fn keep_out(&self, mesh: &mut NavMesh) {
         const REACH: f32 = 1.9;
+        let mut taken = Vec::new();
         for lift in &self.lifts {
             let bottom = lift.timetable.0[0];
-            let step = grid.cell_size * 0.5;
+            let step = mesh.cell_size * 0.5;
             let mut x = -REACH;
             while x <= REACH {
                 let mut z = -REACH;
                 while z <= REACH {
-                    if let Some((cx, cz)) = grid.cell_at(origin, bottom + Vector3::new(x, 0.1, z)) {
-                        grid.set(cx, cz, false);
-                    }
+                    taken.extend(mesh.cell_at(bottom + Vector3::new(x, 0.1, z)));
                     z += step;
                 }
                 x += step;
             }
         }
+        mesh.set_walkable(&taken, false);
     }
 
     /// Puts every car back where its round starts, standing still, and every gate as it stands

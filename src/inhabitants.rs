@@ -97,7 +97,7 @@ pub use hydroxus_ai::alert::{Alert, CAUTION, EVASION};
 pub use hydroxus_ai::tactics::threat::Threat;
 pub(crate) use hydroxus_ai::navigation::route::between;
 use hydroxus_ai::navigation::walk::route_to;
-use crate::{ferry::Crossing, roads::Roads, train::Doors};
+use crate::{ferry::Crossing, train::Doors};
 use hydroxus_ai::{
     flat, forward, heading_of,
     navigation::{
@@ -1067,7 +1067,7 @@ impl Inhabitants {
         (player, facing): (Vector3<f32>, f32),
         (people, grouping): (Option<usize>, impl Fn(usize) -> Grouping),
         crowd: bool,
-        roads: Option<&Roads>,
+        roads: bool,
         rng: &mut Rng,
     ) {
         self.clear(&mut scene.graph);
@@ -1083,7 +1083,7 @@ impl Inhabitants {
             .and_then(|n| n.trim().parse().ok())
             .or(people)
             .unwrap_or(COUNT);
-        let on_road = |n: Poly| roads.is_some() && mesh.polygon(n).area == crate::level::ROAD_AREA;
+        let on_road = |n: Poly| roads && mesh.polygon(n).area == crate::level::ROAD_AREA;
         if mesh.nearest(player).is_none() {
             return;
         }
@@ -2238,7 +2238,7 @@ impl Inhabitants {
         graph: &mut Graph,
         mesh: &NavMesh,
         crossings: &[Crossing],
-        roads: Option<&Roads>,
+        roads: bool,
         player: Vector3<f32>,
         rivals: &[Rival],
         rng: &mut Rng,
@@ -2256,7 +2256,7 @@ impl Inhabitants {
         let floor_at = |spot: Vector3<f32>| walk::floor_at(mesh, spot, ON_FLOOR);
         // The roads, to keep off but to cross, if there are any.
         let on_road = |n: Poly| mesh.polygon(n).area == crate::level::ROAD_AREA;
-        let road: Option<&dyn Fn(Poly) -> bool> = roads.map(|_| &on_road as &dyn Fn(Poly) -> bool);
+        let road: Option<&dyn Fn(Poly) -> bool> = roads.then_some(&on_road as &dyn Fn(Poly) -> bool);
         // A way to `to`, if there is one at all: none looked for where there is none to be had.
         let reachable = &self.reachable;
         let go_to = |feet: Vector3<f32>, to: Vector3<f32>| match reachable.to_on_mesh(mesh, to) {
@@ -2830,7 +2830,7 @@ impl Inhabitants {
                 // off the road there.
                 let ahead = forward(leader.heading) * leader.speed * LEAD;
                 let keeps_off = |at: Vector3<f32>| {
-                    floor_at(at) && !(roads.is_some() && mesh.poly_at(at).is_some_and(on_road))
+                    floor_at(at) && !(roads && mesh.poly_at(at).is_some_and(on_road))
                 };
                 let behind = leader.feet + ahead - forward(leader.heading) * (BESIDE.0 + 0.8 * groups.slot(me) as f32);
                 let slot = [about_leader(leader.feet + ahead, leader.heading, groups.slot(me)), behind]

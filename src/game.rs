@@ -1304,11 +1304,12 @@ impl MazeGame {
         }
         // The banks' vaults shut, and full again.
         self.level.vaults.reset(&mut ctx.scenes[self.scene].graph);
-        // The firewalls first, closed again, so that the floor round them is out of the grid
+        // The firewalls first, closed again, so that the floor round them is out of the navmesh
         // before anything is put on it.
-        if let Some((grid, origin)) = self.level.grid.as_mut() {
+        if let Some(mesh) = self.level.navmesh.as_mut() {
             let scene = &mut ctx.scenes[self.scene];
-            self.firewalls.place(scene, &self.level.markers, grid, *origin);
+            self.firewalls.place(scene, &self.level.markers, mesh);
+            mesh.sync();
         }
         // A map with both flags is played as capture the flag.
         let flag = |side: Side| {
@@ -1373,23 +1374,21 @@ impl MazeGame {
             self.start_race(ctx);
             return;
         }
-        let Some((grid, origin)) = self.level.grid.as_ref() else {
+        let Some(mesh) = self.level.navmesh.as_ref() else {
             return;
         };
         let Some(rng) = self.rng.as_mut() else {
             return;
         };
         let round = match (story, self.level.goal) {
-            (Some((from, to)), _) => {
-                survey::nearest_walkable(grid, *origin, from).zip(survey::nearest_walkable(grid, *origin, to))
-            }
+            (Some((from, to)), _) => survey::nearest_walkable(mesh, from).zip(survey::nearest_walkable(mesh, to)),
             // Something in the model is the thing to find, so the walk to it should be as long as
             // the maze allows.
             (None, Some(goal)) => {
-                let exit = survey::nearest_walkable(grid, *origin, goal);
-                exit.and_then(|exit| grid.farthest_from(exit).map(|(start, _)| (start, exit)))
+                let exit = survey::nearest_walkable(mesh, goal);
+                exit.and_then(|exit| mesh.farthest_from(exit).map(|(start, _)| (start, exit)))
             }
-            (None, None) => layout::plan_round(grid, |n| rng.below(n)),
+            (None, None) => layout::plan_round(mesh, |n| rng.below(n)),
         };
         let Some((start, exit)) = round else {
             Log::err("Maze: found no walkable ground to play on");
@@ -1399,8 +1398,9 @@ impl MazeGame {
         };
         if platform::var("MAZE_DEBUG").is_some() {
             Log::info(format!(
-                "Maze grid (x right, z down, origin {origin:?}):\n{}",
-                survey::draw_map(grid, start, exit)
+                "Maze grid (x right, z down, origin {:?}):\n{}",
+                mesh.origin,
+                survey::draw_map(mesh, start, exit)
             ));
         }
         self.start_cell = Some(start);
@@ -1410,8 +1410,8 @@ impl MazeGame {
         self.drone_calls.clear();
         self.hearts_placed = false;
         // On their floors: up on a balcony, say, rather than in the ground under it.
-        let start_position = grid.on_floor(*origin, start);
-        let exit_position = grid.on_floor(*origin, exit);
+        let start_position = mesh.on_floor(start);
+        let exit_position = mesh.on_floor(exit);
         if platform::var("MAZE_DEBUG").is_some() {
             Log::info(format!("Maze: starts at {start_position:?}, ends at {exit_position:?}"));
         }
@@ -1431,7 +1431,7 @@ impl MazeGame {
         }
         // Face into the maze: towards the open floor nearby. Starts are at the ends of the
         // longest route, often at an opening in the outer wall, and facing the sky is no start.
-        let into_maze = survey::open_direction(grid, *origin, start);
+        let into_maze = survey::open_direction(mesh, start);
         // Everyone is put down afresh for the new round, away from where the player starts.
         self.inhabitants.clear(&mut scene.graph);
         self.talk = None;
@@ -1481,8 +1481,8 @@ impl MazeGame {
         self.level.tunnels.reset(&mut ctx.scenes[self.scene].graph);
         self.player.set_confiscated(false);
         self.stop_picking(ctx);
-        let grid = self.level.grid.as_mut().map(|(grid, _)| grid);
-        self.level.precincts.reset(&mut ctx.scenes[self.scene].graph, grid);
+        let mesh = self.level.navmesh.as_mut();
+        self.level.precincts.reset(&mut ctx.scenes[self.scene].graph, mesh);
         self.level.lockers.reset(&mut ctx.scenes[self.scene].graph);
         self.phase = Phase::Playing;
         self.set_banner(ctx, "");
@@ -1684,12 +1684,13 @@ impl MazeGame {
             self.ring_posts.hide(graph);
             return;
         }
-        let Some((grid, origin)) = self.level.grid.as_ref() else {
+        let Some(mesh) = self.level.navmesh.as_ref() else {
             return;
         };
         // The map's middle, and how far its corners are from it.
-        let size = Vector3::new(grid.width as f32, 0.0, grid.depth as f32) * grid.cell_size;
-        let middle = origin + size * 0.5;
+        let (low, high) = mesh.bounds();
+        let size = high - low;
+        let middle = low + size * 0.5;
         let reach = 0.5 * size.norm();
         // Each start facing the map's middle.
         let starts: Vec<(Vector3<f32>, f32)> = starts
@@ -2060,7 +2061,7 @@ impl MazeGame {
     /// A new maze, or with a fixed model a new round in it. Only once there is a level to start
     /// again from.
     fn restart(&mut self, ctx: &mut PluginContext) {
-        if self.level.grid.is_none() && Track::from_markers(&self.level.markers).is_none() {
+        if self.level.navmesh.is_none() && Track::from_markers(&self.level.markers).is_none() {
             return;
         }
         // The chips out of the scene, to come back as the player comes near them again.
@@ -2264,7 +2265,7 @@ impl MazeGame {
                             (player, self.player.yaw()),
                             (people, grouping),
                             script.is_some_and(|script| script.crowd),
-                            self.level.roads.as_ref(),
+                            self.level.has_roads,
                             rng,
                         )
                     }
@@ -2391,7 +2392,7 @@ impl MazeGame {
             &mut scene.graph,
             mesh,
             &crossings,
-            self.level.roads.as_ref(),
+            self.level.has_roads,
             player,
             &rivals,
             rng,
@@ -2801,8 +2802,8 @@ impl MazeGame {
         let (at, yaw) = plan.start;
         let facing = yaw.cos().atan2(-yaw.sin());
         self.player.teleport(&mut scene.graph, at + Vector3::new(0.0, 1.2, 0.0), facing);
-        if let Some((grid, origin)) = self.level.grid.as_ref() {
-            self.start_cell = grid.walkable_cell(*origin, at).or(self.start_cell);
+        if let Some(mesh) = self.level.navmesh.as_ref() {
+            self.start_cell = mesh.walkable_cell(at).or(self.start_cell);
         }
         scene.graph[self.exit].local_transform_mut().set_position(plan.vault + Vector3::new(0.0, 1.2, 0.0));
         if let Some(&ball) = scene.graph[self.exit].children().first() {
@@ -2871,7 +2872,7 @@ impl MazeGame {
         let Some(plan) = self.heist.as_ref().map(|heist| heist.plan.clone()) else {
             return false;
         };
-        let Some((grid, origin)) = self.level.grid.as_mut() else {
+        let Some(mesh) = self.level.navmesh.as_mut() else {
             return true;
         };
         let graph = &mut ctx.scenes[self.scene].graph;
@@ -2883,14 +2884,14 @@ impl MazeGame {
             // terminals.
             let marked = match plan.doors.get(n) {
                 Some(&(door, _, marked)) => match marked {
-                    Some((at, yaw)) => computer::spot_marked(grid, *origin, at, yaw),
-                    None => grid.nearest_walkable(*origin, door).and_then(|cell| computer::spot(grid, cell)),
+                    Some((at, yaw)) => computer::spot_marked(mesh, at, yaw),
+                    None => mesh.nearest_walkable(door).and_then(|cell| computer::spot(mesh, cell)),
                 },
-                None => plan.terminals.get(n - doors).and_then(|&(at, yaw)| computer::spot_marked(grid, *origin, at, yaw)),
+                None => plan.terminals.get(n - doors).and_then(|&(at, yaw)| computer::spot_marked(mesh, at, yaw)),
             };
             match marked {
                 Some(spot) => {
-                    computer.place(graph, grid, *origin, spot, &colliders);
+                    computer.place(graph, mesh, spot, &colliders);
                     match self.doors.doors.get_mut(n) {
                         Some(door) => door.computer = Some(n),
                         None => computer.set_credits(heist::terminal_credits(|k| rng.below(k))),
@@ -3537,7 +3538,7 @@ impl MazeGame {
         if paused == self.menu.is_open() {
             return;
         }
-        let can_restart = self.level.grid.is_some();
+        let can_restart = self.level.navmesh.is_some();
         self.menu
             .set_open(ctx.user_interfaces.first(), paused, can_restart);
         // The round's clock and the player stop in `update`; this stops everything else that
@@ -4141,7 +4142,7 @@ impl MazeGame {
         let c = self.rng().below(cells);
         let graph = &mut ctx.scenes[self.scene].graph;
         // Every firewall in it shut again behind them.
-        let mut grid = self.level.grid.as_mut().map(|(grid, _)| grid);
+        let mut grid = self.level.navmesh.as_mut();
         for k in 0..cells {
             self.level.precincts.set_cell(graph, (p, k), false, grid.as_deref_mut());
         }
@@ -4205,7 +4206,7 @@ impl MazeGame {
             return;
         };
         let graph = &mut ctx.scenes[self.scene].graph;
-        let mut grid = self.level.grid.as_mut().map(|(grid, _)| grid);
+        let mut grid = self.level.navmesh.as_mut();
         self.level.precincts.set_cell(graph, (custody.precinct, custody.cell), true, grid.as_deref_mut());
         self.level.precincts.set_gate(graph, custody.precinct, true, grid);
         self.wanted = 0;
@@ -4297,7 +4298,7 @@ impl MazeGame {
         } else if near_wall || near_gate {
             if custody.card {
                 let graph = &mut ctx.scenes[self.scene].graph;
-                let grid = self.level.grid.as_mut().map(|(grid, _)| grid);
+                let grid = self.level.navmesh.as_mut();
                 if near_wall {
                     self.level.precincts.set_cell(graph, (p, custody.cell), true, grid);
                 } else {
@@ -4466,7 +4467,7 @@ impl MazeGame {
         if let Some(gate) = opened {
             self.picking = None;
             let graph = &mut ctx.scenes[self.scene].graph;
-            let grid = self.level.grid.as_mut().map(|(grid, _)| grid);
+            let grid = self.level.navmesh.as_mut();
             if gate {
                 self.level.precincts.set_gate(graph, p, true, grid);
                 self.hud.show_note("The gate's firewall drops".to_string());
@@ -4618,9 +4619,7 @@ impl MazeGame {
         }
         if !self.computer_placed && self.phase == Phase::Playing {
             self.rng();
-            if let (Some((grid, origin)), Some(start), Some(rng)) =
-                (self.level.grid.as_mut(), self.start_cell, self.rng.as_mut())
-            {
+            if let (Some(mesh), Some(start), Some(rng)) = (self.level.navmesh.as_mut(), self.start_cell, self.rng.as_mut()) {
                 let graph = &mut ctx.scenes[self.scene].graph;
                 let colliders: Vec<_> = self.computers.iter().map(Computer::collider).collect();
                 let mut taken = Vec::new();
@@ -4637,10 +4636,10 @@ impl MazeGame {
                 trade.sort_by_key(|t| vault::opened_by(t.3).is_none());
                 if !trade.is_empty() {
                     for (n, computer) in self.computers.iter_mut().enumerate() {
-                        let spot = trade.get(n).and_then(|&(_, at, yaw, _)| computer::spot_marked(grid, *origin, at, yaw));
+                        let spot = trade.get(n).and_then(|&(_, at, yaw, _)| computer::spot_marked(mesh, at, yaw));
                         match spot {
                             Some(spot) => {
-                                computer.place(graph, grid, *origin, spot, &colliders);
+                                computer.place(graph, mesh, spot, &colliders);
                                 computer.set_kind(trade[n].0);
                                 placed.push(n);
                                 // A bank's own, beside its vault's door, opens the vault.
@@ -4683,26 +4682,24 @@ impl MazeGame {
                     let order = std::iter::once(0).chain(first_tied..count).chain(1..first_tied);
                     for n in order {
                         let spot = match n {
-                            0 => computer::spot(grid, start),
+                            0 => computer::spot(mesh, start),
                             n if n >= first_tied => {
                                 let wall = self.firewalls.iter().nth(n - first_tied);
                                 wall.and_then(|wall| {
                                     let name = format!("computer_{}", wall.side);
                                     let marker = self.level.markers.iter().find(|m| m.name == name);
                                     match marker {
-                                        Some(marker) => computer::spot_marked(grid, *origin, marker.position, marker.yaw),
-                                        None => grid
-                                            .nearest_walkable(*origin, wall.position)
-                                            .and_then(|cell| computer::spot(grid, cell)),
+                                        Some(marker) => computer::spot_marked(mesh, marker.position, marker.yaw),
+                                        None => mesh.nearest_walkable(wall.position).and_then(|cell| computer::spot(mesh, cell)),
                                     }
                                 })
                             }
-                            _ => computer::spot_away(grid, start, &taken, rng),
+                            _ => computer::spot_away(mesh, start, &taken, rng),
                         };
                         let computer = &mut self.computers[n];
                         match spot {
                             Some(spot) => {
-                                computer.place(graph, grid, *origin, spot, &colliders);
+                                computer.place(graph, mesh, spot, &colliders);
                                 taken.push(spot.0);
                                 placed.push(n);
                                 if n >= first_tied {
@@ -4964,7 +4961,7 @@ impl MazeGame {
                 }
             }
         }
-        if self.drones.is_empty() || self.level.grid.is_none() {
+        if self.drones.is_empty() || self.level.navmesh.is_none() {
             return;
         }
         // The first patrols, the rest wait out of sight: put down once a round.
@@ -5130,7 +5127,7 @@ impl MazeGame {
     /// Puts the trains on the line once their model has loaded, the level being ready: after the
     /// survey, which they are no part of.
     fn set_up_train(&mut self, ctx: &mut PluginContext) {
-        if !self.trains.is_empty() || self.level.grid.is_none() {
+        if !self.trains.is_empty() || self.level.navmesh.is_none() {
             return;
         }
         let Some(model) = self.train_model.take_if(|model| !model.is_loading()) else {
@@ -5271,11 +5268,10 @@ impl MazeGame {
         let cells_ready = [&cells, &stamina].iter().all(|m| m.as_ref().is_none_or(|m| m.is_ok()));
         if !self.hearts_placed && self.phase == Phase::Playing && cells_ready {
             self.rng();
-            if let (Some((grid, origin)), Some(mesh), Some(start), Some(rng)) =
-                (self.level.grid.as_ref(), self.level.navmesh.as_ref(), self.start_cell, self.rng.as_mut())
-            {
-                let floor = grid.walkable_cells().count();
-                let start = grid.on_floor(*origin, start);
+            if let (Some(mesh), Some(start), Some(rng)) = (self.level.navmesh.as_ref(), self.start_cell, self.rng.as_mut()) {
+                // How many cells of floor there are, for how many hearts.
+                let floor = (mesh.floor_area() / (mesh.cell_size * mesh.cell_size)).round() as usize;
+                let start = mesh.on_floor(start);
                 // Hearts and cells all apart from one another: the first, near the start, a heart.
                 let hearts = hearts::count(floor);
                 let shields = if cells.is_some() { hearts::shield_count(floor) } else { 0 };
