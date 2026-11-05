@@ -5,16 +5,21 @@
 //! usual, blue, yellow, orange or red (see [`Mood`]). What is said, in System Latin, and what it
 //! means, in English, can each be switched off in the options (see [`Subtitles`]); the English
 //! alone is as big as the System Latin.
+//!
+//! The panel is never more than [`MOST_OF_SCREEN`] of the window high, so that it never covers
+//! the face of whoever is talking: what does not fit scrolls, with the mouse wheel or the
+//! scrollbar, and the reply picked is always scrolled into view.
 
 use super::{Mood, View};
 use fyrox::{
-    core::{color::Color, pool::Handle},
+    core::{algebra::Vector2, color::Color, pool::Handle},
     gui::{
         border::{Border, BorderBuilder},
         brush::Brush,
         formatted_text::WrapMode,
         message::{MouseButton, UiMessage},
         screen::{Screen, ScreenBuilder},
+        scroll_viewer::{ScrollViewer, ScrollViewerBuilder, ScrollViewerMessage},
         stack_panel::StackPanelBuilder,
         text::{Text, TextBuilder, TextMessage},
         widget::{WidgetBuilder, WidgetMessage},
@@ -26,6 +31,13 @@ use fyrox::{
 pub const MOST_REPLIES: usize = 8;
 /// How wide the panel is, in pixels.
 const WIDTH: f32 = 860.0;
+/// How much of the window's height the panel takes at most, and how far up from its bottom it
+/// sits, in pixels: low, and no higher than the chin of whoever is talking.
+pub const MOST_OF_SCREEN: f32 = 0.34;
+const OFF_BOTTOM: f32 = 16.0;
+/// The panel's edge and the margin inside it, in pixels, on either side.
+const EDGE: f32 = 2.0;
+const INSIDE: f32 = 18.0;
 /// How big what is said is, in System Latin, and what it means, in English, under it. With only
 /// the English on, it is as big as the System Latin would be.
 const SAYS_SIZE: f32 = 27.0;
@@ -128,6 +140,8 @@ pub struct DialogueScreen {
     screen: Handle<Screen>,
     /// The panel's edge and backdrop, and the line between what is said and the replies.
     frame: Handle<Border>,
+    /// What the panel holds, scrolling when it is taller than the panel may be.
+    scroll: Handle<ScrollViewer>,
     rule: Handle<Border>,
     name: Handle<Text>,
     says: Handle<Text>,
@@ -155,6 +169,7 @@ impl Default for DialogueScreen {
         Self {
             screen: Handle::NONE,
             frame: Handle::NONE,
+            scroll: Handle::NONE,
             rule: Handle::NONE,
             name: Handle::NONE,
             says: Handle::NONE,
@@ -201,7 +216,7 @@ impl DialogueScreen {
         .with_stroke_thickness(Thickness::uniform(0.0).into())
         .build(ctx);
         let mut panel = WidgetBuilder::new()
-            .with_margin(Thickness::uniform(18.0))
+            .with_margin(Thickness::uniform(INSIDE))
             .with_child(name)
             .with_child(says)
             .with_child(means)
@@ -233,17 +248,22 @@ impl DialogueScreen {
             replies.push((reply, label));
         }
         let panel = StackPanelBuilder::new(panel).build(ctx);
+        // Up and down only: across, the words wrap.
+        let scroll = ScrollViewerBuilder::new(WidgetBuilder::new())
+            .with_content(panel)
+            .with_horizontal_scroll_allowed(false)
+            .build(ctx);
         let frame = BorderBuilder::new(
             WidgetBuilder::new()
                 .with_width(WIDTH)
                 .with_horizontal_alignment(HorizontalAlignment::Center)
                 .with_vertical_alignment(VerticalAlignment::Bottom)
-                .with_margin(Thickness::bottom(40.0))
+                .with_margin(Thickness::bottom(OFF_BOTTOM))
                 .with_background(Brush::Solid(GREEN.backdrop).into())
                 .with_foreground(Brush::Solid(GREEN.dim).into())
-                .with_child(panel),
+                .with_child(scroll),
         )
-        .with_stroke_thickness(Thickness::uniform(2.0).into())
+        .with_stroke_thickness(Thickness::uniform(EDGE).into())
         .with_corner_radius(0.0.into())
         .build(ctx);
         // The UI's root only gives its children the size they ask for; a screen is the size of
@@ -271,6 +291,7 @@ impl DialogueScreen {
         Self {
             screen,
             frame,
+            scroll,
             rule,
             name,
             says,
@@ -302,7 +323,8 @@ impl DialogueScreen {
         ui.send(self.prompt, TextMessage::Text(text));
     }
 
-    /// Shows `view`, from `who`, in the colours of its mood, with the first reply picked.
+    /// Shows `view`, from `who`, in the colours of its mood, with the first reply picked: from the
+    /// top, what is said first, in a panel no higher than [`MOST_OF_SCREEN`] of the window.
     pub fn show(&mut self, ui: &UserInterface, who: &str, view: &View) {
         self.colour(ui, palette(view.mood));
         ui.send(self.name, TextMessage::Text(who.to_string()));
@@ -325,6 +347,9 @@ impl DialogueScreen {
             }
         }
         self.select(ui, 0);
+        let most = (ui.screen_size().y * MOST_OF_SCREEN - 2.0 * EDGE).max(120.0);
+        ui.send(self.scroll, WidgetMessage::MaxSize(Vector2::new(f32::INFINITY, most)));
+        ui.send(self.scroll, ScrollViewerMessage::VerticalScroll(0.0));
     }
 
     /// Shows what is said, and what it means, only as `subtitles` has them.
@@ -400,6 +425,10 @@ impl DialogueScreen {
             ui.send(reply, WidgetMessage::Background(Brush::Solid(light).into()));
             ui.send(label, WidgetMessage::Foreground(Brush::Solid(color).into()));
         }
+        // The reply picked, scrolled into view if the panel has to scroll.
+        if let Some(&(reply, _)) = self.replies.get(self.selected) {
+            ui.send(self.scroll, ScrollViewerMessage::BringIntoView(reply.to_base()));
+        }
     }
 
     /// Picks the reply `step` on from the one picked now, round from the last to the first.
@@ -428,5 +457,51 @@ impl DialogueScreen {
             } => Some(Pointer::Picked(i)),
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::dialogue::Choice;
+
+    /// Lays `ui` out as an 800 by 600 window would, handing it every message waiting, a few times
+    /// over so that what one layout sends is laid out too.
+    fn settle(ui: &mut UserInterface) {
+        for _ in 0..6 {
+            ui.update(Vector2::new(800.0, 600.0), 0.016, &Default::default());
+            while ui.poll_message().is_some() {}
+        }
+    }
+
+    #[test]
+    fn a_long_line_with_many_replies_scrolls_rather_than_cover_the_face() {
+        let mut ui = UserInterface::new(Vector2::new(800.0, 600.0));
+        let mut screen = DialogueScreen::build(&mut ui);
+        screen.set_open(&ui, true);
+        let long = "Sermo longum. ".repeat(30);
+        let view = View {
+            says: long.clone(),
+            means: long,
+            note: Some("A check went one way or the other.".into()),
+            choices: (0..MOST_REPLIES).map(|n| Choice { label: format!("Reply {n}, which goes on a while to take room"), said: false }).collect(),
+            mood: Mood::Normal,
+        };
+        screen.show(&ui, "DEFENDATOR 42", &view);
+        settle(&mut ui);
+        let frame = &ui[screen.frame];
+        let (top, height) = (frame.screen_position().y, frame.actual_global_size().y);
+        assert!(height <= 600.0 * MOST_OF_SCREEN + 1.0, "no higher than a third of the window: {height}");
+        assert!(top >= 600.0 * (1.0 - MOST_OF_SCREEN) - OFF_BOTTOM - 1.0, "low on the screen, from {top}");
+        // The last reply starts out of sight, under the panel's bottom: it has to scroll.
+        let (last, _) = screen.replies[MOST_REPLIES - 1];
+        assert!(ui[last].screen_position().y > top + height, "it all fit: nothing to scroll");
+        // Picked, it is scrolled into the panel.
+        screen.select(&ui, MOST_REPLIES - 1);
+        settle(&mut ui);
+        let (reply, _) = screen.replies[MOST_REPLIES - 1];
+        let reply = &ui[reply];
+        let (at, tall) = (reply.screen_position().y, reply.actual_global_size().y);
+        assert!(at >= top - 1.0 && at + tall <= top + height + 1.0, "reply at {at}..{} in the panel {top}..{}", at + tall, top + height);
     }
 }

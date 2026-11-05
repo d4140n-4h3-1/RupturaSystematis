@@ -23,6 +23,11 @@ What changed in Ruptura Systematis, newest first. How to play it is in the [READ
   notices your weapon out, tells you once to come no closer as it backs away, and says so when
   you put it away.
 - Some of Urbs's citizens now walk about in pairs.
+- **Radio earpieces**: a few of the security droids wear a yellow radio earpiece - a pod on the
+  side of the head, a boom mic, an antenna - easy to spot, and glowing in the night cities.
+- **The conversation panel no longer covers the face** of whoever you're talking to: it sits low
+  and is never more than a third of the screen high. What doesn't fit scrolls, with the mouse
+  wheel or the scrollbar, and the reply you pick is always scrolled into view.
 
 ## 1 November 2026
 
