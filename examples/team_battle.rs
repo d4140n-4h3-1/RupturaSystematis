@@ -83,7 +83,7 @@ use fyrox::{
 use hydroxus_ai::{
     navigation::{navmesh::NavMesh, walk},
     prelude::*,
-    tactics::team::{self, Exposure, Intel, Stuck, EXPOSURE_EVERY, SUPPRESSED_FOR, SUPPRESS_NEAR},
+    tactics::team::{self, Exposure, Intel, Stuck},
 };
 use maze::{
     AI,
@@ -731,7 +731,7 @@ impl Battle {
         let width = ((bounds.max.x - bounds.min.x) / CELL).ceil() as usize;
         let depth = ((bounds.max.z - bounds.min.z) / CELL).ceil() as usize;
         let origin = Vector3::new(bounds.min.x, 0.0, bounds.min.z);
-        let mut grid = WalkGrid::new(width, depth, CELL);
+        let mut grid = WalkGrid::new(width, depth, CELL).with_tuning(AI.grid);
         let roomy = |spot: Vector3<f32>, floor: f32| {
             let waist = Vector3::new(spot.x, floor + 0.5, spot.z);
             let head = Vector3::new(spot.x, floor + 1.6, spot.z);
@@ -772,7 +772,7 @@ impl Battle {
                 let Some(floor) = Self::top_floor(graph, spot, bounds.max.y + 1.0) else {
                     continue;
                 };
-                if (floor - grid.floor(x, z)).abs() <= hydroxus_ai::navigation::grid::MAX_CLIMB && roomy(spot, floor) {
+                if (floor - grid.floor(x, z)).abs() <= AI.grid.max_climb && roomy(spot, floor) {
                     grid.set(nx, nz, true);
                     grid.set_floor(nx, nz, floor);
                     queue.push_back((nx, nz));
@@ -802,7 +802,7 @@ impl Battle {
                 best = area;
             }
         }
-        let mut kept = WalkGrid::new(width, depth, CELL);
+        let mut kept = WalkGrid::new(width, depth, CELL).with_tuning(AI.grid);
         for &(x, z) in &best {
             kept.set(x, z, true);
             kept.set_floor(x, z, grid.floor(x, z));
@@ -819,7 +819,9 @@ impl Battle {
             self.spawns[0].len(),
             self.spawns[1].len()
         ));
-        self.mesh = Some(NavMesh::build(&kept, origin, |_, _| 0));
+        let mut mesh = NavMesh::build_with(&kept, origin, |_, _| 0, AI.navmesh);
+        mesh.walk = AI.walk;
+        self.mesh = Some(mesh);
         self.grid = Some((kept, origin));
     }
 
@@ -1005,7 +1007,7 @@ impl Battle {
         }
         self.exposure_in -= dt;
         if self.exposure_in <= 0.0 {
-            self.exposure_in = EXPOSURE_EVERY;
+            self.exposure_in = AI.team.exposure_every;
             self.survey_exposure(graph);
         }
         for droid in &mut self.droids {
@@ -1633,8 +1635,8 @@ impl Battle {
                     for them in self.droids.iter_mut().filter(|d| d.team != team && d.alive()) {
                         let chest = them.chest();
                         let along = (chest - from).dot(&way).clamp(0.0, reach);
-                        if (from + way * along - chest).norm() < SUPPRESS_NEAR {
-                            them.suppressed = SUPPRESSED_FOR;
+                        if (from + way * along - chest).norm() < AI.team.suppress_near {
+                            them.suppressed = AI.team.suppressed_for;
                         }
                     }
                 }

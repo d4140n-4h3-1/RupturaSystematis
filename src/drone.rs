@@ -154,9 +154,6 @@ const CALLED_FROM: f32 = 40.0;
 /// How near where it is called to a patrolling drone has to be, in meters as the crow flies, to
 /// answer the call itself, rather than one being called in from nearer.
 pub const ANSWERS_WITHIN: f32 = 25.0;
-/// How far it goes on patrol, from its flag on a side in capture the flag, and how long it waits
-/// between trips: its mind's (see [`hydroxus_ai::tactics::patrol`]).
-use hydroxus_ai::tactics::patrol::{POST_REACH, REST};
 /// How fast it flies, in meters per second: patrolling, and hostile; how quickly it gets up to
 /// speed, in meters per second per second; and how quickly it turns, in radians a second.
 type Flight = Speeds;
@@ -568,7 +565,7 @@ impl Drone {
             playing: DEATH,
             since: 0.0,
             fired: false,
-            mind: Patrol::new(HOVER, kind.flies_free(), kind.flight(), SCAN_LENGTH),
+            mind: Patrol { tuning: crate::AI.patrol, ..Patrol::new(HOVER, kind.flies_free(), kind.flight(), SCAN_LENGTH) },
             placed: false,
             hits: 0,
             falling: None,
@@ -604,7 +601,7 @@ impl Drone {
         post: Vector3<f32>,
         rng: &mut Rng,
     ) -> bool {
-        let Some(at) = walk::spot_near(mesh, post, POST_REACH, rng) else {
+        let Some(at) = walk::spot_near(mesh, post, self.mind.tuning.post_reach, rng) else {
             return false;
         };
         // Put down anywhere, and then where it should be.
@@ -687,7 +684,7 @@ impl Drone {
         rng: &mut Rng,
     ) -> bool {
         let heading = inhabitants::between(rng, (-PI, PI));
-        let resting = inhabitants::between(rng, REST);
+        let resting = inhabitants::between(rng, self.mind.tuning.rest);
         self.mind.put_at(spot, heading, resting);
         self.placed = true;
         self.hits = 0;

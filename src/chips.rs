@@ -24,7 +24,7 @@ use crate::{
     credits::Credits,
     layout::Rng,
 };
-use hydroxus_ai::navigation::{grid::MAX_CLIMB, navmesh::NavMesh, walk};
+use hydroxus_ai::navigation::{navmesh::NavMesh, walk};
 use fyrox::{
     core::{
         algebra::{Matrix4, UnitQuaternion, Vector3},
@@ -258,7 +258,7 @@ impl Chips {
                     // Floor all round it, a step either way at most: out in the open, not in a
                     // corner or on a ledge.
                     let open = (-1..=1).all(|dx| {
-                        (-1..=1).all(|dz| walk::floor_at(mesh, spot + Vector3::new(dx as f32, 0.0, dz as f32) * cell, MAX_CLIMB))
+                        (-1..=1).all(|dz| walk::floor_at(mesh, spot + Vector3::new(dx as f32, 0.0, dz as f32) * cell, crate::AI.grid.max_climb))
                     });
                     if !open {
                         continue;
