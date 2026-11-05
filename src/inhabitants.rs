@@ -95,7 +95,8 @@
 
 pub use hydroxus_ai::alert::Alert;
 use hydroxus_ai::alert::{Incident, Wariness};
-pub use hydroxus_ai::tactics::threat::Threat;
+pub use hydroxus_ai::tactics::threat::{Threat, Uneasy};
+use hydroxus_ai::tactics::threat::Unease;
 pub(crate) use hydroxus_ai::navigation::route::between;
 use hydroxus_ai::navigation::walk::route_to;
 use crate::{ferry::Crossing, train::Doors};
@@ -258,6 +259,9 @@ const CHEST: f32 = 1.2;
 const REPLAN: f32 = 0.4;
 /// How far it looks for a way to the player, in meters of walking.
 const CHASE_REACH: f32 = 100.0;
+/// How far a droid backs away from the player, with their weapon drawn too near, each time it
+/// looks again where to go, in meters.
+const BACK_OFF: f32 = 6.0;
 /// How far above or below where a droid is the floor can be and still be the floor it is on, in
 /// meters: a stair's step, and a little more for its feet still coming down onto it.
 const ON_FLOOR: f32 = 0.7;
@@ -409,6 +413,9 @@ struct Inhabitant {
     /// How wary it is from what it has been through: the longer it searches and stays wary, and
     /// the more keenly it looks (see [`hydroxus_ai::alert::Wariness`]).
     wariness: Wariness,
+    /// How it takes the player's weapon drawn near it, not pointed at it (see
+    /// [`hydroxus_ai::tactics::threat::Unease`]).
+    unease: Unease,
     /// Where it last saw the player's feet, and which way they were going then, roughly.
     lost_at: Vector3<f32>,
     lost_going: Vector3<f32>,
@@ -546,6 +553,7 @@ impl Inhabitant {
         self.detection.reset();
         self.investigating = None;
         self.wariness = Wariness::default();
+        self.unease.reset();
         self.searched = 0;
         self.looking = None;
         self.deaf = 0.0;
@@ -1950,6 +1958,7 @@ impl Inhabitants {
             detection: Detection::default(),
             investigating: None,
             wariness: Wariness::default(),
+            unease: Unease::default(),
             lost_at: feet,
             lost_going: Vector3::zeros(),
             search_left: 0.0,
@@ -2734,6 +2743,25 @@ impl Inhabitants {
                 if to_them.norm() > 1.0e-3 {
                     droid.heading = to_them.x.atan2(to_them.z);
                 }
+            } else if droid.alert.is_none() && droid.unease.afraid() {
+                // The player too near with a weapon drawn: it backs away from them.
+                droid.replan -= dt;
+                if droid.replan <= 0.0 || droid.route.is_empty() {
+                    droid.replan = REPLAN * 2.0;
+                    if let Some(away) = flat(droid.feet - player).try_normalize(1.0e-3) {
+                        let to = spot_near(mesh, droid.feet + away * BACK_OFF, 1.5, rng).unwrap_or(droid.feet);
+                        droid.route = route_to(droid.feet, to);
+                    }
+                }
+            } else if droid.alert.is_none() && droid.unease.watching() {
+                // Uneasy, it stands watching whoever has the weapon out.
+                droid.route.clear();
+                droid.waiting = 0.0;
+                droid.resting = droid.resting.max(REST.0);
+                let to_them = flat(player - droid.feet);
+                if to_them.norm() > 1.0e-3 {
+                    droid.heading = to_them.x.atan2(to_them.z);
+                }
             } else if droid.alert.is_some() && droid.windup > 0.0 {
                 // Just turned hostile, it stands a moment where it is.
                 droid.route.clear();
@@ -3299,9 +3327,12 @@ impl Inhabitants {
         player: Vector3<f32>,
         posture: Posture,
         in_the_dark: bool,
+        armed: bool,
         in_sight: impl Fn(Vector3<f32>) -> bool,
         dt: f32,
     ) {
+        // A weapon drawn catches the eye.
+        let conspicuous = if armed { AI.detection.armed } else { 1.0 };
         for droid in &mut self.droids {
             let alert = droid.alert.filter(|_| !droid.down && droid.hunts_player());
             let visible = alert.map_or(0.0, |alert| {
@@ -3314,7 +3345,7 @@ impl Inhabitants {
                     true
                 }
                 Some(_) => {
-                    let change = droid.detection.step(&AI.detection, visible, droid.eagerness(), dt);
+                    let change = droid.detection.step(&AI.detection, visible, droid.eagerness() * conspicuous, dt);
                     match change {
                         Some(Change::Noticed) => droid.note(Incident::Noticed),
                         Some(Change::Spotted) => droid.note(Incident::Spotted),
@@ -3405,6 +3436,53 @@ impl Inhabitants {
             droid.detection.alert();
             droid.enter(m, Some(Alert::Alert), &mut self.alerts);
         }
+    }
+
+    /// Has each droid that is not hostile, and whose kind minds a weapon (`minds`, as an index into
+    /// the conversations' characters), take the player's weapon being drawn - `armed` - for another
+    /// `dt`: if it can see them, near enough, it grows uneasy and watches them, backing away if they
+    /// come too near; with it put away, or out of its sight, a while, it is at ease again (see
+    /// [`Unease`]). It sees them as [`Inhabitants::feel_aimed_at`] has a droid see them, `watched`
+    /// where they are. Not while the weapon is pointed at it, which it takes as that says. Which
+    /// droids went on to another stage.
+    pub fn feel_drawn(
+        &mut self,
+        armed: bool,
+        watched: (Vector3<f32>, Posture, bool),
+        in_sight: impl Fn(Vector3<f32>) -> bool,
+        minds: impl Fn(usize) -> bool,
+        dt: f32,
+    ) -> Vec<(usize, Uneasy)> {
+        let (player, posture, in_the_dark) = watched;
+        let mut stages = Vec::new();
+        for (n, droid) in self.droids.iter_mut().enumerate() {
+            let minding = droid.alert.is_none()
+                && !droid.down
+                && !droid.talking
+                && droid.side.is_none()
+                && droid.pursuit.is_none()
+                && droid.hunts_player()
+                && minds(droid.character);
+            if !minding {
+                if droid.unease.uneasy() {
+                    droid.unease.reset();
+                }
+                continue;
+            }
+            // Pointed at it, it takes it as that says.
+            if droid.warned > 0 || droid.threat > 0.0 {
+                continue;
+            }
+            let distance = flat(player - droid.feet).norm();
+            let sees = armed
+                && distance <= AI.threat.unease_range
+                && Sight::default().could_see(None, droid.feet, droid.heading, player, posture.into(), in_the_dark)
+                && in_sight(droid.feet);
+            if let Some(stage) = droid.unease.step(&AI.threat, sees, distance, dt) {
+                stages.push((n, stage));
+            }
+        }
+        stages
     }
 
     /// Has each droid that is not hostile feel the pistol pointed at it for another `dt`, or
