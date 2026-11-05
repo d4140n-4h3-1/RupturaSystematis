@@ -19,10 +19,16 @@ use crate::{computer::FONT, credits::Credits, inhabitants::Alert};
 use hydroxus_ai::perception::detection::Stage;
 use fyrox::{
     asset::untyped::ResourceKind,
-    core::{algebra::Vector2, color::Color, pool::Handle, uuid::Uuid},
+    core::{
+        algebra::{Matrix3, Vector2},
+        color::Color,
+        pool::Handle,
+        uuid::Uuid,
+    },
     gui::{
         border::{Border, BorderBuilder},
         brush::Brush,
+        canvas::CanvasBuilder,
         font::{Font, FontResource, FontStyles},
         grid::{Column, GridBuilder, Row},
         screen::ScreenBuilder,
@@ -48,6 +54,13 @@ const CAUTION_YELLOW: Color = Color::opaque(255, 225, 40);
 /// The stamina bar: how big it is inside its frame, in pixels, and its colours - with plenty left,
 /// running low, and winded - and below how much it counts as running low.
 const BAR: (f32, f32) = (180.0, 10.0);
+/// How many of those becoming aware of the player the HUD shows which way they are, at most; how
+/// far from the middle of the screen each one's mark sits, and how big it is, in pixels; and how
+/// faint a mark is for one barely aware.
+pub const WATCHER_MARKS: usize = 6;
+const MARK_RING: f32 = 130.0;
+const MARK_SIZE: f32 = 28.0;
+const MARK_FAINTEST: f32 = 0.35;
 /// How wide the sneaking meter's bar is inside its frame, in pixels.
 const DETECTION_BAR: f32 = 140.0;
 const STAMINA_GREEN: Color = Color::opaque(90, 230, 120);
@@ -103,6 +116,10 @@ pub enum Status {
         /// How aware of the player the most aware of those watching for them is, from 0 to 1, and
         /// its stage, while it is to be shown: sneaking, or someone is becoming aware of them.
         detection: Option<(Stage, f32)>,
+        /// Which way each of those becoming aware of the player is, from where they look - 0
+        /// straight ahead, right positive, in radians - with its stage and how aware it is, the
+        /// most aware first.
+        watchers: Vec<(f32, Stage, f32)>,
     },
     /// A race: the lap and the clock, the laps so far, how fast the bike is going and how much
     /// boost it has left (see [`crate::race`]).
@@ -152,6 +169,10 @@ pub struct Hud {
     detection_label: Handle<Text>,
     detection_fill: Handle<Border>,
     shown_detection: Option<(String, Color, f32)>,
+    /// The marks round the middle of the screen, each pointing the way one becoming aware of the
+    /// player is, and what each last showed: where, which way, its colour and how faint.
+    marks: Vec<Handle<UiNode>>,
+    shown_marks: Vec<Option<(Vector2<f32>, f32, Color, f32)>>,
     shown_stamina: Option<(f32, Color, u32)>,
     /// The bars over the sentries' and the drone's heads - each its stamina and its health, a
     /// frame and what fills it - of which those not needed are hidden; and where they go.
@@ -348,6 +369,32 @@ impl Hud {
             ));
         }
         let endless = endless.build(ctx);
+        // The marks round the middle of the screen, pointing out from it, each the way one
+        // becoming aware of the player is: placed where they go each frame, on a canvas over all.
+        let marks: Vec<Handle<UiNode>> = (0..WATCHER_MARKS)
+            .map(|_| {
+                let mut mark = TextBuilder::new(
+                    WidgetBuilder::new()
+                        .with_width(MARK_SIZE)
+                        .with_height(MARK_SIZE)
+                        .with_visibility(false)
+                        .with_foreground(Brush::Solid(HIDDEN_GREY).into()),
+                )
+                .with_font_size(22.0.into())
+                .with_horizontal_text_alignment(HorizontalAlignment::Center)
+                .with_vertical_text_alignment(VerticalAlignment::Center)
+                .with_text("▲");
+                if let Ok(font) = Font::from_memory(FONT, 1024, FontStyles::default(), Vec::new()) {
+                    mark = mark.with_font(FontResource::new_ok(Uuid::new_v4(), ResourceKind::Embedded, font));
+                }
+                mark.build(ctx).to_base()
+            })
+            .collect();
+        let mut canvas = WidgetBuilder::new();
+        for &mark in &marks {
+            canvas = canvas.with_child(mark);
+        }
+        let canvas: Handle<UiNode> = CanvasBuilder::new(canvas).build(ctx).to_base();
         let ammo = StackPanelBuilder::new(
             WidgetBuilder::new()
                 .on_column(2)
@@ -415,6 +462,7 @@ impl Hud {
                 .with_child(banner)
                 .with_child(alert)
                 .with_child(detection)
+                .with_child(canvas)
                 .with_child(bottom)
                 .with_child(fade),
         )
@@ -427,6 +475,8 @@ impl Hud {
             detection,
             detection_label,
             detection_fill,
+            shown_marks: vec![None; marks.len()],
+            marks,
             stamina,
             stamina_fill,
             stamina_label,
@@ -471,9 +521,9 @@ impl Hud {
         self.note_time = (self.note_time - dt).max(0.0);
         self.blink = (self.blink + dt) % BLINK;
         let blinking_on = self.blink < BLINK_ON;
-        let (text, alarm, breath, health, (armed, gun, ammo), credits, shield, shield_ready, detection) = match status {
-            Status::Loading => ("Loading the maze...".to_string(), None, None, None, (false, None, None), None, None, false, None),
-            Status::Blank => (String::new(), None, None, None, (false, None, None), None, None, false, None),
+        let (text, alarm, breath, health, (armed, gun, ammo), credits, shield, shield_ready, (detection, watchers)) = match status {
+            Status::Loading => ("Loading the maze...".to_string(), None, None, None, (false, None, None), None, None, false, (None, Vec::new())),
+            Status::Blank => (String::new(), None, None, None, (false, None, None), None, None, false, (None, Vec::new())),
             Status::Race(race) => {
                 let mut text = format!(
                     "Pos {}/{}    Lap {}/{}    Time {}",
@@ -493,7 +543,7 @@ impl Hud {
                 if self.note_time > 0.0 {
                     text += &format!("\n{}", self.note);
                 }
-                (text, None, None, None, (false, None, None), None, None, false, None)
+                (text, None, None, None, (false, None, None), None, None, false, (None, Vec::new()))
             }
             Status::Round {
                 time,
@@ -511,6 +561,7 @@ impl Hud {
                 shield_ready,
                 objective,
                 detection,
+                watchers,
             } => {
                 let mut text = format!("Time {}", format_time(time));
                 if let Some(objective) = objective {
@@ -525,7 +576,7 @@ impl Hud {
                 if self.note_time > 0.0 {
                     text += &format!("\n{}", self.note);
                 }
-                (text, alarm, Some((breath, frozen)), Some(health), (armed, Some(gun), ammo), Some(credits), shield, shield_ready, detection)
+                (text, alarm, Some((breath, frozen)), Some(health), (armed, Some(gun), ammo), Some(credits), shield, shield_ready, (detection, watchers))
             }
         };
         ui.send(self.status, TextMessage::Text(text));
@@ -552,6 +603,25 @@ impl Hud {
                 ui.send(self.detection_fill, WidgetMessage::Width(DETECTION_BAR * level));
             }
             self.shown_detection = detection;
+        }
+
+        let middle = ui.screen_size() / 2.0;
+        for (n, &mark) in self.marks.iter().enumerate() {
+            let shown = watchers.get(n).map(|&(bearing, stage, level)| watcher_mark(middle, bearing, stage, level));
+            if shown == self.shown_marks[n] {
+                continue;
+            }
+            ui.send(mark, WidgetMessage::Visibility(shown.is_some()));
+            if let Some((at, turn, colour, opacity)) = shown {
+                ui.send(mark, WidgetMessage::DesiredPosition(at));
+                // Turned about its own middle, to point out from the middle of the screen.
+                let half = Vector2::repeat(MARK_SIZE / 2.0);
+                let transform = Matrix3::new_translation(&half) * Matrix3::new_rotation(turn) * Matrix3::new_translation(&-half);
+                ui.send(mark, WidgetMessage::RenderTransform(transform));
+                ui.send(mark, WidgetMessage::Foreground(Brush::Solid(colour).into()));
+                ui.send(mark, WidgetMessage::Opacity(Some(opacity)));
+            }
+            self.shown_marks[n] = shown;
         }
 
         let stamina = breath.map(|((left, winded), frozen)| {
@@ -776,6 +846,24 @@ fn detection_shown(stage: Stage, level: f32) -> (String, Color, f32) {
     (text.to_string(), colour, level)
 }
 
+/// Where on a screen whose middle is `middle` the mark for one `bearing` from where the player
+/// looks goes - its top left corner - how far it is turned to point out from the middle, its
+/// colour for its `stage`, and how faint for how aware it is (`level`): ahead is up, behind down,
+/// to the right right. In steps of a degree, a pixel and a fiftieth, so that it is only sent when
+/// it moves.
+fn watcher_mark(middle: Vector2<f32>, bearing: f32, stage: Stage, level: f32) -> (Vector2<f32>, f32, Color, f32) {
+    let bearing = (bearing.to_degrees().round()).to_radians();
+    let out = Vector2::new(bearing.sin(), -bearing.cos()) * MARK_RING;
+    let at = (middle + out - Vector2::repeat(MARK_SIZE / 2.0)).map(f32::round);
+    let colour = match stage {
+        Stage::Hidden => HIDDEN_GREY,
+        Stage::Caution => CAUTION_YELLOW,
+        Stage::Danger => DANGER_RED,
+    };
+    let level = (level.clamp(0.0, 1.0) * 50.0).round() / 50.0;
+    (at, bearing, colour, MARK_FAINTEST + (1.0 - MARK_FAINTEST) * level)
+}
+
 /// How full the stamina bar is and its colour, with `left` of it, winded or not, and with what
 /// blinks showing or not. The bar only goes dark, blinking, while winded.
 fn stamina_shown(left: f32, winded: bool, blinking_on: bool) -> (f32, Color) {
@@ -802,6 +890,23 @@ pub fn format_time(seconds: f32) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_watchers_mark_points_its_way_round_the_middle_of_the_screen() {
+        use std::f32::consts::{FRAC_PI_2, PI};
+        let middle = Vector2::new(500.0, 400.0);
+        let centre = |(at, _, _, _): (Vector2<f32>, f32, Color, f32)| at + Vector2::repeat(MARK_SIZE / 2.0);
+        // Straight ahead: above the middle, pointing up; to the right: right of it; behind: below.
+        let ahead = watcher_mark(middle, 0.0, Stage::Caution, 0.5);
+        assert_eq!(centre(ahead), Vector2::new(500.0, 400.0 - MARK_RING));
+        assert_eq!((ahead.1, ahead.2), (0.0, CAUTION_YELLOW));
+        let right = watcher_mark(middle, FRAC_PI_2, Stage::Hidden, 0.1);
+        assert!((centre(right) - Vector2::new(500.0 + MARK_RING, 400.0)).norm() < 1.0);
+        let behind = watcher_mark(middle, PI, Stage::Danger, 1.0);
+        assert!((centre(behind) - Vector2::new(500.0, 400.0 + MARK_RING)).norm() < 1.0);
+        // The more aware, the plainer.
+        assert!(right.3 < ahead.3 && behind.3 == 1.0 && right.3 >= MARK_FAINTEST);
+    }
 
     #[test]
     fn the_sneaking_meter_says_hidden_caution_or_danger_and_fills() {

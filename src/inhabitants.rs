@@ -3354,6 +3354,17 @@ impl Inhabitants {
         Some(most_aware(&AI.detection, watching.iter().map(|droid| &droid.detection)))
     }
 
+    /// Where each hostile droid not after the player yet that is becoming aware of them stands, and
+    /// how aware it is: for the sneaking meter to show which way each is.
+    pub fn watchers(&self) -> Vec<(Vector3<f32>, f32)> {
+        self.droids
+            .iter()
+            .filter(|droid| !droid.down && droid.hunts_player() && matches!(droid.alert, Some(Alert::Caution | Alert::Evasion)))
+            .filter(|droid| droid.detection.level > 0.0)
+            .map(|droid| (droid.feet, droid.detection.level))
+            .collect()
+    }
+
     /// Has each sentry - each droid whose kind, as an index into the conversations' characters,
     /// `sentry` says is one - that sees another sentry after the player go after them too, as if
     /// it saw them itself. It sees the other as [`could_see_other`] has it, `in_the_dark` or not,

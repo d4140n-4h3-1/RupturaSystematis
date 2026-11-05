@@ -1,6 +1,6 @@
 //! The game itself: loading a level, playing rounds in it, and the player's input.
 
-use hydroxus_ai::perception::detection::{most_aware, stage_at, Stage as Awareness};
+use hydroxus_ai::perception::detection::{bearing, most_aware, stage_at, Stage as Awareness};
 use hydroxus_ai::social::{chat::Topic, opinion::{Attitude, Deed}};
 use crate::player::{
     pistol::{Bolts, Strike},
@@ -1918,6 +1918,7 @@ impl MazeGame {
                 shield_ready: self.shield.as_ref().is_some_and(Shield::can_raise),
                 objective: self.heist.as_ref().map(Heist::objective).or_else(|| self.jail_objective()),
                 detection: self.sneaking_meter(),
+                watchers: self.watcher_bearings(&ctx.scenes[self.scene].graph),
             },
         };
         // Healing only while playing; the flash of the last hit fades out after too.
@@ -2224,6 +2225,32 @@ impl MazeGame {
         let sneaking = self.player.posture() != Posture::Standing;
         let stage = stage_at(&crate::AI.detection, level);
         (sneaking || level > 0.0).then_some((stage, level))
+    }
+
+    /// Which way each droid and drone becoming aware of the player is, from where they look - 0
+    /// straight ahead, right positive - with its stage and how aware it is: the most aware first,
+    /// as many as the HUD shows. None once any is after them, on Alert.
+    fn watcher_bearings(&self, graph: &Graph) -> Vec<(f32, Awareness, f32)> {
+        let hunted = self.inhabitants.alarm().is_some_and(|(alert, _)| alert == Alert::Alert)
+            || self.drones.iter().any(Drone::on_alert);
+        if hunted {
+            return Vec::new();
+        }
+        let (feet, heading) = (self.player.feet(graph), self.player.yaw());
+        let drones = self
+            .drones
+            .iter()
+            .filter_map(|drone| drone.detection().filter(|d| d.level > 0.0).map(|d| (drone.at(), d.level)));
+        let mut seen: Vec<(f32, Awareness, f32)> = self
+            .inhabitants
+            .watchers()
+            .into_iter()
+            .chain(drones)
+            .filter_map(|(at, level)| Some((bearing(feet, heading, at)?, stage_at(&crate::AI.detection, level), level)))
+            .collect();
+        seen.sort_by(|a, b| b.2.total_cmp(&a.2));
+        seen.truncate(hud::WATCHER_MARKS);
+        seen
     }
 
     fn update_inhabitants(&mut self, ctx: &mut PluginContext) -> News {
