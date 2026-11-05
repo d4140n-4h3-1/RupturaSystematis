@@ -90,7 +90,7 @@ use hydroxus_ai::{
         navmesh::{NavMesh, Poly},
         walk,
     },
-    perception::sight::Sight,
+    perception::detection::Detection,
     tactics::patrol::{self, Patrol, Speeds},
 };
 use serde::Deserialize;
@@ -473,6 +473,8 @@ pub struct Drone {
     falling: Option<f32>,
     /// Whether its body is the wreck's, not the ball it flies in.
     wrecked: bool,
+    /// How aware it is of the player, watching for them (see [`Drone::think`]).
+    detection: Detection,
     /// In capture the flag, its side; it patrols round its side's flag (its mind's post),
     /// watching all the while, and what it goes after is whichever of the other side the game
     /// shows it (see [`crate::ctf`]).
@@ -571,6 +573,7 @@ impl Drone {
             falling: None,
             wrecked: false,
             side: None,
+            detection: Detection::default(),
         };
         drone.play(graph, IDLE);
         Some(drone)
@@ -619,6 +622,17 @@ impl Drone {
         self.pose(graph);
         Log::info(format!("Drone: {}'s, by its flag", side.name()));
         true
+    }
+
+    /// How aware of the player it is, if it is watching for them and not after them already (see
+    /// [`hydroxus_ai::perception::detection`]).
+    pub fn detection(&self) -> Option<&Detection> {
+        (self.placed && self.mind.looks() && self.mind.state != State::Alert).then_some(&self.detection)
+    }
+
+    /// Whether it is after the player: on Alert.
+    pub fn on_alert(&self) -> bool {
+        self.placed && self.mind.state == State::Alert
     }
 
     /// Its side in capture the flag, if it has one.
@@ -686,6 +700,7 @@ impl Drone {
         let heading = inhabitants::between(rng, (-PI, PI));
         let resting = inhabitants::between(rng, self.mind.tuning.rest);
         self.mind.put_at(spot, heading, resting);
+        self.detection.reset();
         self.placed = true;
         self.hits = 0;
         // A wreck's body is no good for flying in: it gets its ball back.
@@ -928,8 +943,14 @@ impl Drone {
     /// at all on Alert - and with nothing in the way from its eye to the middle of their body.
     /// Whether it can see `player` - or whoever else it is shown as a target - from where it is.
     pub fn sees(&self, graph: &Graph, player: &Target) -> bool {
+        self.visibility(graph, player) > 0.0
+    }
+
+    /// How visible the `player` - or whoever else it is shown as a target - is to it from where it
+    /// is (see [`hydroxus_ai::perception::sight::Sight::visibility`]): 0 where it cannot see them, or something is in the way.
+    pub fn visibility(&self, graph: &Graph, player: &Target) -> f32 {
         if !self.placed || self.mind.state == State::Down {
-            return false;
+            return 0.0;
         }
         let alert = match self.mind.state {
             State::Alert => Alert::Alert,
@@ -937,14 +958,15 @@ impl Drone {
         };
         let under = self.mind.at - Vector3::new(0.0, HOVER, 0.0);
         let stance = player.posture.into();
-        if !Sight::default().could_see(Some(alert), under, self.mind.heading, player.feet, stance, player.in_the_dark) {
-            return false;
+        let visible = crate::AI.sight.visibility(Some(alert), under, self.mind.heading, player.feet, stance, player.in_the_dark);
+        if visible <= 0.0 {
+            return 0.0;
         }
         let from = graph[self.body].global_position();
         let way = player.middle - from;
         let length = way.norm();
         if length < 1.0e-3 {
-            return true;
+            return visible;
         }
         let mut hits = Vec::new();
         graph.physics.cast_ray(
@@ -957,9 +979,8 @@ impl Drone {
             },
             &mut hits,
         );
-        hits.iter()
-            .find(|hit| hit.collider != self.collider)
-            .is_some_and(|hit| hit.collider == player.collider)
+        let clear = hits.iter().find(|hit| hit.collider != self.collider).is_some_and(|hit| hit.collider == player.collider);
+        if clear { visible } else { 0.0 }
     }
 
     /// Goes about its business for another `dt` over the floor of `grid` whose corner is at
@@ -1078,7 +1099,20 @@ impl Drone {
         rng: &mut Rng,
         dt: f32,
     ) -> Option<&'static str> {
-        let sees = self.mind.looks() && self.sees(graph, player);
+        // On Alert it sees them at once; otherwise it becomes aware of them gradually, the more
+        // quickly the more visible they are, and the more so searching.
+        let visible = if self.mind.looks() { self.visibility(graph, player) } else { 0.0 };
+        let sees = match self.mind.state {
+            State::Alert if visible > 0.0 => {
+                self.detection.alert();
+                true
+            }
+            state => {
+                let eagerness = if matches!(state, State::Search { .. }) { crate::AI.detection.searching } else { 1.0 };
+                self.detection.step(&crate::AI.detection, visible, eagerness, dt);
+                self.detection.spotted() && visible > 0.0
+            }
+        };
         let air = Air { graph, hull: self.hull, leaves };
         let mut ways = Ways { mesh, air, reachable, rng, at: self.mind.at, flies_free: self.kind.flies_free() };
         self.mind.think(sees, player.feet, &mut ways, dt).map(said)

@@ -111,6 +111,7 @@ use hydroxus_ai::{
     },
     perception::{
         bolts,
+        detection::{most_aware, Detection, Stage},
         hearing::Heard,
         sight::Sight,
         witness::knows_who,
@@ -396,8 +397,10 @@ struct Inhabitant {
     with: Option<usize>,
     /// How it is going about the player, once it has turned on them.
     alert: Option<Alert>,
-    /// Whether, being hostile, it can see the player, as of this frame.
+    /// Whether, being hostile, it can see the player, as of this frame: once its awareness of them
+    /// has filled (see [`hydroxus_ai::perception::detection`]), or straight away on Alert.
     sees_player: bool,
+    detection: Detection,
     /// Where it last saw the player's feet, and which way they were going then, roughly.
     lost_at: Vector3<f32>,
     lost_going: Vector3<f32>,
@@ -532,6 +535,7 @@ impl Inhabitant {
         self.code = 10 + rng.below(90) as u32;
         self.lost_at = feet;
         self.lost_going = Vector3::zeros();
+        self.detection.reset();
         self.searched = 0;
         self.looking = None;
         self.deaf = 0.0;
@@ -1917,6 +1921,7 @@ impl Inhabitants {
             with: None,
             alert: None,
             sees_player: false,
+            detection: Detection::default(),
             lost_at: feet,
             lost_going: Vector3::zeros(),
             search_left: 0.0,
@@ -3232,29 +3237,55 @@ impl Inhabitants {
 
     /// Has each hostile droid look for the player, at `player` in `posture`, whom it can see
     /// wherever `in_sight` says nothing is in the way from the player to it, and [`Sight`] says
-    /// they are in front of it and near enough - `in_the_dark` or not.
+    /// they are in front of it and near enough - `in_the_dark` or not - for another `dt`. On Alert
+    /// it sees them at once; otherwise it becomes aware of them gradually, the more quickly the
+    /// more visible they are, and the more so searching (see
+    /// [`hydroxus_ai::perception::detection`]), and sees them once it has.
     pub fn look_for_player(
         &mut self,
         player: Vector3<f32>,
         posture: Posture,
         in_the_dark: bool,
         in_sight: impl Fn(Vector3<f32>) -> bool,
+        dt: f32,
     ) {
         for droid in &mut self.droids {
-            droid.sees_player = match droid.alert {
-                Some(alert) if !droid.down && droid.hunts_player() => {
-                    Sight::default().could_see(
-                        Some(alert),
-                        droid.feet,
-                        droid.heading,
-                        player,
-                        posture.into(),
-                        in_the_dark,
-                    ) && in_sight(droid.feet)
+            let alert = droid.alert.filter(|_| !droid.down && droid.hunts_player());
+            let visible = alert.map_or(0.0, |alert| {
+                let visible = AI.sight.visibility(Some(alert), droid.feet, droid.heading, player, posture.into(), in_the_dark);
+                if visible > 0.0 && in_sight(droid.feet) { visible } else { 0.0 }
+            });
+            droid.sees_player = match alert {
+                Some(Alert::Alert) if visible > 0.0 => {
+                    droid.detection.alert();
+                    true
                 }
-                _ => false,
+                Some(alert) => {
+                    let eagerness = if alert == Alert::Evasion { AI.detection.searching } else { 1.0 };
+                    droid.detection.step(&AI.detection, visible, eagerness, dt);
+                    droid.detection.spotted() && visible > 0.0
+                }
+                None => {
+                    droid.detection.step(&AI.detection, 0.0, 1.0, dt);
+                    false
+                }
             };
         }
+    }
+
+    /// How aware of the player the most aware of the hostile droids not after them yet is, and its
+    /// stage (see [`hydroxus_ai::perception::detection`]): what a sneaking player is shown. None
+    /// with none of them watching for the player, or any of them on Alert.
+    pub fn detection(&self) -> Option<(Stage, f32)> {
+        let watching: Vec<&Inhabitant> = self
+            .droids
+            .iter()
+            .filter(|droid| !droid.down && droid.hunts_player() && droid.alert.is_some())
+            .collect();
+        if watching.is_empty() || watching.iter().any(|droid| droid.alert == Some(Alert::Alert)) {
+            return None;
+        }
+        Some(most_aware(&AI.detection, watching.iter().map(|droid| &droid.detection)))
     }
 
     /// Has each sentry - each droid whose kind, as an index into the conversations' characters,
@@ -3294,6 +3325,7 @@ impl Inhabitants {
                 droid.warned = 0;
             }
             droid.sees_player = true;
+            droid.detection.alert();
             droid.enter(m, Some(Alert::Alert), &mut self.alerts);
         }
     }

@@ -1,5 +1,6 @@
 //! The game itself: loading a level, playing rounds in it, and the player's input.
 
+use hydroxus_ai::perception::detection::{most_aware, stage_at, Stage as Awareness};
 use hydroxus_ai::social::{chat::Topic, opinion::{Attitude, Deed}};
 use crate::player::{
     pistol::{Bolts, Strike},
@@ -1916,6 +1917,7 @@ impl MazeGame {
                 shield: self.shield.as_ref().filter(|s| s.charge.is_up()).map(|s| s.charge.health()),
                 shield_ready: self.shield.as_ref().is_some_and(Shield::can_raise),
                 objective: self.heist.as_ref().map(Heist::objective).or_else(|| self.jail_objective()),
+                detection: self.sneaking_meter(),
             },
         };
         // Healing only while playing; the flash of the last hit fades out after too.
@@ -2206,6 +2208,24 @@ impl MazeGame {
 
     /// Puts the maze's inhabitants into it once there are droids to make them from, and moves
     /// them along. Whether any caught the player, and whose phase changed.
+    /// What the sneaking meter shows (see [`hydroxus_ai::perception::detection`]): how aware of the
+    /// player the most aware of the droids and drones watching for them is - while the player is
+    /// sneaking, crouched or crawling, or any of them is becoming aware of them - and nothing once
+    /// any is after them, on Alert, which the alert says.
+    fn sneaking_meter(&self) -> Option<(Awareness, f32)> {
+        let hunted = self.inhabitants.alarm().is_some_and(|(alert, _)| alert == Alert::Alert)
+            || self.drones.iter().any(Drone::on_alert);
+        if hunted {
+            return None;
+        }
+        let droids = self.inhabitants.detection().map_or(0.0, |(_, level)| level);
+        let drones = most_aware(&crate::AI.detection, self.drones.iter().filter_map(Drone::detection)).1;
+        let level = droids.max(drones);
+        let sneaking = self.player.posture() != Posture::Standing;
+        let stage = stage_at(&crate::AI.detection, level);
+        (sneaking || level > 0.0).then_some((stage, level))
+    }
+
     fn update_inhabitants(&mut self, ctx: &mut PluginContext) -> News {
         let liveries = match self.inhabitants.is_populated() {
             true => None,
@@ -2314,9 +2334,7 @@ impl MazeGame {
         let in_the_dark = self.lights_off && !self.player.flashlight_on();
         let posture = self.player.posture();
         self.inhabitants
-            .look_for_player(player, posture, in_the_dark, |there| {
-                self.player.can_see(graph, there)
-            });
+            .look_for_player(player, posture, in_the_dark, |there| self.player.can_see(graph, there), ctx.dt);
         // A sentry's eyes are no flashlight: with the lights off, the others see it only near.
         let script = self.script.as_ref();
         self.inhabitants
