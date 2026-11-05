@@ -86,6 +86,7 @@ use hydroxus_ai::{
     tactics::team::{self, Exposure, Intel, Stuck, EXPOSURE_EVERY, SUPPRESSED_FOR, SUPPRESS_NEAR},
 };
 use maze::{
+    AI,
     dismember,
     player::{
         avatar::{Avatar, Going, Wall},
@@ -1067,8 +1068,8 @@ impl Battle {
         for t in 0..2 {
             self.exposure[t] = if self.smart[t] {
                 let alive = |j: usize| self.droids.get(j).is_some_and(|d| d.alive());
-                let seen = self.intel[t].known(alive);
-                Exposure::survey(mesh, &seen, CHEST_STANDING, |enemy, at| {
+                let seen = self.intel[t].known(&AI.team, alive);
+                Exposure::survey(&AI.team, mesh, &seen, CHEST_STANDING, |enemy, at| {
                     Self::clear(graph, enemy + Vector3::y() * EYES_STANDING, at)
                 })
             } else {
@@ -1080,7 +1081,7 @@ impl Battle {
     /// Where droid `i` believes the nearest enemy is, from what its team has seen lately.
     fn nearest_known_enemy(&self, i: usize) -> Option<Vector3<f32>> {
         let me = &self.droids[i];
-        self.intel[me.team.index()].nearest(me.position, |j| self.droids[j].alive())
+        self.intel[me.team.index()].nearest(&AI.team, me.position, |j| self.droids[j].alive())
     }
 
     fn decide(&mut self, graph: &Graph, i: usize, dt: f32) {
@@ -1118,7 +1119,7 @@ impl Battle {
                 // Getting nowhere: somewhere else.
                 if self.smart(i) {
                     let here = self.droids[i].position;
-                    if self.droids[i].stuck_from.step(here, dt) {
+                    if self.droids[i].stuck_from.step(&AI.team, here, dt) {
                         self.droids[i].objective = None;
                         self.droids[i].going_to = None;
                         self.droids[i].route.clear();
@@ -1251,7 +1252,7 @@ impl Battle {
             .map(|d| d.position)
             .collect();
         let mesh = self.mesh.as_ref()?;
-        team::flank_point(mesh, self.droids[i].position, &mates, threat, side)
+        team::flank_point(&AI.team, mesh, self.droids[i].position, &mates, threat, side)
     }
 
     /// Has droid `i`, with no cover to be had, step aside across the line from `threat`, one way
@@ -1259,7 +1260,7 @@ impl Battle {
     fn sidestep(&mut self, i: usize, threat: Vector3<f32>) {
         let side = if self.random((0.0, 1.0)) < 0.5 { 1.0 } else { -1.0 };
         let Some(mesh) = &self.mesh else { return };
-        if let Some(to) = team::sidestep_to(mesh, self.droids[i].position, threat, side) {
+        if let Some(to) = team::sidestep_to(&AI.team, mesh, self.droids[i].position, threat, side) {
             self.walk_to(i, to);
         }
     }
@@ -1269,7 +1270,7 @@ impl Battle {
     fn recently_seen(&self, i: usize) -> Option<(usize, Vector3<f32>)> {
         let alive = |j: usize| self.droids.get(j).is_some_and(|d| d.alive());
         self.intel[self.droids[i].team.index()]
-            .recently_seen(self.droids[i].position, alive)
+            .recently_seen(&AI.team, self.droids[i].position, alive)
             .map(|(j, p)| (j, p + Vector3::y() * CHEST_STANDING))
     }
 
@@ -1289,7 +1290,7 @@ impl Battle {
             })
             .collect();
         let roll = self.random((0.0, 1.0));
-        team::covered(self.droids[i].position, mates, roll)
+        team::covered(&AI.team, self.droids[i].position, mates, roll)
     }
 
     /// Whether droid `j`, from where it stands, could see a crouched droid at `spot`.
@@ -1367,7 +1368,7 @@ impl Battle {
         let smart = self.smart(i);
         let others: Vec<Vector3<f32>> = if smart {
             self.intel[self.droids[i].team.index()]
-                .known(|j| self.droids.get(j).is_some_and(|d| d.alive()))
+                .known(&AI.team, |j| self.droids.get(j).is_some_and(|d| d.alive()))
                 .into_iter()
                 .filter(|p| flat(p - threat).norm() > 2.0)
                 .map(|p| p + Vector3::y() * EYES_STANDING)
@@ -1395,7 +1396,7 @@ impl Battle {
             let crouched = spot + Vector3::y() * EYES_CROUCHED;
             let seen = others.iter().filter(|eyes| Self::clear(graph, **eyes, crouched)).count();
             let crowded = mates.iter().any(|m| flat(m - spot).norm() < team::CROWDED);
-            let worth = team::cover_worth(rank, seen, crowded);
+            let worth = team::cover_worth(&AI.team, rank, seen, crowded);
             if best.is_some_and(|(b, _, _)| b <= worth) {
                 continue;
             }
@@ -1455,7 +1456,7 @@ impl Battle {
         let team = droid.team.index();
         let route = if self.smart[team] && !self.exposure[team].is_empty() {
             let exposure = &self.exposure[team];
-            walk::route_to_weighted(mesh, droid.position, goal, f32::INFINITY, |n| exposure.cost(n))
+            walk::route_to_weighted(mesh, droid.position, goal, f32::INFINITY, |n| exposure.cost(&AI.team, n))
         } else {
             walk::route_to(mesh, droid.position, goal, f32::INFINITY)
         };

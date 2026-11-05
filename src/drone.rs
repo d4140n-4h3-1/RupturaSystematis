@@ -807,7 +807,7 @@ impl Drone {
             _ if !self.placed => None,
             // The player's own side's pays the alarm no heed.
             _ if self.side.is_some_and(Side::is_players) => None,
-            _ => self.mind.alerted(at, "alarm"),
+            _ => self.mind.alarm(at).map(said),
         }
     }
 
@@ -822,7 +822,7 @@ impl Drone {
             return None;
         }
         let pass = passes.iter().find(|pass| pass.nearest(self.mind.at) <= BODY_RADIUS + NEAR_MISS)?;
-        self.mind.alerted(pass.fired_at, "searching")
+        self.mind.shot_at(pass.fired_at).map(said)
     }
 
     /// A bolt that hit `collider`, fired by the player from `from`: if it hit the drone, it takes
@@ -1084,7 +1084,7 @@ impl Drone {
         let sees = self.mind.looks() && self.sees(graph, player);
         let air = Air { graph, hull: self.hull, leaves };
         let mut ways = Ways { mesh, air, reachable, rng, at: self.mind.at, flies_free: self.kind.flies_free() };
-        self.mind.think(sees, player.feet, &mut ways, dt)
+        self.mind.think(sees, player.feet, &mut ways, dt).map(said)
     }
 
     /// Flies on along its route for another `dt`, turning to face the way it goes - or the player,
@@ -1192,6 +1192,17 @@ struct Air<'a> {
     graph: &'a Graph,
     hull: Handle<Node>,
     leaves: Option<&'a Graph>,
+}
+
+/// What a drone says about what came of what it did (see [`patrol::Event`]): the name of its
+/// line for it in [`DRONE_LINES`].
+fn said(event: patrol::Event) -> &'static str {
+    match event {
+        patrol::Event::Spotted => "spotted",
+        patrol::Event::Searching => "searching",
+        patrol::Event::Alarmed => "alarm",
+        patrol::Event::Calm => "calm",
+    }
 }
 
 /// A drone's ways about the level, for its mind (see [`hydroxus_ai::tactics::patrol::Ways`]):
@@ -1309,7 +1320,7 @@ fn flight(
     to: Vector3<f32>,
     ground: impl FnOnce() -> Vec<Vector3<f32>>,
 ) -> Vec<Vector3<f32>> {
-    hydroxus_ai::navigation::flight::flight(&|a, b, radius| clear(air, a, b, radius), from, to, HOVER, ground)
+    hydroxus_ai::navigation::flight::flight(&crate::AI.flight, &|a, b, radius| clear(air, a, b, radius), from, to, HOVER, ground)
 }
 
 /// Whether the drone whose body is `hull`, its middle at `at`, would run into anyone - the player

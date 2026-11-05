@@ -136,6 +136,7 @@ use hydroxus_ai::{
     },
 };
 use crate::{
+    AI,
     ctf::{self, Side},
     dismember,
     layout::Rng,
@@ -1177,7 +1178,7 @@ impl Inhabitants {
                     break;
                 }
                 let floor = (slot..ABOUT_LEADER.len()).find_map(|s| {
-                    let at = about_leader(feet, heading, s);
+                    let at = about_leader(&AI.group, feet, heading, s);
                     mesh.poly_at(at).filter(|&n| !on_road(n)).map(|n| (s, mesh.closest_point(n, at)))
                 });
                 let Some((s, at)) = floor else {
@@ -1578,7 +1579,7 @@ impl Inhabitants {
     /// Those of `said` near enough the `player`'s feet to be heard (see [`CHASE_HEARD`]).
     fn heard_near(&self, said: Vec<(usize, &'static str)>, player: Vector3<f32>) -> Vec<(usize, &'static str)> {
         said.into_iter()
-            .filter(|&(n, _)| talk::heard(self.droids[n].feet, player))
+            .filter(|&(n, _)| talk::heard(&AI.talk, self.droids[n].feet, player))
             .collect()
     }
 
@@ -1694,7 +1695,7 @@ impl Inhabitants {
         let ahead = flat(ahead).try_normalize(1.0e-3);
         // Out of the player's sight: behind something, or off to the side of the view.
         let hidden = |graph: &Graph, at: Vector3<f32>| {
-            crowd::off_view(player, ahead, at) || !seen(graph, at)
+            crowd::off_view(&AI.crowd, player, ahead, at) || !seen(graph, at)
         };
         // Going about its business, with nothing to do with the player or anyone else.
         let idle = |droid: &Inhabitant| {
@@ -1774,7 +1775,7 @@ impl Inhabitants {
                 return;
             };
             let slots: Vec<usize> = members.iter().skip(1).map(|&m| self.groups.slot(m)).collect();
-            let spot = crowd.spot(mesh, player, &slots, rng, |at| hidden(graph, at));
+            let spot = crowd.spot(mesh, player, &slots, &AI.group, rng, |at| hidden(graph, at));
             let Some((feet, heading, about)) = spot else {
                 continue;
             };
@@ -1823,7 +1824,7 @@ impl Inhabitants {
             let there = walk::floor_under(mesh, droid.feet)
                 .filter(|_| grouped)
                 .map(|floor| (Vector3::new(droid.feet.x, floor, droid.feet.z), between(rng, (-std::f32::consts::PI, std::f32::consts::PI)), Vec::new()));
-            let Some((feet, heading, _)) = there.or_else(|| crowd.spot(mesh, player, &[], rng, |at| hidden(graph, at))) else {
+            let Some((feet, heading, _)) = there.or_else(|| crowd.spot(mesh, player, &[], &AI.group, rng, |at| hidden(graph, at))) else {
                 continue;
             };
             if !self.spawn_one(scene, feet, heading, between(rng, CROWD_REST), character, rng) {
@@ -2260,7 +2261,7 @@ impl Inhabitants {
         // A way to `to`, if there is one at all: none looked for where there is none to be had.
         let reachable = &self.reachable;
         let go_to = |feet: Vector3<f32>, to: Vector3<f32>| match reachable.to_on_mesh(mesh, to) {
-            true => trip::go_to(mesh, feet, to, CHASE_REACH, crossings),
+            true => trip::go_to(&AI.trip, mesh, feet, to, CHASE_REACH, crossings),
             false => (Vec::new(), None),
         };
         let route_to = |feet: Vector3<f32>, to: Vector3<f32>| match reachable.to_on_mesh(mesh, to) {
@@ -2405,7 +2406,7 @@ impl Inhabitants {
             };
             let about = !droid.down && matches!(droid.alert, None | Some(Alert::Caution));
             let held = droid.talking || droid.warned > 0;
-            if group::waits_for(self.droids[leader].feet, droid.feet, about, held) {
+            if group::waits_for(&AI.group, self.droids[leader].feet, droid.feet, about, held) {
                 waits[leader] = true;
             }
         }
@@ -2667,7 +2668,7 @@ impl Inhabitants {
                             .and_then(|(feet, _)| flat(droid.feet - feet).try_normalize(1.0e-3));
                         if let Some(away) = away.filter(|_| droid.replan <= 0.0 || droid.route.is_empty() && !droid.no_way) {
                             droid.replan = REPLAN * 4.0;
-                            let to = chase::flee_to(mesh, droid.feet, away, rng);
+                            let to = chase::flee_to(&AI.chase, mesh, droid.feet, away, rng);
                             droid.route = route_to(droid.feet, to);
                             droid.no_way = droid.route.is_empty();
                         }
@@ -2706,7 +2707,7 @@ impl Inhabitants {
                 if !standing_to_shoot && (droid.replan <= 0.0 || droid.route.is_empty() && !droid.no_way) {
                     droid.replan = REPLAN;
                     let away = flat(player - droid.feet).norm();
-                    let cut_off = chase::cut_off(player, player_going, away, Some(me) == nearest_chaser, &floor_at);
+                    let cut_off = chase::cut_off(&AI.chase, player, player_going, away, Some(me) == nearest_chaser, &floor_at);
                     (droid.route, droid.trip) = go_to(droid.feet, cut_off.unwrap_or(player));
                     droid.no_way = droid.route.is_empty();
                 }
@@ -2814,7 +2815,7 @@ impl Inhabitants {
                         );
                         !hits.iter().any(|hit| !bodies.contains(&hit.collider))
                     };
-                    let to = cover::take_cover(mesh, droid.feet, droid.heading, danger, rng, open);
+                    let to = cover::take_cover(&AI.cover, mesh, droid.feet, droid.heading, danger, rng, open);
                     droid.route = to.map_or_else(Vec::new, |to| route_to(droid.feet, to));
                     droid.cover = Some((danger, true));
                 } else if droid.route.is_empty() {
@@ -2833,7 +2834,7 @@ impl Inhabitants {
                     floor_at(at) && !(roads && mesh.poly_at(at).is_some_and(on_road))
                 };
                 let behind = leader.feet + ahead - forward(leader.heading) * (BESIDE.0 + 0.8 * groups.slot(me) as f32);
-                let slot = [about_leader(leader.feet + ahead, leader.heading, groups.slot(me)), behind]
+                let slot = [about_leader(&AI.group, leader.feet + ahead, leader.heading, groups.slot(me)), behind]
                     .into_iter()
                     .find(|&slot| keeps_off(slot))
                     .unwrap_or(behind);
@@ -2850,7 +2851,7 @@ impl Inhabitants {
                 }
                 catching_up = off > CATCH_UP;
             } else if droid.route.is_empty() {
-                if let Some(aside) = step_aside(droid.feet, others.clone(), floor_at) {
+                if let Some(aside) = step_aside(&AI.steer, droid.feet, others.clone(), floor_at) {
                     droid.route = vec![aside];
                 } else if droid.resting == 0.0 {
                     (droid.route, droid.trip) = match droid.post {
@@ -2893,7 +2894,7 @@ impl Inhabitants {
                                     && droid.side.is_none()
                                     && !droid.sentry
                                     && rng.below(TRAIN_CHANCE) == 0)
-                                    .then(|| take_train(mesh, droid.feet, &self.trains, &taken, CHASE_REACH, rng))
+                                    .then(|| take_train(&AI.ride, mesh, droid.feet, &self.trains, &taken, CHASE_REACH, rng))
                                     .flatten()
                                 {
                                     Some((route, ride)) => {
@@ -2901,7 +2902,7 @@ impl Inhabitants {
                                         droid.ride = Some(ride);
                                         (route, None)
                                     }
-                                    None => (wander(mesh, droid.feet, TRIP, road, &turfs, &self.reachable, rng), None),
+                                    None => (wander(&AI.wander, mesh, droid.feet, TRIP, road, &turfs, &self.reachable, rng), None),
                                 },
                             },
                         },
@@ -2937,7 +2938,7 @@ impl Inhabitants {
             // After the player, it sprints now and then, when it is not to be told.
             let chasing = (droid.alert == Some(Alert::Alert) && droid.windup == 0.0 || running) && !droid.down;
             (droid.sprint_in, droid.sprinting) =
-                sprints(droid.sprint_in, droid.sprinting, chasing, rng, dt);
+                sprints(&AI.pace, droid.sprint_in, droid.sprinting, chasing, rng, dt);
             // A sentry paces itself: its sprints kept for while it has breath to spare, easing
             // off to get some back when it is low - all it has left spent only on a last burst,
             // whoever it is after near enough to catch.
@@ -2947,7 +2948,7 @@ impl Inhabitants {
             };
             let burst = quarry.is_some_and(|at| flat(at - droid.feet).norm() < BURST);
             let saving;
-            (droid.easing, saving) = pace(droid.sentry && !burst, droid.easing, droid.stamina / droid.most);
+            (droid.easing, saving) = pace(&AI.pace, droid.sentry && !burst, droid.easing, droid.stamina / droid.most);
             if saving {
                 droid.sprinting = 0.0;
             }
@@ -3000,7 +3001,7 @@ impl Inhabitants {
                     droid.route.clear();
                     droid.resting = between(rng, if droid.turf.is_some() { TURF_REST } else { rest });
                 } else {
-                    let (way, blocked) = make_way(droid.feet, to.normalize(), others, floor_at);
+                    let (way, blocked) = make_way(&AI.steer, droid.feet, to.normalize(), others, floor_at);
                     droid.heading = way.x.atan2(way.z);
                     if blocked {
                         droid.waiting += dt;
@@ -3133,7 +3134,7 @@ impl Inhabitants {
                 droid.avatar.turn_head(head);
             }
             // Firing when it can, facing them near enough; looking up or down at them.
-            let facing_them = target.filter(|&at| fire::facing(droid.feet, droid.heading, at));
+            let facing_them = target.filter(|&at| fire::facing(&AI.fire, droid.feet, droid.heading, at));
             // The shots its rifle has fired since the last frame, off its burst and out of its
             // magazine; the last in the magazine, it recharges before it fires again.
             let fired = droid.avatar.fired();
@@ -3151,7 +3152,7 @@ impl Inhabitants {
             // while it still faces them.
             let trigger = !droid.down && facing_them.is_some() && (start || droid.burst_left > 0);
             if start {
-                droid.reload = between(rng, fire::every(blind.is_some(), gang));
+                droid.reload = between(rng, fire::every(&AI.fire, &AI.blind, blind.is_some(), gang));
                 if droid.rifle {
                     droid.burst_left = match droid.fire_mode {
                         FireMode::Auto => AUTO_BURST,
@@ -3160,7 +3161,7 @@ impl Inhabitants {
                     };
                 }
                 if let Some(from) = blind {
-                    droid.aimed_at = Some(blind::aim(from, rng));
+                    droid.aimed_at = Some(blind::aim(&AI.blind, from, rng));
                 }
             }
             // Its body is never turned - only the model's root is, by the heading - so the way to
@@ -3211,7 +3212,7 @@ impl Inhabitants {
             // A sentry of the maze's firing blind fires security's bolts.
             let firing_as = droid.side.or(droid.sentry.then_some(Side::Security));
             if let (Some((from, _)), Some(at), Some(side)) = (droid.avatar.shot(), droid.aimed_at, firing_as) {
-                let miss = fire::miss(from, at, droid.rifle, rng);
+                let miss = fire::miss(&AI.fire, from, at, droid.rifle, rng);
                 if let Some(way) = (at + miss - from).try_normalize(1.0e-3) {
                     shots.push((from, way, side, droid.rifle));
                 }
@@ -3341,7 +3342,7 @@ impl Inhabitants {
             let minding = droid.alert.is_none() && !droid.down && !droid.talking;
             let chest = droid.feet + Vector3::new(0.0, CHEST, 0.0);
             let aimed = minding
-                && aim.is_some_and(|(eye, ahead)| pointed_at(eye, ahead, chest))
+                && aim.is_some_and(|(eye, ahead)| pointed_at(&AI.threat, eye, ahead, chest))
                 && Sight::default().could_see(None, droid.feet, droid.heading, player, posture.into(), in_the_dark)
                 && in_sight(droid.feet);
             let aimed = aimed || (minding && crowding[n]);
@@ -3358,7 +3359,7 @@ impl Inhabitants {
             } else {
                 droid.unaimed += dt;
             }
-            if droid.threat >= stage_after(droid.warned, patience) {
+            if droid.threat >= stage_after(&AI.threat, droid.warned, patience) {
                 droid.threat = 0.0;
                 droid.warned += 1;
                 let stage = match droid.warned {
@@ -3406,7 +3407,7 @@ impl Inhabitants {
                 && answers(droid.character)
                 && !droid.down
                 && matches!(droid.alert, None | Some(Alert::Caution))
-                && hears_alarm(from, droid.feet);
+                && hears_alarm(&AI.report, from, droid.feet);
             if !answering {
                 continue;
             }
@@ -3473,7 +3474,7 @@ impl Inhabitants {
                         && clear_between(graph, eyes, feet + Vector3::new(0.0, chest, 0.0), |c| passes(droid, c))
                 };
                 let sees_player = sees(player, PLAYER_CHEST);
-                (sees_player || sees(at, CHEST)).then(|| (m, knows_who(sees_player, droid.feet, player)))
+                (sees_player || sees(at, CHEST)).then(|| (m, knows_who(&AI.witness, sees_player, droid.feet, player)))
             })
             .collect();
         let shot = &mut self.droids[n];
@@ -3587,12 +3588,12 @@ impl Inhabitants {
 
     /// How many points of chance what the `n`th droid thinks of the player puts on a talk check.
     pub fn sway(&self, n: usize) -> i32 {
-        opinion::sway(self.minds.regard(n))
+        opinion::sway(&AI.opinion, self.minds.regard(n))
     }
 
     /// What `members` - two that meet, or a group - would talk about among themselves.
     pub fn topic(&self, members: &[usize]) -> Topic {
-        chat::topic(&self.minds, members)
+        chat::topic(&AI.chat, &self.minds, members)
     }
 
     /// Has `topic`, talked of among `members`, sink in: news told on, an opinion swaying the rest.
@@ -3942,7 +3943,7 @@ impl Inhabitants {
             let chest = droid.feet + Vector3::new(0.0, CHEST, 0.0);
             // A bolt flying by in front of it, or felt going close by: noticed once a bolt.
             let noticed = passes.iter().find(|pass| {
-                pass.closest(chest).is_some_and(|(near, at)| bolts::notices(droid.alert, droid.feet, droid.heading, near, at))
+                pass.closest(chest).is_some_and(|(near, at)| bolts::notices(&AI.bolts, &AI.sight, droid.alert, droid.feet, droid.heading, near, at))
             });
             if let Some(pass) = noticed {
                 // From someone it does not see: it keeps count, and armed, after enough, fires blind.
@@ -3952,10 +3953,10 @@ impl Inhabitants {
                 };
                 let armed = droid.side.is_some() || (droid.sentry && droid.alert.is_some() && droid.hunts_player());
                 if !sees_them && armed {
-                    droid.blind.unseen_bolt(pass.fired_at);
+                    droid.blind.unseen_bolt(&AI.blind, pass.fired_at);
                 }
             }
-            let near = passes.iter().find(|pass| bolts::felt(pass.nearest(chest)));
+            let near = passes.iter().find(|pass| bolts::felt(&AI.bolts, pass.nearest(chest)));
             if near.is_some() {
                 missed.push(n);
             }
@@ -4177,7 +4178,7 @@ impl Inhabitants {
         ahead: Vector3<f32>,
         in_sight: impl Fn(Vector3<f32>) -> bool,
     ) -> Option<usize> {
-        within_talking(self.droids.iter().map(|droid| droid.feet), feet, ahead)
+        within_talking(&AI.talk, self.droids.iter().map(|droid| droid.feet), feet, ahead)
             .into_iter()
             .filter(|&i| self.droids[i].alert.is_none() && !self.droids[i].down)
             // Being questioned by a sentry, or questioning a witness, it is busy.
