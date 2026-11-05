@@ -93,7 +93,7 @@
 //! (see [`Inhabitants::raise_alarm`]) for those near it that would. Looking away only holds the
 //! next stage off; with the pistol off it for [`CALM`] seconds, it calms down again.
 
-pub use hydroxus_ai::alert::{Alert, CAUTION, EVASION};
+pub use hydroxus_ai::alert::Alert;
 pub use hydroxus_ai::tactics::threat::Threat;
 pub(crate) use hydroxus_ai::navigation::route::between;
 use hydroxus_ai::navigation::walk::route_to;
@@ -102,7 +102,7 @@ use hydroxus_ai::{
     flat, forward, heading_of,
     navigation::{
         reach::Reach,
-        ride::{take_train, Rides, Riding, Ride, TRAIN_CHANCE},
+        ride::{take_train, Rides, Riding, Ride},
         navmesh::{NavMesh, Poly},
         walk::{self, plan, spot_near, spot_on_any_floor_near},
         steer::{make_way, step_aside},
@@ -118,12 +118,11 @@ use hydroxus_ai::{
     tactics::{
         blind::{self, BlindFire},
         chase, cover,
-        cover::COVER_NEAR,
-        fire::{self, AUTO_BURST, BURST_SHOTS, ENGAGE, FIRE_RANGE, GANG_ENGAGE},
+        fire,
         join::{could_see_other, joiners, Watch},
         pace::{pace, sprints},
         search::SearchMap,
-        threat::{pointed_at, stage_after, CALM},
+        threat::{pointed_at, stage_after},
     },
     social::{
         crowd::{self, Crowd, CROWD_AT_ONCE, CROWD_BACK, CROWD_EVERY, CROWD_GONE, CROWD_REST},
@@ -1009,7 +1008,7 @@ impl Inhabitant {
                 self.route.clear();
                 self.looking = None;
                 self.resting = REST.0;
-                self.search_left = CAUTION;
+                self.search_left = AI.alert.caution;
             }
         }
     }
@@ -1019,7 +1018,7 @@ impl Inhabitant {
         self.route.clear();
         self.looking = None;
         self.searched = 0;
-        self.search_left = EVASION;
+        self.search_left = AI.alert.evasion;
     }
 }
 
@@ -1042,6 +1041,8 @@ impl Inhabitants {
         }
         self.groups.clear();
         self.minds.clear();
+        self.minds.tuning = AI.rumour;
+        self.minds.opinion = AI.opinion;
         self.populated = false;
         self.reachable = Reach::default();
         self.chase = None;
@@ -1093,7 +1094,7 @@ impl Inhabitants {
         // the player from the start.
         self.chase_in = CHASE_FIRST;
         self.shootout_in = SHOOTOUT_FIRST;
-        self.crowd = crowd.then(|| Crowd::new((0..mesh.len() as Poly).map(|n| costs.contains_key(&n) && !on_road(n)).collect()));
+        self.crowd = crowd.then(|| Crowd::with((0..mesh.len() as Poly).map(|n| costs.contains_key(&n) && !on_road(n)).collect(), AI.crowd));
         let about = |n: Poly| !crowd || flat(mesh.closest_point(n, player) - player).norm() <= CROWD_BACK.1;
         // Where they can be put down, away from the player and near them, in one look over a
         // navmesh that can be a whole city's.
@@ -1491,7 +1492,7 @@ impl Inhabitants {
                 && droid.warned == 0
                 && droid.trip.is_none()
                 && !droid.aboard()
-                && flat(droid.feet - shootout.site).norm() < COVER_NEAR;
+                && flat(droid.feet - shootout.site).norm() < AI.cover.cover_near;
             if bystander {
                 droid.cover = Some((shootout.site, false));
                 droid.route.clear();
@@ -1999,7 +2000,7 @@ impl Inhabitants {
                 droid.post = Some(bases.post(side, n));
                 if !side.is_players() {
                     droid.alert = Some(Alert::Caution);
-                    droid.search_left = CAUTION;
+                    droid.search_left = AI.alert.caution;
                 }
             }
         }
@@ -2036,7 +2037,7 @@ impl Inhabitants {
             droid.side = Some(ctf::PLAYERS.other());
             droid.post = Some(post);
             droid.alert = Some(Alert::Caution);
-            droid.search_left = CAUTION;
+            droid.search_left = AI.alert.caution;
         }
         Log::info(format!("Heist: {} guards", self.droids.len()));
     }
@@ -2135,7 +2136,7 @@ impl Inhabitants {
         let droid = self.droids.last_mut().expect("just put down");
         droid.side = Some(side);
         droid.alert = Some(Alert::Caution);
-        droid.search_left = CAUTION;
+        droid.search_left = AI.alert.caution;
         true
     }
 
@@ -2359,7 +2360,7 @@ impl Inhabitants {
             .droids
             .iter()
             .find(|droid| droid.alert == Some(Alert::Alert) && droid.sees_player && !droid.down);
-        let mut search = self.search.take().unwrap_or_default();
+        let mut search = self.search.take().unwrap_or_else(|| SearchMap::with(AI.search));
         if let Some(seeing) = seeing {
             self.last_sight = Some((seeing.lost_at, seeing.lost_going));
             self.search_from = None;
@@ -2514,12 +2515,12 @@ impl Inhabitants {
                 Some(_) if sees_foe => fighting.and_then(foe_place).map(|(_, middle)| middle),
                 _ => None,
             }
-            .filter(|&at| flat(at - droid.feet).norm() < FIRE_RANGE);
+            .filter(|&at| flat(at - droid.feet).norm() < AI.fire.fire_range);
             // Firing blind, at where the bolts came from, give or take a good deal.
             let blind = droid.blind.at().filter(|_| target.is_none());
             let target = target.or(blind);
             let gang = droid.side == Some(Side::Gang);
-            let engage = if gang { GANG_ENGAGE } else { ENGAGE };
+            let engage = if gang { AI.fire.gang_engage } else { AI.fire.engage };
             let standing_to_shoot = blind.is_some() || target.is_some_and(|at| flat(at - droid.feet).norm() < engage);
             if target.is_some() {
                 droid.armed_left = ARMED_FOR;
@@ -2546,7 +2547,7 @@ impl Inhabitants {
                 // One guarding its side's end never calms down.
                 let next = match next {
                     None if droid.side.is_some() => {
-                        droid.search_left = CAUTION;
+                        droid.search_left = AI.alert.caution;
                         Some(Alert::Caution)
                     }
                     next => next,
@@ -2893,7 +2894,7 @@ impl Inhabitants {
                                     && self.groupings.get(droid.character).is_none_or(|g| g.groups_of < 2)
                                     && droid.side.is_none()
                                     && !droid.sentry
-                                    && rng.below(TRAIN_CHANCE) == 0)
+                                    && rng.below(AI.ride.train_chance) == 0)
                                     .then(|| take_train(&AI.ride, mesh, droid.feet, &self.trains, &taken, CHASE_REACH, rng))
                                     .flatten()
                                 {
@@ -3155,8 +3156,8 @@ impl Inhabitants {
                 droid.reload = between(rng, fire::every(&AI.fire, &AI.blind, blind.is_some(), gang));
                 if droid.rifle {
                     droid.burst_left = match droid.fire_mode {
-                        FireMode::Auto => AUTO_BURST,
-                        FireMode::Burst => BURST_SHOTS,
+                        FireMode::Auto => AI.fire.auto_burst,
+                        FireMode::Burst => AI.fire.burst_shots,
                         FireMode::Semi => 1,
                     };
                 }
@@ -3371,7 +3372,7 @@ impl Inhabitants {
                     droid.warned = 0;
                 }
                 stages.push((n, stage));
-            } else if droid.unaimed >= CALM && (droid.warned > 0 || droid.threat > 0.0) {
+            } else if droid.unaimed >= AI.threat.calm && (droid.warned > 0 || droid.threat > 0.0) {
                 droid.threat = 0.0;
                 if droid.warned > 0 {
                     droid.warned = 0;
@@ -3608,7 +3609,7 @@ impl Inhabitants {
     /// `knows` - go and tell a sentry of it (see [`Inhabitants::report`]).
     pub fn witness(&mut self, n: usize, at: Vector3<f32>, knows: bool) {
         if let Some(droid) = self.droids.get_mut(n).filter(|droid| !droid.down) {
-            droid.witness = Some(Witness::new(at, knows));
+            droid.witness = Some(Witness::with(at, knows, AI.report));
             droid.warned = 0;
             droid.threat = 0.0;
             droid.route.clear();

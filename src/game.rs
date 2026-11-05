@@ -1498,7 +1498,7 @@ impl MazeGame {
             Log::err(format!("Could not load {}; no traffic", race::BIKE_MODEL));
             return;
         };
-        let mut network = Network::from_roads(plan.roads());
+        let mut network = Network::from_roads_with(plan.roads(), crate::AI.traffic);
         let skip = self.player.collider();
         // Made (and seeded, as MAZE_SEED says) first.
         self.rng();
@@ -1510,7 +1510,8 @@ impl MazeGame {
         let graph = &scene.graph;
         let mut cast = |from: Vector3<f32>, way: Vector3<f32>, reach: f32| race::first_hit(graph, from, way, reach, skip).map(|hit| hit.point);
         let started = std::time::Instant::now();
-        network.survey(&mut cast, &mut || pick() * traffic::CYCLE);
+        let cycle = network.tuning.cycle();
+        network.survey(&mut cast, &mut || pick() * cycle);
         Log::info(format!(
             "Traffic: {} junctions, {} of {} lanes drivable, looked over in {:.1} s",
             network.junctions.len(),

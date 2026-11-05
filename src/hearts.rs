@@ -27,7 +27,6 @@ use crate::{
     layout::Rng,
 };
 use hydroxus_ai::navigation::{
-    grid::MAX_CLIMB,
     navmesh::{NavMesh, Poly},
     walk,
 };
@@ -141,7 +140,7 @@ pub fn spots(mesh: &NavMesh, start: Vector3<f32>, count: usize, rng: &mut Rng) -
     let open = |at: Vector3<f32>| {
         (0..8).all(|k| {
             let angle = k as f32 * std::f32::consts::FRAC_PI_4;
-            walk::floor_at(mesh, at + Vector3::new(angle.sin(), 0.0, angle.cos()) * ROOM, MAX_CLIMB)
+            walk::floor_at(mesh, at + Vector3::new(angle.sin(), 0.0, angle.cos()) * ROOM, crate::AI.grid.max_climb)
         })
     };
     // Somewhere picked at random, and how far it is to walk there from the start.

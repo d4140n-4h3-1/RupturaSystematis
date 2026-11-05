@@ -28,7 +28,7 @@
 //! goes in only while nothing is crossing it the other way.
 
 use crate::race::Bike;
-pub use hydroxus_ai::navigation::traffic::{Light, Network, CYCLE};
+pub use hydroxus_ai::navigation::traffic::{Light, Network};
 use hydroxus_ai::navigation::traffic::{signal_place, way};
 use fyrox::{
     core::{
@@ -87,7 +87,9 @@ impl Traffic {
     /// Traffic on `network`, `count` bikes put down at random on its lanes - `pick` giving numbers
     /// from 0 to 1 - away from `player`.
     pub fn new(network: Network, count: usize, player: Vector3<f32>, pick: &mut dyn FnMut() -> f32) -> Self {
-        Self { drive: hydroxus_ai::navigation::traffic::Traffic::new(network, count, player, pick), ..Default::default() }
+        let mut drive = hydroxus_ai::navigation::traffic::Traffic::new(network, count, player, pick);
+        drive.drive = crate::AI.drive;
+        Self { drive, ..Default::default() }
     }
 
     /// The bikes and the stop lights put into `scene`: each bike from `bike`, ridden by a droid

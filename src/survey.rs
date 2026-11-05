@@ -12,7 +12,6 @@
 
 use crate::layout::WalkGrid;
 use hydroxus_ai::navigation::navmesh::NavMesh;
-use hydroxus_ai::navigation::grid::MAX_CLIMB;
 use std::collections::VecDeque;
 use fyrox::{
     core::{
@@ -116,7 +115,7 @@ pub fn survey(
     }
     let looked = crate::platform::nanos_now();
     let storeys = floors.iter().map(Vec::len).max().unwrap_or(1).clamp(1, MOST_STOREYS);
-    let mut grid = WalkGrid::with_storeys(width, depth, storeys, CELL_SIZE);
+    let mut grid = WalkGrid::with_storeys(width, depth, storeys, CELL_SIZE).with_tuning(crate::AI.grid);
     for (i, cell) in floors.iter().enumerate() {
         for (storey, &floor) in cell.iter().enumerate().take(storeys) {
             let (x, row) = grid.on_storey((i % width, i / width), storey);
@@ -160,7 +159,7 @@ pub fn survey(
             for (storey, &floor) in floors[nz * width + nx].iter().enumerate().take(storeys) {
                 let (cx, crow) = grid.on_storey((nx, nz), storey);
                 if !grid.is_walkable(cx, crow)
-                    && (floor - here).abs() <= MAX_CLIMB
+                    && (floor - here).abs() <= crate::AI.grid.max_climb
                     && !tried[crow * width + cx]
                     && ((here_first && first((nx, nz), storey))
                         || passage(caster, grid.on_floor(origin, cell), grid.on_floor(origin, (cx, crow))))

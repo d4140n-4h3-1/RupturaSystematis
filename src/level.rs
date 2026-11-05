@@ -342,7 +342,8 @@ impl Level {
         self.navmesh = surveyed.map(|(grid, origin)| {
             let started = std::time::Instant::now();
             let roads = roads.map(|plan| plan.on(&grid, origin));
-            let mut mesh = NavMesh::build(&grid, origin, |x, row| area(roads.as_ref(), x, row));
+            let mut mesh = NavMesh::build_with(&grid, origin, |x, row| area(roads.as_ref(), x, row), crate::AI.navmesh);
+            mesh.walk = crate::AI.walk;
             // Doors, shafts and barriers shut: made floor first, so that what opens later can.
             self.vaults.keep_out(&mut mesh);
             self.lifts.keep_out(&mut mesh);
