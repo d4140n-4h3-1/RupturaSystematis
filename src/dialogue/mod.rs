@@ -258,6 +258,9 @@ pub struct Character {
     /// round it is theirs (see [`Turf`]): none, without.
     #[serde(default)]
     pub turf: Option<Turf>,
+    /// How many of its kind wear an earpiece, a radio, from 0 to 1: none, without.
+    #[serde(default)]
+    pub earpiece: f32,
     /// The faction it is of, by its key in the script's `factions`: none, without - its kind
     /// minds what is done to anyone as done to its own, and starts each droid of it afresh.
     #[serde(default)]

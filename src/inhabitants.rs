@@ -160,14 +160,14 @@ use crate::{
 use std::collections::HashMap;
 use fyrox::{
     core::{
-        algebra::{Point3, Vector3},
+        algebra::{Matrix3, Matrix4, Point3, UnitQuaternion, Vector3},
         color::Color,
         log::Log,
         pool::Handle,
     },
     graph::SceneGraph,
     material::MaterialResource,
-    resource::model::ModelResource,
+    resource::model::{ModelResource, ModelResourceExtension},
     scene::{
         base::BaseBuilder,
         collider::{Collider, ColliderBuilder, ColliderShape},
@@ -182,6 +182,21 @@ use fyrox::{
 
 /// The droid in the colours any kind of droid takes on while it is after the player.
 pub const HOSTILE_MODEL: &str = "data/droid_hostile.glb";
+/// The earpiece some droids wear, a radio (see `~/Documents/blender/equipment/build_earpiece.py`).
+pub const EARPIECE_MODEL: &str = "data/earpiece.glb";
+/// Where the earpiece goes on a droid's head, from its eyes - which ride the head's bone - in the
+/// model's own axes, row by row: as `export_earpiece.py` prints it, run on the droid it was made
+/// for. A matrix, as the eyes are scaled unevenly: times the eyes' own transform under the head's
+/// bone, it is the earpiece's there.
+#[rustfmt::skip]
+const EARPIECE_FROM_EYES: [[f32; 4]; 4] = [
+    [49.596668, 1e-06, -6.336904, 5.209994],
+    [12.671174, -2.05162, 99.172714, -11.888206],
+    [-0.130008, -49.989471, -1.017537, 0.96699],
+    [0.0, 0.0, 0.0, 1.0],
+];
+/// The node of a droid's model its eyes are, the earpiece's anchor.
+const EYES: &str = "eyes";
 /// How many droids live in a maze, unless the conversations or MAZE_INHABITANTS say otherwise.
 const COUNT: usize = 6;
 /// A pair walking about together (see [`BESIDE`]): how far off where it keeps that the one
@@ -652,6 +667,8 @@ pub struct Livery {
     hostile: Vec<(MaterialResource, MaterialResource)>,
     /// The colour its eyes are while it is hostile, in place of the usual red.
     hostile_eyes: Option<Color>,
+    /// The earpiece some of its kind wear, and how many of them, from 0 to 1.
+    earpiece: Option<(ModelResource, f32)>,
 }
 
 impl Livery {
@@ -659,7 +676,14 @@ impl Livery {
     /// while it is after the player - the same droid in other colours - or, without, like itself.
     pub fn new(model: ModelResource, hostile: Option<&ModelResource>) -> Self {
         let hostile = hostile.map_or_else(Vec::new, |hostile| changed_materials(&model, hostile));
-        Self { model, hostile, hostile_eyes: None }
+        Self { model, hostile, hostile_eyes: None, earpiece: None }
+    }
+
+    /// The same kind of droid, the share `share` of them wearing an earpiece made from `model`,
+    /// loaded: none, without.
+    pub fn with_earpiece(mut self, model: Option<ModelResource>, share: f32) -> Self {
+        self.earpiece = model.filter(|_| share > 0.0).map(|model| (model, share.min(1.0)));
+        self
     }
 
     /// The same kind of droid, its eyes `colour` while it is hostile rather than the usual red:
@@ -687,6 +711,47 @@ pub struct Grouping {
 impl Default for Grouping {
     fn default() -> Self {
         Self { in_pairs: 0.0, groups_of: 0, share: 1.0, turf: None, faction: None }
+    }
+}
+
+/// Hangs an earpiece made from `model` from the head of the droid whose model is under `root`:
+/// from the bone its eyes ride, where [`EARPIECE_FROM_EYES`] says from them. So it goes where the
+/// head goes - and with it, blown apart or broken off.
+fn put_on_earpiece(scene: &mut Scene, root: Handle<Node>, model: &ModelResource) -> Option<Handle<Node>> {
+    let (eyes, _) = scene.graph.find_by_name(root, EYES)?;
+    let head = scene.graph[eyes].parent();
+    let from_eyes = Matrix4::from_fn(|r, c| EARPIECE_FROM_EYES[r][c]);
+    let place = scene.graph[eyes].local_transform().matrix() * from_eyes;
+    let basis = place.fixed_view::<3, 3>(0, 0).into_owned();
+    let scale = Vector3::new(basis.column(0).norm(), basis.column(1).norm(), basis.column(2).norm());
+    let turn = Matrix3::from_columns(&[basis.column(0) / scale.x, basis.column(1) / scale.y, basis.column(2) / scale.z]);
+    let earpiece = model.instantiate(scene);
+    scene.graph[earpiece]
+        .local_transform_mut()
+        .set_position(place.fixed_view::<3, 1>(0, 3).into_owned())
+        .set_rotation(UnitQuaternion::from_matrix(&turn))
+        .set_scale(scale);
+    scene.graph.link_nodes(earpiece, head);
+    Some(earpiece)
+}
+
+/// The earpiece's mesh, all of it: its surfaces the yellow body, the dark parts and the lights, in
+/// that order, as `build_earpiece.py` gives it its materials.
+const EARPIECE_MESH: &str = "earpiece";
+
+/// Has every earpiece made from `model` glow its yellow, `strength` as bright as the yellow itself
+/// - on a night map, where the droids glow too - or not at all, with 0. Its dark parts stay dark,
+/// and its lights glow as they always do. The model's own material, shared by every earpiece.
+pub fn set_earpiece_glow(model: &ModelResource, strength: f32) {
+    let model = model.data_ref();
+    let Some((_, node)) = model.get_scene().graph.find_by_name_from_root(EARPIECE_MESH) else {
+        return;
+    };
+    if let Some(yellow) = node.cast::<Mesh>().and_then(|mesh| mesh.surfaces().first()) {
+        yellow.material().data_ref().set_property(
+            crate::fixtures::EMISSION_STRENGTH,
+            fyrox::material::MaterialProperty::Vector3(Vector3::repeat(strength)),
+        );
     }
 }
 
@@ -1955,6 +2020,12 @@ impl Inhabitants {
         // number, and drawing nothing more from `rng`, so that whatever else is picked with it is
         // as it was.
         let code = 10 + rng.below(90) as u32;
+        // Some of its kind wear an earpiece: which, by its number, as random as that.
+        if let Some((earpiece, share)) = &self.liveries[character].earpiece {
+            if ties::nerve(code ^ 0xEA2) < *share && put_on_earpiece(scene, avatar.root(), earpiece).is_some() && crate::platform::var("MAZE_DEBUG").is_some() {
+                Log::info(format!("Earpiece: on a droid of kind {character}, code {code}"));
+            }
+        }
         self.groups.add();
         self.minds.add_in(self.groupings.get(character).and_then(|g| g.faction));
         self.droids.push(Inhabitant {

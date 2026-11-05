@@ -52,7 +52,7 @@ use crate::{
     loading::{LoadingScreen, Step},
     train::{Train, LINES, TRAIN_MODEL},
     locker::LOCKER_MODEL,
-    inhabitants::{Alert, Grouping, Inhabitants, Livery, News, Rival, Threat, Uneasy, HOSTILE_MODEL},
+    inhabitants::{Alert, Grouping, Inhabitants, Livery, News, Rival, Threat, Uneasy, EARPIECE_MODEL, HOSTILE_MODEL, set_earpiece_glow},
     layout::{self, Rng},
     level::Level,
     menu::{Choice, Game, MainMenu, PauseMenu, Start},
@@ -260,6 +260,9 @@ const EXIT_RADIUS: f32 = 1.5;
 /// How brightly the droids glow their own colours on a night map, as a share of the colour
 /// itself: enough to be seen across the dark, not so much as to lose their shape.
 const DROID_GLOW: f32 = 0.25;
+/// How brightly the earpieces some droids wear glow their yellow on a night map: more than the
+/// droids, as they are small and are there to be seen.
+const EARPIECE_GLOW: f32 = 0.8;
 /// In capture the flag, how close to the middle of the player's own flag counts as having
 /// brought the enemy's home - from beside its plinth - and how high over a flag the marker shows where to go.
 const HOME_REACH: f32 = 2.5;
@@ -560,6 +563,10 @@ pub struct MazeGame {
     #[visit(skip)]
     #[reflect(hidden)]
     hostile_model: Option<ModelResource>,
+    /// The earpiece some kinds of droid wear, loaded only if any do.
+    #[visit(skip)]
+    #[reflect(hidden)]
+    earpiece_model: Option<ModelResource>,
     /// Droids going about the maze by themselves.
     #[visit(skip)]
     #[reflect(hidden)]
@@ -2152,11 +2159,13 @@ impl MazeGame {
             .iter()
             .flatten()
             .chain(&self.hostile_model)
+            .chain(&self.earpiece_model)
             .all(settled)
         {
             return None;
         }
         let hostile = self.hostile_model.as_ref().filter(|model| model.is_ok());
+        let earpiece = self.earpiece_model.as_ref().filter(|model| model.is_ok());
         let characters = self
             .script
             .as_ref()
@@ -2178,7 +2187,9 @@ impl MazeGame {
                     let hostile_eyes = character
                         .and_then(|c| c.hostile_eyes)
                         .map(|[r, g, b]| Color::opaque(r, g, b));
-                    Livery::new(model.clone(), hostile.filter(|_| recoloured)).with_hostile_eyes(hostile_eyes)
+                    Livery::new(model.clone(), hostile.filter(|_| recoloured))
+                        .with_hostile_eyes(hostile_eyes)
+                        .with_earpiece(earpiece.cloned(), character.map_or(0.0, |c| c.earpiece))
                 })
                 .collect(),
         )
@@ -2224,6 +2235,9 @@ impl MazeGame {
             .as_ref()
             .is_some_and(|script| script.characters.iter().any(|c| c.hostile_colours));
         self.hostile_model = recoloured.then(|| resources.request::<Model>(HOSTILE_MODEL));
+        // Only loaded if some kind wears one.
+        let earpieces = self.script.as_ref().is_some_and(|script| script.characters.iter().any(|c| c.earpiece > 0.0));
+        self.earpiece_model = earpieces.then(|| resources.request::<Model>(EARPIECE_MODEL));
     }
 
     /// Has the droids glow their own colours all over at night, the player's among them, or not
@@ -2233,6 +2247,9 @@ impl MazeGame {
         let models = self.kind_models.iter().flatten().chain(&self.hostile_model).chain(&self.droid_model);
         for model in models.filter(|model| model.is_ok()) {
             set_body_glow(model, glow);
+        }
+        if let Some(earpiece) = self.earpiece_model.as_ref().filter(|model| model.is_ok()) {
+            set_earpiece_glow(earpiece, if self.night() { EARPIECE_GLOW } else { 0.0 });
         }
     }
 

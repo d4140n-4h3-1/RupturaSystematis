@@ -11,6 +11,7 @@
     {
       "name": "Defendator",
       "faction": "security",
+      "earpiece": 0.3,
       "model": "data/droid_security.glb",
       "start": "hello",
       "in_pairs": 0.5,
