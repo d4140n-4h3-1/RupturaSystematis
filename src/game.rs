@@ -45,7 +45,7 @@ use crate::{
     loading::{LoadingScreen, Step},
     train::{Train, LINES, TRAIN_MODEL},
     locker::LOCKER_MODEL,
-    inhabitants::{Alert, Grouping, Inhabitants, Livery, News, Rival, Threat, HOSTILE_MODEL},
+    inhabitants::{Alert, Grouping, Inhabitants, Livery, News, Rival, Threat, Uneasy, HOSTILE_MODEL},
     layout::{self, Rng},
     level::Level,
     menu::{Choice, Game, MainMenu, PauseMenu, Start},
@@ -177,7 +177,7 @@ fn gossip_lines(
                 Deed::Shooting => "shooting",
                 Deed::Robbing => "robbing",
                 Deed::Threatening => "threatening",
-                Deed::Bribing | Deed::Persuading => return None,
+                Deed::Bribing | Deed::Persuading | Deed::Brandishing => return None,
             };
             let telling = gossip.news.get(deed)?;
             let told = one(if rumour.saw { &telling.saw } else { &telling.heard })?;
@@ -2361,7 +2361,7 @@ impl MazeGame {
         let in_the_dark = self.lights_off && !self.player.flashlight_on();
         let posture = self.player.posture();
         self.inhabitants
-            .look_for_player(player, posture, in_the_dark, |there| self.player.can_see(graph, there), ctx.dt);
+            .look_for_player(player, posture, in_the_dark, self.player.armed(), |there| self.player.can_see(graph, there), ctx.dt);
         // A sentry's eyes are no flashlight: with the lights off, the others see it only near.
         let script = self.script.as_ref();
         self.inhabitants
@@ -3071,6 +3071,36 @@ impl MazeGame {
         for (n, threat) in stages {
             self.on_threat(ctx, n, threat);
         }
+        // A weapon only drawn, near those that mind one pointed at them: uneasy, watching, and
+        // backing away from it too near.
+        let Some(script) = self.script.as_ref() else {
+            return;
+        };
+        let graph = &ctx.scenes[self.scene].graph;
+        let player = &self.player;
+        let watched = (player.feet(graph), player.posture(), self.lights_off && !player.flashlight_on());
+        let minds = |character: usize| script.characters.get(character).is_some_and(|c| c.threatened.is_some());
+        let uneasy = self.inhabitants.feel_drawn(player.armed(), watched, |there| player.can_see(graph, there), minds, ctx.dt);
+        for (n, uneasy) in uneasy {
+            self.on_unease(ctx, n, uneasy);
+        }
+    }
+
+    /// The `n`th droid has gone on to `uneasy` with the player's weapon drawn near it: noticing it,
+    /// it says so and thinks the less of them; its eyes show how it takes it.
+    fn on_unease(&mut self, ctx: &mut PluginContext, n: usize, uneasy: Uneasy) {
+        let mood = match uneasy {
+            Uneasy::Noticed => {
+                let player = self.player.feet(&ctx.scenes[self.scene].graph);
+                self.inhabitants.saw(&[n], Deed::Brandishing, player);
+                self.bark(n, "warned", Mood::Warning);
+                Some(Mood::Warning)
+            }
+            Uneasy::Afraid => Some(Mood::Agitated),
+            Uneasy::Wary => Some(Mood::Warning),
+            Uneasy::Settled => None,
+        };
+        self.inhabitants.set_eyes(n, mood.and_then(screen::eyes));
     }
 
     /// Has every droid near enough that can see the player see them do `deed`, where they are:
@@ -5071,6 +5101,7 @@ impl MazeGame {
             collider: self.player.collider(),
             posture: self.player.posture(),
             in_the_dark: self.lights_off && !self.player.flashlight_on(),
+            armed: self.player.armed(),
         };
         // In capture the flag, whoever of the other side each drone on a side sees, nearest
         // first - the player among them for blue's; or, seeing none, the one it went after last.
@@ -5086,6 +5117,7 @@ impl MazeGame {
                     collider,
                     posture: Posture::Standing,
                     in_the_dark: false,
+                    armed: true,
                 });
                 let drones = self.drones.iter().filter(|d| d.side() == Some(side.other())).filter_map(Drone::as_target);
                 let player = (!side.is_players()).then_some(player);
@@ -6124,6 +6156,7 @@ const NOBODY: Target = Target {
     collider: Handle::NONE,
     posture: Posture::Standing,
     in_the_dark: true,
+    armed: false,
 };
 
 /// What a bolt from `from` along `way` hits first within `reach`, but for anything `passed`, if

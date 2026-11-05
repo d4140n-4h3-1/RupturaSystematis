@@ -398,8 +398,8 @@ fn flat(vector: Vector3<f32>) -> Vector3<f32> {
 pub use hydroxus_ai::tactics::patrol::State;
 
 /// Where the player is, for the drone to look for them: their feet and the middle of their body,
-/// what their body is to anything that hits it, how they hold themselves, and whether it is too
-/// dark to see them far.
+/// what their body is to anything that hits it, how they hold themselves, whether it is too
+/// dark to see them far, and whether they have a weapon drawn, which catches the eye.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Target {
     pub feet: Vector3<f32>,
@@ -407,6 +407,7 @@ pub struct Target {
     pub collider: Handle<Collider>,
     pub posture: Posture,
     pub in_the_dark: bool,
+    pub armed: bool,
 }
 
 /// What the drone did this frame: what it has something to say about, as [`DRONE_LINES`] names it; and
@@ -648,6 +649,7 @@ impl Drone {
             collider: self.collider,
             posture: Posture::Standing,
             in_the_dark: false,
+            armed: true,
         })
     }
 
@@ -1108,7 +1110,8 @@ impl Drone {
                 true
             }
             state => {
-                let eagerness = if matches!(state, State::Search { .. }) { crate::AI.detection.searching } else { 1.0 };
+                let searching = if matches!(state, State::Search { .. }) { crate::AI.detection.searching } else { 1.0 };
+                let eagerness = searching * if player.armed { crate::AI.detection.armed } else { 1.0 };
                 self.detection.step(&crate::AI.detection, visible, eagerness, dt);
                 self.detection.spotted() && visible > 0.0
             }
