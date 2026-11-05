@@ -24,6 +24,10 @@
 //! The game is this library, which `src/main.rs` runs; the examples (see `examples/`) use it too,
 //! such as the droids the player and the maze's inhabitants are made from ([`player::avatar`]).
 
+/// The AI's tuning: how far and how long the droids, drones and traffic do what they do (see
+/// [`hydroxus_ai::Tuning`]) - hydroxus-ai's own numbers, which are Maze's.
+pub const AI: hydroxus_ai::Tuning = hydroxus_ai::Tuning::DEFAULT;
+
 mod alarm;
 mod chips;
 mod computer;

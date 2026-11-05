@@ -156,7 +156,7 @@ impl Traffic {
             .corners
             .iter()
             .enumerate()
-            .map(|(c, &(j, w))| ((signal_place(self.drive.network.junctions[j].at, w).0 - near).norm(), c))
+            .map(|(c, &(j, w))| ((signal_place(&self.drive.network.tuning, self.drive.network.junctions[j].at, w).0 - near).norm(), c))
             .filter(|&(d, _)| d < SHOWN)
             .collect();
         wanted.sort_by(|a, b| a.0.total_cmp(&b.0));
@@ -183,7 +183,7 @@ impl Traffic {
             };
             let (j, w) = self.corners[corner];
             let at = self.drive.network.junctions[j].at;
-            let (mast, _) = signal_place(at, w);
+            let (mast, _) = signal_place(&self.drive.network.tuning, at, w);
             // Its heads (+z) face the traffic coming in, back along the street (way `w`).
             let back = way(w);
             let root = self.signals[free].0;

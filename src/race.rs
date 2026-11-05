@@ -1048,7 +1048,7 @@ impl Race {
                 (true, true) => Controls::default(),
                 (true, false) => {
                     let others: Vec<Vector3<f32>> = bikes.iter().map(|&(at, _)| at).collect();
-                    let line = racer.line + drive::swerve(&vehicle(&racer.handling), n, &others);
+                    let line = racer.line + drive::swerve(&crate::AI.drive, &vehicle(&racer.handling), n, &others);
                     autopilot(&racer.handling, &self.track, &racer.progress, line, racer.pace)
                 }
             };
