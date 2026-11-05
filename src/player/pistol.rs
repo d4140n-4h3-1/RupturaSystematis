@@ -569,7 +569,7 @@ impl Player {
             } else {
                 self.bolts.fire(graph, muzzle, direction);
             }
-            self.make_noise(muzzle, noise::SHOT_NOISE);
+            self.make_noise(muzzle, noise::SHOT_NOISE, true);
         }
         // Each bolt on for another `dt`: what it hits, the droids hear, and the game is told.
         let me = self.collider;
@@ -579,7 +579,7 @@ impl Player {
         for strike in &strikes {
             // Where the bolt stops, its tip against what it hit.
             let at = strike.at - strike.way * (0.5 * BOLT_LENGTH);
-            self.make_noise(at, noise::IMPACT_NOISE);
+            self.make_noise(at, noise::IMPACT_NOISE, true);
         }
         self.bolts.struck.extend(strikes);
     }

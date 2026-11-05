@@ -3110,8 +3110,8 @@ impl MazeGame {
         // What the player made heard since the last time, for the droids to hear.
         let noises = self.player.noises();
         if let Some(mesh) = &self.level.navmesh {
-            for (at, loudness) in noises {
-                self.inhabitants.hear(mesh, at, loudness);
+            for (at, loudness, sudden) in noises {
+                self.inhabitants.hear(mesh, at, loudness, sudden);
             }
         }
         let News {
@@ -3159,7 +3159,7 @@ impl MazeGame {
                 }
                 // Heard, as the player's shots are, by those searching or wary.
                 if let Some(mesh) = &self.level.navmesh {
-                    self.inhabitants.hear(mesh, from, SHOT_NOISE);
+                    self.inhabitants.hear(mesh, from, SHOT_NOISE, true);
                 }
             }
         }
@@ -5091,7 +5091,7 @@ impl MazeGame {
         // Its shot heard, as the player's are, by the droids searching or wary: they run to where
         // it was fired from and search from there.
         for from in fired {
-            self.inhabitants.hear(mesh, from, SHOT_NOISE);
+            self.inhabitants.hear(mesh, from, SHOT_NOISE, true);
         }
         for &(n, said) in &says {
             Log::info(format!("Drone {n}: {said}"));
