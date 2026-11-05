@@ -3307,7 +3307,10 @@ impl MazeGame {
             alarmed,
             engaged,
             shots,
+            radioed,
+            cut_off,
         } = self.update_inhabitants(ctx);
+        self.radio_calls(radioed, cut_off);
         // A foot chase, or a shootout, is called out by whichever of those in it says so.
         for (n, name, mood) in std::mem::take(&mut self.chase_barks) {
             self.bark_anyway(n, name, mood);
@@ -3350,10 +3353,17 @@ impl MazeGame {
                 }
             }
         }
+        let player = self.player.feet(&ctx.scenes[self.scene].graph);
         for (n, alert) in alerts {
             // The eyes show the phase: red after the player, orange searching, yellow wary, and
-            // their own colour once it is calm again.
+            // their own colour once it is calm again. One with a radio, spotting them, calls for
+            // help on it.
             let (mood, bark) = match alert {
+                Some(Alert::Alert) if self.inhabitants.start_radio_call(n, player) => {
+                    let name = self.name_of(n).unwrap_or_else(|| "A sentry".into());
+                    self.hud.show_note(format!("{name} is radioing for help"));
+                    (Mood::Hostile, if self.has_bark(n, "radio") { "radio" } else { "spotted" })
+                }
                 Some(Alert::Alert) => (Mood::Hostile, "spotted"),
                 Some(Alert::Evasion) if alarmed.contains(&n) => (Mood::Agitated, "alarmed"),
                 Some(Alert::Evasion) if heard.contains(&n) => (Mood::Agitated, "heard"),
@@ -3387,6 +3397,30 @@ impl MazeGame {
                 last
             }
             _ => false,
+        }
+    }
+
+    /// Sees to the droids' radio calls for help: each that went through brings every sentry within
+    /// [`RADIO_REACH`](crate::inhabitants::RADIO_REACH) of the caller to search where it saw the
+    /// player, and the drone; each cut off - the caller down before it finished - the player is
+    /// told of, no one having heard it.
+    fn radio_calls(&mut self, radioed: Vec<(usize, Vector3<f32>)>, cut_off: Vec<usize>) {
+        for (n, at) in radioed {
+            let Some(script) = self.script.as_ref() else {
+                return;
+            };
+            let answered = self.inhabitants.radio_call(n, at, |character| is_sentry(script, character));
+            self.alert_drone(at);
+            let name = self.name_of(n).unwrap_or_else(|| "A sentry".into());
+            self.hud.show_note(match answered.len() {
+                0 => format!("{name} radioed for help, but no one is near enough to come"),
+                1 => format!("{name} radioed for help: one more of security is coming"),
+                k => format!("{name} radioed for help: {k} more of security are coming"),
+            });
+        }
+        for n in cut_off {
+            let name = self.name_of(n).unwrap_or_else(|| "The sentry".into());
+            self.hud.show_note(format!("{name} went down before it could radio for help"));
         }
     }
 

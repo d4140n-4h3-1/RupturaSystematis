@@ -1271,6 +1271,10 @@ mod tests {
                 if walks_with_others && character.gang {
                     lines.push(character.barks["avenge"].clone());
                 }
+                // One that wears a radio calls for help on it.
+                if character.earpiece > 0.0 {
+                    lines.push(character.barks.get("radio").unwrap_or_else(|| panic!("{} radios", character.name)).clone());
+                }
                 lines.extend(["tip", "tip_turf", "mourn", "grief_flee", "avenge"].iter().filter_map(|b| character.barks.get(*b).cloned()));
             }
         }

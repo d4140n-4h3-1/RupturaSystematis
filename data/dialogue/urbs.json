@@ -172,6 +172,10 @@
           "says": "Fur detectum. Sta.",
           "means": "Thief sighted. Halt."
         },
+        "radio": {
+          "says": "Intrusor detectum. Transmito locus. Requiro praesidium.",
+          "means": "Intruder spotted. Sending my position. Requesting backup."
+        },
         "lost": {
           "says": "Fur perdatum. Zeto fur.",
           "means": "Thief lost. Hunting the thief."

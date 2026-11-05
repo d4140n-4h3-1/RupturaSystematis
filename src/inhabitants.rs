@@ -197,6 +197,14 @@ const EARPIECE_FROM_EYES: [[f32; 4]; 4] = [
 ];
 /// The node of a droid's model its eyes are, the earpiece's anchor.
 const EYES: &str = "eyes";
+/// How long a droid with a radio takes to call for help, in seconds - long enough to be stopped -
+/// and how far off, in meters, those of security it calls hear it: much further than an alarm.
+pub const RADIO_CALL: f32 = 2.5;
+pub const RADIO_REACH: f32 = 300.0;
+/// One call for one sighting: no other droid calls for help on its radio while one is calling, or
+/// for this many seconds after a call went out, for the player seen within as many meters of
+/// where it said - it knows it has been called in.
+const RADIO_QUIET: (f32, f32) = (20.0, 50.0);
 /// How many droids live in a maze, unless the conversations or MAZE_INHABITANTS say otherwise.
 const COUNT: usize = 6;
 /// A pair walking about together (see [`BESIDE`]): how far off where it keeps that the one
@@ -372,6 +380,10 @@ pub struct News {
     /// shots fired: from where, which way, one meter long, by which side, and whether from a
     /// rifle.
     pub engaged: Vec<usize>,
+    /// The droids whose radio call for help has gone out, each with where it saw the player; and
+    /// those that went down calling, before it did (see [`Inhabitants::start_radio_call`]).
+    pub radioed: Vec<(usize, Vector3<f32>)>,
+    pub cut_off: Vec<usize>,
     pub shots: Vec<(Vector3<f32>, Vector3<f32>, Side, bool)>,
 }
 
@@ -438,6 +450,12 @@ struct Inhabitant {
     /// Whether it has told the player off for coming too close with it, since it last grew
     /// uneasy: once is enough, however often they step in and out.
     told_too_close: bool,
+    /// Whether it wears an earpiece - a radio - and if so, calling for help with it: how long it
+    /// has left to finish the call, and where it saw the player; and whether it has called since
+    /// it was last calm.
+    radio: bool,
+    calling: Option<(f32, Vector3<f32>)>,
+    radioed: bool,
     /// One of its own shot down before it: going to it and kneeling by it (see
     /// [`hydroxus_ai::social::ties`]) - and then, if it saw it done, to tell a sentry: where,
     /// and whether it knows who.
@@ -588,6 +606,8 @@ impl Inhabitant {
         self.wariness = Wariness::default();
         self.unease.reset();
         self.told_too_close = false;
+        self.calling = None;
+        self.radioed = false;
         self.mourning = None;
         self.report_after = None;
         self.regarding = 0.0;
@@ -856,6 +876,9 @@ pub struct Inhabitants {
     last_sight: Option<(Vector3<f32>, Vector3<f32>)>,
     /// Where a noise or an alarm has sent droids to search, to search from.
     search_from: Option<Vector3<f32>>,
+    /// The last radio call for help that went out: how long ago, in seconds, and where the player
+    /// was seen (see [`RADIO_QUIET`]).
+    last_call: Option<(f32, Vector3<f32>)>,
     /// How long till the searchers next look over the map, in seconds.
     look_in: f32,
     /// In a city, where its droids can turn up again (see [`Inhabitants::recycle`]).
@@ -1182,6 +1205,7 @@ impl Inhabitants {
         self.search = None;
         self.last_sight = None;
         self.search_from = None;
+        self.last_call = None;
     }
 
     /// Puts the maze's inhabitants into `scene` on the floor of `grid` whose corner is at
@@ -2020,9 +2044,11 @@ impl Inhabitants {
         // number, and drawing nothing more from `rng`, so that whatever else is picked with it is
         // as it was.
         let code = 10 + rng.below(90) as u32;
-        // Some of its kind wear an earpiece: which, by its number, as random as that.
+        // Some of its kind wear an earpiece, a radio: which, by its number, as random as that.
+        let mut radio = false;
         if let Some((earpiece, share)) = &self.liveries[character].earpiece {
-            if ties::nerve(code ^ 0xEA2) < *share && put_on_earpiece(scene, avatar.root(), earpiece).is_some() && crate::platform::var("MAZE_DEBUG").is_some() {
+            radio = ties::nerve(code ^ 0xEA2) < *share && put_on_earpiece(scene, avatar.root(), earpiece).is_some();
+            if radio && crate::platform::var("MAZE_DEBUG").is_some() {
                 Log::info(format!("Earpiece: on a droid of kind {character}, code {code}"));
             }
         }
@@ -2058,6 +2084,9 @@ impl Inhabitants {
             wariness: Wariness::default(),
             unease: Unease::default(),
             told_too_close: false,
+            radio,
+            calling: None,
+            radioed: false,
             mourning: None,
             report_after: None,
             regarding: 0.0,
@@ -2396,6 +2425,10 @@ impl Inhabitants {
         // What they think and know of the player fades a little.
         self.minds.step(dt);
         let mut caught = None;
+        let (mut radioed, mut cut_off) = (Vec::new(), Vec::new());
+        if let Some((ago, _)) = self.last_call.as_mut() {
+            *ago += dt;
+        }
         let mut alerts = std::mem::take(&mut self.alerts);
         let heard = std::mem::take(&mut self.heard);
         let alarmed = std::mem::take(&mut self.alarmed);
@@ -2585,6 +2618,22 @@ impl Inhabitants {
             droid.passing.step(dt);
             droid.regarding = (droid.regarding - dt).max(0.0);
             droid.avoiding = (droid.avoiding - dt).max(0.0);
+            // Calling for help on its radio: through, once it has had the time; cut off, down.
+            if let Some((left, at)) = droid.calling {
+                if droid.down {
+                    droid.calling = None;
+                    cut_off.push(me);
+                } else if left <= dt {
+                    droid.calling = None;
+                    radioed.push((me, at));
+                } else {
+                    droid.calling = Some((left - dt, at));
+                }
+            }
+            // Calm again, it would call again.
+            if droid.alert.is_none() && droid.calling.is_none() {
+                droid.radioed = false;
+            }
             // Gone after the player, down, or caught up in something else, it has more to think of
             // than one of its own.
             if droid.mourning.is_some() && (droid.down || droid.alert.is_some() || droid.side.is_some() || droid.talking) {
@@ -3480,7 +3529,64 @@ impl Inhabitants {
             alarmed,
             engaged,
             shots,
+            radioed,
+            cut_off,
         }
+    }
+
+    /// Has the `n`th droid, if it wears a radio and has not called since it was last calm, start
+    /// calling for help with it: seen the player at `at`. In [`RADIO_CALL`] seconds the call goes
+    /// out, unless it goes down first (see [`News::radioed`]). Whether it did start.
+    pub fn start_radio_call(&mut self, n: usize, at: Vector3<f32>) -> bool {
+        // Called in already, or being: it does not call again.
+        let (quiet, near) = RADIO_QUIET;
+        let called = self.droids.iter().any(|droid| droid.calling.is_some())
+            || self.last_call.is_some_and(|(ago, was)| ago < quiet && flat(was - at).norm() < near);
+        let Some(droid) = self.droids.get_mut(n).filter(|droid| droid.radio && !droid.down && !droid.radioed && !called) else {
+            return false;
+        };
+        droid.calling = Some((RADIO_CALL, at));
+        droid.radioed = true;
+        Log::info(format!("Radio: droid {n} calls for help"));
+        true
+    }
+
+    /// The `n`th droid's radio call for help, the player seen at `at`, goes out: every droid of a
+    /// kind that `answers` within [`RADIO_REACH`] of it - not after the player already - searches
+    /// from there, as from an alarm; one searching elsewhere goes there instead. Who answered.
+    pub fn radio_call(&mut self, n: usize, at: Vector3<f32>, answers: impl Fn(usize) -> bool) -> Vec<usize> {
+        let Some(from) = self.droids.get(n).map(|droid| droid.feet) else {
+            return Vec::new();
+        };
+        let mut answered = Vec::new();
+        for (m, droid) in self.droids.iter_mut().enumerate() {
+            let answering = m != n
+                && droid.hunts_player()
+                && droid.side.is_none()
+                && answers(droid.character)
+                && !droid.down
+                && droid.alert != Some(Alert::Alert)
+                && flat(droid.feet - from).norm() < RADIO_REACH;
+            if !answering {
+                continue;
+            }
+            droid.talking = false;
+            droid.warned = 0;
+            droid.threat = 0.0;
+            droid.lost_at = at;
+            droid.lost_going = Vector3::zeros();
+            droid.note(Incident::Alarm);
+            droid.alert = None;
+            droid.enter(m, Some(Alert::Evasion), &mut self.alerts);
+            self.alarmed.push(m);
+            answered.push(m);
+        }
+        if !answered.is_empty() {
+            self.search_from = Some(at);
+        }
+        self.last_call = Some((0.0, at));
+        Log::info(format!("Radio: droid {n}'s call answered by {answered:?}"));
+        answered
     }
 
     /// Has each hostile droid look for the player, at `player` in `posture`, whom it can see

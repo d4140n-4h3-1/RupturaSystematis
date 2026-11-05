@@ -25,6 +25,9 @@ What changed in Ruptura Systematis, newest first. How to play it is in the [READ
 - Some of Urbs's citizens now walk about in pairs.
 - **Radio earpieces**: a few of the security droids wear a yellow radio earpiece - a pod on the
   side of the head, a boom mic, an antenna - easy to spot, and glowing in the night cities.
+  **The radios work**: one that spots you radios for help, and two and a half seconds later every
+  security droid within 300 m comes to search where it saw you, and the drone too. Take it down
+  before it finishes and no one hears. One call to a sighting: the others know it's been called in.
 - **The conversation panel no longer covers the face** of whoever you're talking to: it sits low,
   is never more than 40% of the screen high nor wider than the window, and its text is a little
   smaller. Who's talking and what they say stay put at the top; the replies under them scroll,
