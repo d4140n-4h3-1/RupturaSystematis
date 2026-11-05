@@ -168,6 +168,24 @@ pub const URBS: Map = Map {
 /// The places a story could be told in.
 pub const STORY_MAPS: [Map; 1] = [URBS];
 
+/// The demo town: a small city of nine blocks to try the city's droids in, peopled as Urbs is,
+/// that loads in seconds (see `data/story/story_demo.py`).
+pub const DEMO_TOWN: Map = Map {
+    name: "Demo Town",
+    path: "data/story/story_demo.glb",
+    about: "Nine blocks by day, peopled as Urbs is - its crowd, security, citizens and a gang - \
+            to try the droids in without the wait.",
+    void: false,
+    open_sky: true,
+    night: false,
+    echoes: true,
+    alongside: &[],
+    foggy: false,
+};
+
+/// The places to test in.
+pub const TEST_MAPS: [Map; 1] = [DEMO_TOWN];
+
 /// The Circuit: a hover bike race track (see `data/arena/race_circuit.py` and [`crate::race`]).
 pub const CIRCUIT: Map = Map {
     name: "Circuit",
@@ -223,6 +241,7 @@ pub fn map_at(path: &str) -> Option<&'static Map> {
         .chain(&ROYALE_MAPS)
         .chain(&HEIST_MAPS)
         .chain(&STORY_MAPS)
+        .chain(&TEST_MAPS)
         .chain(&RACE_MAPS)
         .find(|map| map.path == path)
 }
@@ -363,7 +382,7 @@ mod tests {
         for map in MAPS {
             assert!(dir.join(map.path).is_file(), "{} has no model at {}", map.name, map.path);
         }
-        for map in ROYALE_MAPS.iter().chain(&HEIST_MAPS).chain(&STORY_MAPS) {
+        for map in ROYALE_MAPS.iter().chain(&HEIST_MAPS).chain(&STORY_MAPS).chain(&TEST_MAPS) {
             assert!(dir.join(map.path).is_file(), "{} has no model at {}", map.name, map.path);
             for alongside in map.alongside {
                 assert!(dir.join(alongside).is_file(), "{} has nothing alongside at {alongside}", map.name);

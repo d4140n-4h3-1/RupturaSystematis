@@ -2,6 +2,28 @@
 
 What changed in Ruptura Systematis, newest first. How to play it is in the [README](README.md).
 
+## 5 November 2026
+
+- **A Test section, and the Demo Town in it**: nine blocks by day, 148 m across, with streets as
+  wide as Urbs's for its traffic. It's peopled as Urbs is - the crowd, security in pairs,
+  citizens, a gang keeping to its turf - and loads in seconds.
+- **Factions**: security, the citizens and the gang each think of you as a whole, and that
+  outlasts any one droid: a droid turning up afresh starts from its faction's view of you. A deed
+  counts by who it was done to - shoot one of security and the gang is glad of it; it doesn't
+  mind a robbery. You're told when a faction's view of you changes.
+- **Droids care about their own**: one of a pair or group shot down in front of the rest, each
+  takes it by its nerve - kneels by it a while, runs, or, a gang member who saw you do it, comes
+  after you - and holds it against you the more.
+- **Droids show what they think of you as you pass**: one that likes you greets you, or tips you
+  off about security hunting nearby or a gang's turf ahead; one that thinks nothing much of you
+  may nod; one wary of you keeps its distance; one that hates you stops and glares.
+- **Word of trouble gets round**: droids that find a body, hear the alarm or hear gunfire tell
+  the others, and the crowd keeps away from where it happened until the town gets over it.
+- **A drawn weapon has words of its own**: each kind of droid says something of its own when it
+  notices your weapon out, tells you once to come no closer as it backs away, and says so when
+  you put it away.
+- Some of Urbs's citizens now walk about in pairs.
+
 ## 1 November 2026
 
 - **Foggy Forest**, a new battle royale map: an abandoned military base the forest has taken

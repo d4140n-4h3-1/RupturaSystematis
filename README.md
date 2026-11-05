@@ -67,6 +67,7 @@ what you do.
 | **Capture the Flag** | Hack red's firewall, take their flag and bring it home, with allies at your side. |
 | **Maze**          | A new random maze each round, built from tiles: find the way out.            |
 | **Race**          | Three laps of the Circuit or the Grand Circuit on a hover bike, against four droids. |
+| **Test**          | The Demo Town: nine blocks peopled as Urbs is, to try the droids in, loaded in seconds. |
 
 ### Under the hood
 
@@ -141,6 +142,9 @@ well.
 It opens on the main menu, to pick which game to play:
 
 - **Story**: Urbs and the cities round it.
+- **Test**: the Demo Town (`data/story/story_demo.glb`, built by `data/story/story_demo.py`) -
+  a small city by day with Urbs's crowd, security, citizens, gang and traffic, for trying the
+  droids without waiting on Urbs.
 - **Heist**: break into Aurum, Cortex or Helix.
 - **Battle Royale**: the Grid, Nexus, or the Foggy Forest - an abandoned base overgrown with trees, in fog.
 - **Maze**: find the way out of a new random maze each round.

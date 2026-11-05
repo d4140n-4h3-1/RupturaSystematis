@@ -14,7 +14,7 @@
 //! down its buttons - the one picked shows in its own colour - and Enter or Space presses it.
 
 use crate::{
-    ctf::{Map, HEIST_MAPS, MAPS, RACE_MAPS, ROYALE_MAPS, STORY_MAPS},
+    ctf::{Map, HEIST_MAPS, MAPS, RACE_MAPS, ROYALE_MAPS, STORY_MAPS, TEST_MAPS},
     dialogue::screen::Subtitles,
 };
 use fyrox::{
@@ -192,6 +192,8 @@ pub enum Game {
     Heist(usize),
     /// The story, told in the place of [`STORY_MAPS`] at this index.
     Story(usize),
+    /// Trying things out in the place of [`TEST_MAPS`] at this index.
+    Test(usize),
     /// A race round the circuit of [`RACE_MAPS`] at this index.
     Race(usize),
 }
@@ -203,6 +205,7 @@ pub enum Maps {
     BattleRoyale,
     Heist,
     Story,
+    Test,
     Race,
 }
 
@@ -226,6 +229,7 @@ pub struct MainMenu {
     royale: Handle<Button>,
     heist: Handle<Button>,
     story: Handle<Button>,
+    test: Handle<Button>,
     race: Handle<Button>,
     quit: Handle<Button>,
     /// The menu's own page, and the maps' for capture the flag, battle royale and heists.
@@ -234,6 +238,7 @@ pub struct MainMenu {
     royale_page: Handle<UiNode>,
     heist_page: Handle<UiNode>,
     story_page: Handle<UiNode>,
+    test_page: Handle<UiNode>,
     race_page: Handle<UiNode>,
     /// A button for each of [`MAPS`], [`ROYALE_MAPS`] and [`HEIST_MAPS`], in order; and back from
     /// each page.
@@ -241,11 +246,13 @@ pub struct MainMenu {
     royale_maps: Vec<Handle<Button>>,
     heist_maps: Vec<Handle<Button>>,
     story_maps: Vec<Handle<Button>>,
+    test_maps: Vec<Handle<Button>>,
     race_maps: Vec<Handle<Button>>,
     back: Handle<Button>,
     royale_back: Handle<Button>,
     heist_back: Handle<Button>,
     story_back: Handle<Button>,
+    test_back: Handle<Button>,
     race_back: Handle<Button>,
     picking: Picking,
 }
@@ -260,10 +267,11 @@ impl MainMenu {
         let royale_button = button(ctx, "Battle Royale");
         let heist_button = button(ctx, "Heist");
         let story_button = button(ctx, "Story");
+        let test_button = button(ctx, "Test");
         let race_button = button(ctx, "Race");
         let quit_button = button(ctx, "Quit");
-        let ((maze, _), (ctf, _), (royale, _), (heist, _), (story, _), (race, _), (quit, _)) =
-            (maze_button, ctf_button, royale_button, heist_button, story_button, race_button, quit_button);
+        let ((maze, _), (ctf, _), (royale, _), (heist, _), (story, _), (test, _), (race, _), (quit, _)) =
+            (maze_button, ctf_button, royale_button, heist_button, story_button, test_button, race_button, quit_button);
         let about = TextBuilder::new(
             WidgetBuilder::new()
                 .with_margin(Thickness::top(24.0))
@@ -278,6 +286,7 @@ impl MainMenu {
              Heist: hack through the firewall doors to a bank's vault,\n\
              past its guards and drones, and get out with the loot.\n\
              Story: a whole city to cross, from its station to its tallest tower.\n\
+             Test: a small town peopled as the city is, to try the droids in.\n\
              Race: three laps of the Circuit, the Grand Circuit or Lumen on a hover bike, against four droids.",
         )
         .with_font_size(16.0.into())
@@ -290,6 +299,7 @@ impl MainMenu {
             royale.to_base(),
             heist.to_base(),
             story.to_base(),
+            test.to_base(),
             race.to_base(),
             quit.to_base(),
             about.to_base(),
@@ -303,6 +313,8 @@ impl MainMenu {
         let heist_maps: Vec<_> = heist_buttons.iter().map(|&(map, _)| map).collect();
         let (story_page, story_buttons, story_back_button) = map_page(ctx, "Story", &STORY_MAPS);
         let story_maps: Vec<_> = story_buttons.iter().map(|&(map, _)| map).collect();
+        let (test_page, test_buttons, test_back_button) = map_page(ctx, "Test", &TEST_MAPS);
+        let test_maps: Vec<_> = test_buttons.iter().map(|&(map, _)| map).collect();
         let (race_page, race_buttons, race_back_button) = map_page(ctx, "Race", &RACE_MAPS);
         let race_maps: Vec<_> = race_buttons.iter().map(|&(map, _)| map).collect();
         let backdrop = BorderBuilder::new(
@@ -313,6 +325,7 @@ impl MainMenu {
                 .with_child(royale_page)
                 .with_child(heist_page)
                 .with_child(story_page)
+                .with_child(test_page)
                 .with_child(race_page),
         )
         .with_stroke_thickness(Thickness::uniform(0.0).into())
@@ -326,6 +339,7 @@ impl MainMenu {
             royale,
             heist,
             story,
+            test,
             race,
             quit,
             main_page,
@@ -333,25 +347,29 @@ impl MainMenu {
             royale_page,
             heist_page,
             story_page,
+            test_page,
             race_page,
             maps,
             royale_maps,
             heist_maps,
             story_maps,
+            test_maps,
             race_maps,
             back: back_button.0,
             royale_back: royale_back_button.0,
             heist_back: heist_back_button.0,
             story_back: story_back_button.0,
+            test_back: test_back_button.0,
             race_back: race_back_button.0,
             picking: Picking {
                 pages: vec![
-                    vec![maze_button, ctf_button, royale_button, heist_button, story_button, race_button, quit_button],
+                    vec![maze_button, ctf_button, royale_button, heist_button, story_button, test_button, race_button, quit_button],
                     map_buttons.into_iter().chain([back_button]).collect(),
                     royale_buttons.into_iter().chain([royale_back_button]).collect(),
                     heist_buttons.into_iter().chain([heist_back_button]).collect(),
                     story_buttons.into_iter().chain([story_back_button]).collect(),
                     race_buttons.into_iter().chain([race_back_button]).collect(),
+                    test_buttons.into_iter().chain([test_back_button]).collect(),
                 ],
                 ..Picking::default()
             },
@@ -374,6 +392,7 @@ impl MainMenu {
         ui.send(self.royale_page, WidgetMessage::Visibility(maps == Some(Maps::BattleRoyale)));
         ui.send(self.heist_page, WidgetMessage::Visibility(maps == Some(Maps::Heist)));
         ui.send(self.story_page, WidgetMessage::Visibility(maps == Some(Maps::Story)));
+        ui.send(self.test_page, WidgetMessage::Visibility(maps == Some(Maps::Test)));
         ui.send(self.race_page, WidgetMessage::Visibility(maps == Some(Maps::Race)));
         let page = match maps {
             None => 0,
@@ -382,6 +401,7 @@ impl MainMenu {
             Some(Maps::Heist) => 3,
             Some(Maps::Story) => 4,
             Some(Maps::Race) => 5,
+            Some(Maps::Test) => 6,
         };
         self.picking.show(ui, page, |_| true);
     }
@@ -402,6 +422,7 @@ impl MainMenu {
         let royale_maps = (self.royale_maps.iter().enumerate()).map(|(n, &map)| (map, Start::Play(Game::BattleRoyale(n))));
         let heist_maps = (self.heist_maps.iter().enumerate()).map(|(n, &map)| (map, Start::Play(Game::Heist(n))));
         let story_maps = (self.story_maps.iter().enumerate()).map(|(n, &map)| (map, Start::Play(Game::Story(n))));
+        let test_maps = (self.test_maps.iter().enumerate()).map(|(n, &map)| (map, Start::Play(Game::Test(n))));
         let race_maps = (self.race_maps.iter().enumerate()).map(|(n, &map)| (map, Start::Play(Game::Race(n))));
         [
             (self.maze, Start::Play(Game::Maze)),
@@ -409,11 +430,13 @@ impl MainMenu {
             (self.royale, Start::Maps(Maps::BattleRoyale)),
             (self.heist, Start::Maps(Maps::Heist)),
             (self.story, Start::Maps(Maps::Story)),
+            (self.test, Start::Maps(Maps::Test)),
             (self.race, Start::Maps(Maps::Race)),
             (self.back, Start::Back),
             (self.royale_back, Start::Back),
             (self.heist_back, Start::Back),
             (self.story_back, Start::Back),
+            (self.test_back, Start::Back),
             (self.race_back, Start::Back),
             (self.quit, Start::Quit),
         ]
@@ -422,6 +445,7 @@ impl MainMenu {
         .chain(royale_maps)
         .chain(heist_maps)
         .chain(story_maps)
+        .chain(test_maps)
         .chain(race_maps)
         .find(|&(button, _)| matches!(message.data_from(button), Some(ButtonMessage::Click)))
         .map(|(_, choice)| choice)
@@ -757,6 +781,18 @@ mod tests {
         assert_eq!(menu.choice(&click(menu.heist_back)), Some(Start::Back));
         for (n, &map) in menu.heist_maps.iter().enumerate() {
             assert_eq!(menu.choice(&click(map)), Some(Start::Play(Game::Heist(n))));
+        }
+    }
+
+    #[test]
+    fn test_opens_its_places_and_each_plays_its_own() {
+        let mut ui = UserInterface::new(Vector2::new(800.0, 600.0));
+        let menu = MainMenu::build(&mut ui);
+        assert_eq!(menu.test_maps.len(), TEST_MAPS.len());
+        assert_eq!(menu.choice(&click(menu.test)), Some(Start::Maps(Maps::Test)));
+        assert_eq!(menu.choice(&click(menu.test_back)), Some(Start::Back));
+        for (n, &map) in menu.test_maps.iter().enumerate() {
+            assert_eq!(menu.choice(&click(map)), Some(Start::Play(Game::Test(n))));
         }
     }
 

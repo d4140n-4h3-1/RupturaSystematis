@@ -1,5 +1,5 @@
 {
-  "about": "What the droids say among themselves about the player, on every map: news of what the player did, and what they think of them (see hydroxus-ai's social::rumour and social::chat). Two droids that meet, or a group that talks among itself, near the player, talk of news one of them has and another has not, if any of them has some: the one that knows says one of 'news' for the deed - 'saw' if it saw it done itself, 'heard' if it was told - the other answers with one of 'reactions' for how it takes the player now it has heard it, and the first closes with one of 'closings'. With no news, one that feels strongly about the player says one of 'opinions' for how it takes them, and the other answers. Otherwise they have one of the script's own meetings or talks. A droid that hates the player will not talk to them, and says one of 'refusals' instead. Every 'says' is in System Latin, checked with data/system_latin/sl_parser.py; 'means' is the English under it.",
+  "about": "What the droids say among themselves about the player, on every map: news of what the player did, and what they think of them (see hydroxus-ai's social::rumour and social::chat). Two droids that meet, or a group that talks among itself, near the player, talk of news one of them has and another has not, if any of them has some: the one that knows says one of 'news' for the deed - 'saw' if it saw it done itself, 'heard' if it was told - the other answers with one of 'reactions' for how it takes the player now it has heard it, and the first closes with one of 'closings'. With no news, one that feels strongly about the player says one of 'opinions' for how it takes them, and the other answers. Otherwise they have one of the script's own meetings or talks. A droid that hates the player will not talk to them, and says one of 'refusals' instead. Every 'says' is in System Latin, checked with data/system_latin/sl_parser.py; 'means' is the English under it. With no news of the player, one that knows of trouble about town another does not - one of them found lying ('body'), the alarm ('alarm'), gunfire ('gunfire') - tells of it with one of 'troubles' for its kind, 'saw' if it came across it itself and 'heard' if it was told, and the other answers with one of 'trouble_reactions'; those that know of trouble keep away from where it was (see hydroxus-ai's social::trouble).",
   "news": {
     "shooting": {
       "saw": [
@@ -82,5 +82,31 @@
     { "says": "Nullum communicatio. Tu hostis.", "means": "No talking. You're an enemy." },
     { "says": "Nullum communicatio. Receda.", "means": "No talking. Back off." },
     { "says": "Tu periculosum. Receda.", "means": "You're dangerous. Back off." }
+  ],
+  "troubles": {
+    "body": {
+      "saw": [
+        { "says": "Ego detectavo unitas inactivum in solum.", "means": "I found a unit lying on the ground, dead." },
+        { "says": "Unitas percutatum. Ego detectavo id.", "means": "A unit was shot down. I saw it lying there." }
+      ],
+      "heard": [
+        { "says": "Unitas inactivum detectum. Informatio incertum.", "means": "A unit was found down, they say. Not confirmed." },
+        { "says": "Nuntius: unitas percutatum prope.", "means": "Word is a unit was shot down near here." }
+      ]
+    },
+    "alarm": {
+      "saw": [{ "says": "Sirenatio detectum. Securitas zetans.", "means": "I heard the alarm. Security is out hunting." }],
+      "heard": [{ "says": "Nuntius: sirenatio activum.", "means": "Word is the alarm went off." }]
+    },
+    "gunfire": {
+      "saw": [{ "says": "Sonus telum detectum. Periculum.", "means": "I heard weapon fire. It is dangerous." }],
+      "heard": [{ "says": "Nuntius: pugna prope.", "means": "Word is there was a fight nearby." }]
+    }
+  },
+  "trouble_reactions": [
+    { "says": "Periculum. Ego mano longe ab ille.", "means": "Dangerous. I will stay away from there." },
+    { "says": "Accipatum. Ego mano longe.", "means": "Understood. I will keep away." },
+    { "says": "Securitas necessarium.", "means": "We need security." },
+    { "says": "Observo area.", "means": "I will watch the area." }
   ]
 }

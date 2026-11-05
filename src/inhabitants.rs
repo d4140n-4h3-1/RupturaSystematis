@@ -132,10 +132,14 @@ use hydroxus_ai::{
         crowd::{self, Crowd, CROWD_AT_ONCE, CROWD_BACK, CROWD_EVERY, CROWD_GONE, CROWD_REST},
         group::{self, about_leader, Groups, ABOUT_LEADER, BESIDE},
         chat::{self, Topic},
+        faction::{Faction, Factions},
         opinion::{self, Attitude, Deed},
+        passing::Passing,
         report::{hears_alarm, Telling, Witness},
         rumour::Minds,
         talk::{self, within_talking},
+        ties::{self, Mourning},
+        trouble::Kind,
     },
 };
 use crate::{
@@ -419,6 +423,17 @@ struct Inhabitant {
     /// Whether it has told the player off for coming too close with it, since it last grew
     /// uneasy: once is enough, however often they step in and out.
     told_too_close: bool,
+    /// One of its own shot down before it: going to it and kneeling by it (see
+    /// [`hydroxus_ai::social::ties`]) - and then, if it saw it done, to tell a sentry: where,
+    /// and whether it knows who.
+    mourning: Option<Mourning>,
+    report_after: Option<(Vector3<f32>, bool)>,
+    /// How long it goes on stopping to look at the player, passing them; and keeping away from
+    /// them, wary of them (see [`hydroxus_ai::social::passing`]); and how long since it last showed
+    /// them what it thinks of them.
+    regarding: f32,
+    avoiding: f32,
+    passing: Passing,
     /// Where it last saw the player's feet, and which way they were going then, roughly.
     lost_at: Vector3<f32>,
     lost_going: Vector3<f32>,
@@ -558,6 +573,11 @@ impl Inhabitant {
         self.wariness = Wariness::default();
         self.unease.reset();
         self.told_too_close = false;
+        self.mourning = None;
+        self.report_after = None;
+        self.regarding = 0.0;
+        self.avoiding = 0.0;
+        self.passing = Passing::default();
         self.searched = 0;
         self.looking = None;
         self.deaf = 0.0;
@@ -660,11 +680,13 @@ pub struct Grouping {
     pub groups_of: usize,
     pub share: f32,
     pub turf: Option<(f32, f32)>,
+    /// The faction its kind is of, if any (see [`hydroxus_ai::social::faction`]).
+    pub faction: Option<Faction>,
 }
 
 impl Default for Grouping {
     fn default() -> Self {
-        Self { in_pairs: 0.0, groups_of: 0, share: 1.0, turf: None }
+        Self { in_pairs: 0.0, groups_of: 0, share: 1.0, turf: None, faction: None }
     }
 }
 
@@ -1085,6 +1107,7 @@ impl Inhabitants {
         self.minds.clear();
         self.minds.tuning = AI.rumour;
         self.minds.opinion = AI.opinion;
+        self.minds.trouble = AI.trouble;
         self.populated = false;
         self.reachable = Reach::default();
         self.chase = None;
@@ -1933,7 +1956,7 @@ impl Inhabitants {
         // as it was.
         let code = 10 + rng.below(90) as u32;
         self.groups.add();
-        self.minds.add();
+        self.minds.add_in(self.groupings.get(character).and_then(|g| g.faction));
         self.droids.push(Inhabitant {
             body,
             collider,
@@ -1964,6 +1987,11 @@ impl Inhabitants {
             wariness: Wariness::default(),
             unease: Unease::default(),
             told_too_close: false,
+            mourning: None,
+            report_after: None,
+            regarding: 0.0,
+            avoiding: 0.0,
+            passing: Passing::default(),
             lost_at: feet,
             lost_going: Vector3::zeros(),
             search_left: 0.0,
@@ -2478,8 +2506,20 @@ impl Inhabitants {
         let mut taken: Vec<(usize, usize)> =
             self.droids.iter().filter_map(|droid| droid.ride.map(|ride| (ride.train, ride.doorway))).collect();
         let groups = &self.groups;
+        // Where each keeps away from, for the trouble it knows of, going about its business.
+        let shunned: Vec<Vec<(Vector3<f32>, f32)>> = (0..self.droids.len()).map(|n| self.minds.shunned(n)).collect();
+        let mut mourned = Vec::new();
         for (me, droid) in self.droids.iter_mut().enumerate() {
             droid.avatar.fly_voxels(graph, dt);
+            droid.passing.step(dt);
+            droid.regarding = (droid.regarding - dt).max(0.0);
+            droid.avoiding = (droid.avoiding - dt).max(0.0);
+            // Gone after the player, down, or caught up in something else, it has more to think of
+            // than one of its own.
+            if droid.mourning.is_some() && (droid.down || droid.alert.is_some() || droid.side.is_some() || droid.talking) {
+                droid.mourning = None;
+                droid.report_after = None;
+            }
             // In the hostile droid's colours while it is after the player; it goes down in
             // whichever it had on.
             let hostile = droid.alert.is_some();
@@ -2748,6 +2788,48 @@ impl Inhabitants {
                 if to_them.norm() > 1.0e-3 {
                     droid.heading = to_them.x.atan2(to_them.z);
                 }
+            } else if let Some(mut mourning) = droid.mourning.filter(|_| droid.alert.is_none()) {
+                // One of its own down: it goes to it, and kneels by it a while - and then, having
+                // seen it done, goes to tell a sentry.
+                droid.mourning = match mourning.step(&AI.ties, droid.feet, dt) {
+                    ties::Doing::GoTo { at, afresh } if afresh || droid.route.is_empty() => {
+                        droid.route = route_to(droid.feet, at);
+                        (!droid.route.is_empty()).then_some(mourning)
+                    }
+                    ties::Doing::GoTo { .. } => Some(mourning),
+                    ties::Doing::Kneel { heading } => {
+                        droid.route.clear();
+                        droid.heading = heading;
+                        Some(mourning)
+                    }
+                    ties::Doing::Done => None,
+                };
+                if droid.mourning.is_none() {
+                    droid.route.clear();
+                    droid.resting = REST.0;
+                    if let Some((at, knows)) = droid.report_after.take() {
+                        mourned.push((me, at, knows));
+                    }
+                }
+            } else if droid.alert.is_none() && droid.avoiding > 0.0 && flat(player - droid.feet).norm() < AI.passing.near * 1.5 {
+                // Wary of the player passing: it keeps its distance.
+                droid.replan -= dt;
+                if droid.replan <= 0.0 || droid.route.is_empty() {
+                    droid.replan = REPLAN * 2.0;
+                    if let Some(away) = flat(droid.feet - player).try_normalize(1.0e-3) {
+                        let to = spot_near(mesh, droid.feet + away * BACK_OFF, 1.5, rng).unwrap_or(droid.feet);
+                        droid.route = route_to(droid.feet, to);
+                    }
+                }
+            } else if droid.alert.is_none() && droid.regarding > 0.0 {
+                // Passing the player, it stops and looks at them: a greeting, a nod, a glare.
+                droid.route.clear();
+                droid.waiting = 0.0;
+                droid.resting = droid.resting.max(REST.0);
+                let to_them = flat(player - droid.feet);
+                if to_them.norm() > 1.0e-3 {
+                    droid.heading = to_them.x.atan2(to_them.z);
+                }
             } else if droid.alert.is_none() && droid.unease.afraid() {
                 // The player too near with a weapon drawn: it backs away from them.
                 droid.replan -= dt;
@@ -2994,7 +3076,12 @@ impl Inhabitants {
                                         droid.ride = Some(ride);
                                         (route, None)
                                     }
-                                    None => (wander(&AI.wander, mesh, droid.feet, TRIP, road, &turfs, &self.reachable, rng), None),
+                                    None => {
+                                        // Off the others' turf, and away from trouble it knows of.
+                                        let keep_off: Vec<(Vector3<f32>, f32)> =
+                                            turfs.iter().chain(&shunned[me]).copied().collect();
+                                        (wander(&AI.wander, mesh, droid.feet, TRIP, road, &keep_off, &self.reachable, rng), None)
+                                    }
                                 },
                             },
                         },
@@ -3274,7 +3361,7 @@ impl Inhabitants {
             let going = Going {
                 heading: Some(droid.heading),
                 speed: droid.speed,
-                posture: match droid.down || sheltered {
+                posture: match droid.down || sheltered || droid.mourning.is_some_and(|m| m.kneeling()) {
                     true => Posture::Crouching,
                     false => Posture::Standing,
                 },
@@ -3311,6 +3398,10 @@ impl Inhabitants {
             }
         }
         self.search = Some(search);
+        // Done kneeling by one of its own, a witness to it goes to tell a sentry.
+        for (n, at, knows) in mourned {
+            self.witness(n, at, knows);
+        }
         News {
             hit: caught,
             alerts,
@@ -3598,6 +3689,11 @@ impl Inhabitants {
         let Some(from) = self.droids.get(n).map(|droid| droid.feet) else {
             return;
         };
+        // Everyone that hears it knows of trouble there, to tell the others of.
+        let heard: Vec<usize> = (0..self.droids.len())
+            .filter(|&m| !self.droids[m].down && self.droids[m].side.is_none() && hears_alarm(&AI.report, from, self.droids[m].feet))
+            .collect();
+        self.minds.came_across(&heard, Kind::Alarm, from);
         for (m, droid) in self.droids.iter_mut().enumerate() {
             let answering = m != n
                 && droid.hunts_player()
@@ -3739,6 +3835,8 @@ impl Inhabitants {
                 found.push((m, lies));
                 self.droids[m].note(Incident::FoundBody);
                 self.droids[n].found = true;
+                // Trouble, to tell the others of.
+                self.minds.came_across(&[m], Kind::Body, lies);
             }
         }
         found
@@ -3772,12 +3870,123 @@ impl Inhabitants {
 
     /// Those of `saw` saw the player do `deed` at `at`: what they think of them moves, and if it
     /// is talked about, they know of it, to tell others (see [`Minds::saw`]).
-    pub fn saw(&mut self, saw: &[usize], deed: Deed, at: Vector3<f32>) {
+    pub fn saw(&mut self, saw: &[usize], deed: Deed, at: Vector3<f32>, victim: Option<usize>) -> Vec<(Faction, Attitude)> {
         if saw.is_empty() {
-            return;
+            return Vec::new();
         }
-        self.minds.saw(saw, deed, at);
-        Log::info(format!("Opinion: droids {saw:?} saw the player {deed:?}"));
+        let victim = victim.and_then(|v| self.faction_of(v));
+        let (_, changed) = self.minds.saw_done(saw, deed, at, victim);
+        Log::info(format!("Opinion: droids {saw:?} saw the player {deed:?}, done to faction {victim:?}"));
+        for (faction, attitude) in &changed {
+            Log::info(format!("Faction {faction} now takes the player as {attitude:?}"));
+        }
+        changed
+    }
+
+    /// The factions there are, each neither for the player nor against them: before
+    /// [`Inhabitants::populate`], whose droids start from them.
+    pub fn set_factions(&mut self, factions: Factions) {
+        self.minds.factions = factions;
+    }
+
+    /// The `n`th droid's faction, if it has one.
+    pub fn faction_of(&self, n: usize) -> Option<Faction> {
+        self.minds.mind(n).and_then(|mind| mind.faction())
+    }
+
+    /// Those that walk about with the `n`th - its partner, or the rest of its group - still
+    /// standing.
+    pub fn companions(&self, n: usize) -> Vec<usize> {
+        self.groups.group_of(n).into_iter().filter(|&m| m != n && self.droids.get(m).is_some_and(|d| !d.down)).collect()
+    }
+
+    /// The `n`th droid's nerve, from 0 to 1: its own, as long as it is the droid it is (see
+    /// [`ties::nerve`]).
+    pub fn nerve(&self, n: usize) -> f32 {
+        self.droids.get(n).map_or(0.5, |droid| ties::nerve(droid.code.wrapping_mul(7919) ^ n as u32))
+    }
+
+    /// Has the `n`th droid, one of whose own went down at `at`, go to it and kneel by it a while;
+    /// and then, with `report`, go and tell a sentry of it - where, and whether it knows who.
+    pub fn mourn(&mut self, n: usize, at: Vector3<f32>, report: Option<(Vector3<f32>, bool)>) {
+        if let Some(droid) = self.droids.get_mut(n).filter(|droid| !droid.down) {
+            droid.mourning = Some(Mourning::new(at));
+            droid.report_after = report;
+            droid.witness = None;
+            droid.cover = None;
+            droid.route.clear();
+            droid.resting = 0.0;
+        }
+    }
+
+    /// Has the `n`th droid, one of whose own went down, run from `from`, and hide.
+    pub fn flee_from(&mut self, n: usize, from: Vector3<f32>) {
+        if let Some(droid) = self.droids.get_mut(n).filter(|droid| !droid.down && droid.alert.is_none()) {
+            droid.witness = None;
+            droid.cover = Some((from, false));
+            droid.route.clear();
+        }
+    }
+
+    /// Moves the `n`th droid's regard for the player `by`: a grudge, say.
+    pub fn feel(&mut self, n: usize, by: f32) {
+        self.minds.feel(n, by);
+    }
+
+    /// Whether the `n`th droid is going about its business, free to show the player what it
+    /// thinks of them as they pass, and has not lately.
+    pub fn free_to_pass_remark(&self, n: usize) -> bool {
+        self.droids.get(n).is_some_and(|droid| {
+            !droid.down
+                && droid.alert.is_none()
+                && !droid.talking
+                && droid.warned == 0
+                && droid.threat == 0.0
+                && droid.side.is_none()
+                && droid.pursuit.is_none()
+                && droid.witness.is_none()
+                && droid.cover.is_none()
+                && droid.mourning.is_none()
+                && droid.investigating.is_none()
+                && !droid.unease.uneasy()
+                && droid.trip.is_none()
+                && !droid.aboard()
+                && droid.hunts_player()
+                && droid.passing.ready(AI.passing.again_after)
+        })
+    }
+
+    /// Has the `n`th droid show the player what it thinks of them: stopping to look at them a
+    /// while, if it `looks`, or else keeping away from them.
+    pub fn pass_remark(&mut self, n: usize, looks: bool) {
+        if let Some(droid) = self.droids.get_mut(n) {
+            droid.passing.did();
+            match looks {
+                true => droid.regarding = AI.passing.look_for,
+                false => droid.avoiding = AI.passing.look_for * 2.0,
+            }
+        }
+    }
+
+    /// Has the `n`th droid have had its chance to show the player what it thinks of them, and let
+    /// them by: it is a while before it looks at them again.
+    pub fn pass_remark_none(&mut self, n: usize) {
+        if let Some(droid) = self.droids.get_mut(n) {
+            droid.passing.did();
+        }
+    }
+
+    /// Whether any of the kinds `sentry` says are is after the player, or searching for them,
+    /// within `reach` meters of `at`.
+    pub fn security_about(&self, at: Vector3<f32>, reach: f32, sentry: impl Fn(usize) -> bool) -> bool {
+        self.droids
+            .iter()
+            .any(|droid| !droid.down && droid.alert.is_some() && sentry(droid.character) && flat(droid.feet - at).norm() < reach)
+    }
+
+    /// Whether a gang keeps to turf of its own within `reach` meters of `at`.
+    pub fn turf_about(&self, at: Vector3<f32>, reach: f32) -> bool {
+        self.droids.iter().any(|droid| !droid.down && droid.turf.is_some_and(|(spot, _)| flat(spot - at).norm() < reach))
     }
 
     /// How the `n`th droid takes the player, by what it thinks of them.
@@ -3798,8 +4007,20 @@ impl Inhabitants {
     /// Has `topic`, talked of among `members`, sink in: news told on, an opinion swaying the rest.
     pub fn talked_of(&mut self, members: &[usize], topic: Topic) {
         chat::heard(&mut self.minds, members, topic);
-        if let Topic::News { teller, rumour } = topic {
-            Log::info(format!("Rumour: droid {teller} tells {members:?} of the player {:?}", rumour.deed));
+        match topic {
+            Topic::News { teller, rumour } => {
+                Log::info(format!("Rumour: droid {teller} tells {members:?} of the player {:?}", rumour.deed));
+            }
+            // Told of trouble, the rest are the warier for it.
+            Topic::Trouble { teller, trouble } => {
+                Log::info(format!("Trouble: droid {teller} tells {members:?} of {:?}", trouble.kind));
+                for &n in members.iter().filter(|&&n| n != teller) {
+                    if let Some(droid) = self.droids.get_mut(n) {
+                        droid.note(Incident::Noticed);
+                    }
+                }
+            }
+            _ => (),
         }
     }
 
@@ -4084,6 +4305,19 @@ impl Inhabitants {
         loudness: f32,
         sudden: bool,
     ) {
+        // Shots: trouble, for anyone going about its business near enough to hear them, to tell
+        // the others of - the same gunfight, however many shots.
+        if sudden {
+            let heard: Vec<usize> = (0..self.droids.len())
+                .filter(|&m| {
+                    let droid = &self.droids[m];
+                    !droid.down && droid.side.is_none() && droid.alert.is_none() && flat(droid.feet - at).norm() < loudness
+                })
+                .collect();
+            if !heard.is_empty() {
+                self.minds.came_across(&heard, Kind::Gunfire, at);
+            }
+        }
         let listening = |droid: &Inhabitant| {
             // Firing blind, it is too busy to - and would only hear its own.
             !droid.down

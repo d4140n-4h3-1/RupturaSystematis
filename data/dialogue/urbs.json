@@ -2,9 +2,15 @@
   "about": "What the droids of Urbs say, in the story: as data/dialogue/droids.json has it for a maze - the same three kinds of droid, in the same models and voices, the same lines, replies, checks, bribes, moods, barks and 'threatened' - but about the city: the way to Summa, its tallest tower, where {exit_far} and {exit_way} point; and the stores and banks being robbed, by the player. 'inhabitants' is how many droids are about the player at once, and 'crowd' has them be a crowd: one left far behind, out of sight, turns up again nearer by as another, wherever the player cannot see, so the streets are as busy wherever they go. A character's 'in_pairs' is the share of its kind that walk about in twos, one keeping beside the other: talk one round, or turn one hostile, and the other goes with it. Near the player, now and then a pair has one of its kind's 'talks' between itself, each line by the other in turn. A fourth kind, the Praedatores, are gangs in the hostile droid's red, walking about in groups of up to 'in_groups_of', put down 'share' as often as each of the others: they have nothing to say to the player but their 'chatter', and keep to themselves - though near the player, a group of them now and then has one of its 'talks' among itself, each line by the next of them in turn - - until the player stands within 'crowded' meters of one, which it takes as it would the pistol pointed at it, warning them and then going for them, its whole group with it, eyes in 'hostile_eyes' rather than red. Its 'turf' has the share of its groups it says keep to a spot of their own, standing about there, and take the ground within 'reach' meters of it as theirs: the player on it is warned off it as if standing over them, and the other droids keep off it. Now and then one of security goes after one of a gang near the player, which runs: security calls out 'chase', and the gang's answers 'flee'; caught, security says 'caught' and the gang's answers with its own; and if it gets away, security says 'escaped'. And now and then six of security shoot it out with a gang of six near the player: security calls the rest of it in with 'shootout'; the first of each side to go after the other says 'engaged'; and one of the side left standing says 'won'. Every line is checked by data/system_latin/sl_parser.py. A witness to a shooting knows who did it only if it saw the player near enough, within 15 m; seeing only the one shot, or the shooter from far off, it saw a shooting but not who. On its way to security, the player can stop and question it: it opens at 'witness_saw' if it knows them and 'witness_unsure' if not; a line that is 'silenced' has it keep quiet, telling no one, and one that 'identifies' has it know the player for who did it after all. Reaching security, it is questioned: security asks with 'question', the witness answers 'saw_who' or 'saw_none', and security says 'identified' - and the player is wanted - or 'unidentified', and searches where it was done. Two droids walking about by themselves - not of a pair or a group - that come within a few meters of each other near the player now and then stop, face each other and have one of the 'meetings': its lines said by the first and then the second in turn, the first of the kinds 'between' names (an empty name is any kind) saying the first.",
   "inhabitants": 80,
   "crowd": true,
+  "factions": {
+    "security": { "name": "The security droids", "relations": { "gang": -0.2 } },
+    "citizens": { "name": "The citizens", "relations": { "gang": 0.3 } },
+    "gang": { "name": "The Praedatores", "relations": { "security": -0.6, "citizens": 0.3, "nobody": 0.0 } }
+  },
   "characters": [
     {
       "name": "Defendator",
+      "faction": "security",
       "model": "data/droid_security.glb",
       "start": "hello",
       "in_pairs": 0.5,
@@ -140,6 +146,22 @@
         "drawn_put_away": {
           "says": "Affirmatum. Telum desactivatum. Continua.",
           "means": "Good. Weapon put away. Carry on."
+        },
+        "greet": {
+          "says": "Usor detectum. Status normalum.",
+          "means": "Ah, you. All is in order."
+        },
+        "tip_turf": {
+          "says": "Zona hostilum prope. Evada.",
+          "means": "Gang turf nearby. Steer clear of it."
+        },
+        "avoid": {
+          "says": "Mana longe.",
+          "means": "Keep your distance."
+        },
+        "glare": {
+          "says": "Recordum tu in archivum.",
+          "means": "Your record is on file."
         },
         "alarmed": {
           "says": "Sirenatio accipatum. Zeto fur.",
@@ -376,6 +398,8 @@
     },
     {
       "name": "Explorator",
+      "faction": "citizens",
+      "in_pairs": 0.3,
       "model": "data/droid_explorer.glb",
       "start": "hello",
       "threatened": {
@@ -410,6 +434,34 @@
         "drawn_put_away": {
           "says": "Securum iterum.",
           "means": "Safe again."
+        },
+        "greet": {
+          "says": "Usor. Quomodo status tu?",
+          "means": "Oh, it is you. How are you keeping?"
+        },
+        "tip": {
+          "says": "Securitas prope. Evada.",
+          "means": "Security is about. Keep out of sight."
+        },
+        "tip_turf": {
+          "says": "Zona hostilum prope. Non progreda ad ille.",
+          "means": "Gang turf ahead. Do not go that way."
+        },
+        "avoid": {
+          "says": "Ego recedo.",
+          "means": "I will keep my distance."
+        },
+        "glare": {
+          "says": "Tu periculosum. Observo tu.",
+          "means": "You are dangerous. I am watching you."
+        },
+        "mourn": {
+          "says": "Socius ego percutatum. Ego mano.",
+          "means": "My friend has been shot down. I am staying with it."
+        },
+        "grief_flee": {
+          "says": "Socius percutatum. Evado statim.",
+          "means": "My friend is down. I am getting out of here."
         },
         "witnessed": {
           "says": "Aggressio detectum. Quaero praesidium.",
@@ -658,6 +710,8 @@
     },
     {
       "name": "Reparator",
+      "faction": "citizens",
+      "in_pairs": 0.25,
       "model": "data/droid_maintenance.glb",
       "start": "hello",
       "threatened": {
@@ -692,6 +746,34 @@
         "drawn_put_away": {
           "says": "Affirmatum. Resumo reparatio.",
           "means": "Good. Back to my repairs."
+        },
+        "greet": {
+          "says": "Usor. Omnia stabilum.",
+          "means": "Oh, it is you. All running smoothly."
+        },
+        "tip": {
+          "says": "Securitas zetans. Evada.",
+          "means": "Security is out hunting. Lie low."
+        },
+        "tip_turf": {
+          "says": "Zona hostilum prope. Evada ab ille.",
+          "means": "Gang turf near. Keep clear of it."
+        },
+        "avoid": {
+          "says": "Occupatum. Ego reparo.",
+          "means": "Busy. I have repairs to do."
+        },
+        "glare": {
+          "says": "Negativum. Tu periculosum.",
+          "means": "No. You are trouble."
+        },
+        "mourn": {
+          "says": "Unitas percutatum. Ego reparabso id.",
+          "means": "A unit is down. I will fix it."
+        },
+        "grief_flee": {
+          "says": "Evado statim.",
+          "means": "I am getting out of here."
         },
         "witnessed": {
           "says": "Aggressio detectum. Quaero praesidium.",
@@ -917,6 +999,7 @@
     },
     {
       "name": "Praedator",
+      "faction": "gang",
       "model": "data/droid_hostile.glb",
       "in_groups_of": 6,
       "share": 0.35,
@@ -1081,6 +1164,34 @@
         "drawn_put_away": {
           "says": "Telum desactivatum. Receda, simia.",
           "means": "Put away. Now back off, ape."
+        },
+        "greet": {
+          "says": "Usor. Tu esas socius nos.",
+          "means": "You. You are one of us."
+        },
+        "tip": {
+          "says": "Securitas prope. Evada, socius.",
+          "means": "Security is near. Get gone, friend."
+        },
+        "avoid": {
+          "says": "Receda ab nos.",
+          "means": "Back away from us."
+        },
+        "glare": {
+          "says": "Tu in zona nos. Error.",
+          "means": "You are on our turf. A mistake."
+        },
+        "mourn": {
+          "says": "Socius percutatum. Mano.",
+          "means": "A brother is down. I am staying with it."
+        },
+        "avenge": {
+          "says": "Tu percutavas socius. Deletabso tu.",
+          "means": "You shot my brother. I will delete you."
+        },
+        "grief_flee": {
+          "says": "Socius percutatum. Evadamus.",
+          "means": "A brother is down. We are out of here."
         },
         "spotted": {
           "says": "Intrusor detectum. Zeto.",

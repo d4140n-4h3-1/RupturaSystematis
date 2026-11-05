@@ -51,8 +51,9 @@
 pub mod screen;
 
 use crate::credits::Credits;
+use hydroxus_ai::social::faction::{Faction, Factions};
 use serde::Deserialize;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// Where the droids' conversations are.
 pub const SCRIPT: &str = "data/dialogue/droids.json";
@@ -257,6 +258,10 @@ pub struct Character {
     /// round it is theirs (see [`Turf`]): none, without.
     #[serde(default)]
     pub turf: Option<Turf>,
+    /// The faction it is of, by its key in the script's `factions`: none, without - its kind
+    /// minds what is done to anyone as done to its own, and starts each droid of it afresh.
+    #[serde(default)]
+    pub faction: Option<String>,
 }
 
 /// A group's turf: the spot it keeps to, standing about there, and the ground round it that it
@@ -289,7 +294,26 @@ pub struct Script {
     /// turning up again nearer by, as others (see [`crate::inhabitants::Inhabitants::recycle`]).
     #[serde(default)]
     pub crowd: bool,
+    /// The factions its kinds of droid are of, by key: what each is called, and how it takes
+    /// harm done to each of the others - and, as `nobody`, to no one in particular - where not as
+    /// done to its own (see [`hydroxus_ai::social::faction`]).
+    #[serde(default)]
+    pub factions: BTreeMap<String, FactionOf>,
 }
+
+/// A faction, as the script has it.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+pub struct FactionOf {
+    /// What it is called, as the player is told how it takes them: `Security`, say.
+    pub name: String,
+    /// How it takes harm done to each other faction, by key, or to `nobody`: 1 as done to its
+    /// own, 0 as nothing to it, -1 as good news. As done to its own, for any not named.
+    #[serde(default)]
+    pub relations: HashMap<String, f32>,
+}
+
+/// What harm done to no faction in particular is, among a faction's relations.
+pub const NOBODY: &str = "nobody";
 
 /// What the droids say among themselves about the player, on every map (see [`GOSSIP`]).
 pub const GOSSIP: &str = "data/dialogue/gossip.json";
@@ -311,6 +335,13 @@ pub struct Gossip {
     pub opinions: HashMap<String, Vec<Vec<Bark>>>,
     /// What one that hates the player says, rather than talk to them.
     pub refusals: Vec<Bark>,
+    /// For each kind of trouble, by name - `body`, `alarm`, `gunfire` - what one says telling of
+    /// it: `saw` if it came across it itself, `heard` if it was told.
+    #[serde(default)]
+    pub troubles: HashMap<String, Telling>,
+    /// What one answers news of trouble with.
+    #[serde(default)]
+    pub trouble_reactions: Vec<Bark>,
 }
 
 /// How a deed is told: by one that saw it, or one that heard of it.
@@ -349,6 +380,35 @@ impl Meeting {
 }
 
 impl Script {
+    /// Its factions, each neither for the player nor against them, related as it says; and each
+    /// kind of droid's, by its place in `characters`.
+    pub fn factions(&self, tuning: hydroxus_ai::social::faction::Tuning) -> (Factions, Vec<Option<Faction>>) {
+        let number = |key: &str| self.factions.keys().position(|k| k == key).map(|n| n as Faction);
+        let mut factions = Factions::new(self.factions.len(), tuning);
+        for (key, faction) in &self.factions {
+            let Some(f) = number(key) else {
+                continue;
+            };
+            for (to, &relation) in &faction.relations {
+                match to.as_str() {
+                    NOBODY => factions.relate(f, None, relation),
+                    to => {
+                        if let Some(to) = number(to) {
+                            factions.relate(f, Some(to), relation);
+                        }
+                    }
+                }
+            }
+        }
+        let of = self.characters.iter().map(|c| c.faction.as_deref().and_then(number)).collect();
+        (factions, of)
+    }
+
+    /// What the `faction`th faction is called.
+    pub fn faction_name(&self, faction: Faction) -> Option<&str> {
+        self.factions.values().nth(faction as usize).map(|f| f.name.as_str())
+    }
+
     /// The meetings two droids of the kinds `a` and `b` can have: each one's place in
     /// `meetings`, and whether `b` is the one to say its first line.
     pub fn meetings_between(&self, a: usize, b: usize) -> Vec<(usize, bool)> {
@@ -379,6 +439,16 @@ impl Script {
     /// Whatever in the conversations leads nowhere.
     pub fn problems(&self) -> Vec<String> {
         let mut problems = Vec::new();
+        for character in &self.characters {
+            if let Some(faction) = character.faction.as_ref().filter(|f| !self.factions.contains_key(*f)) {
+                problems.push(format!("{} is of {faction}, which is no faction", character.name));
+            }
+        }
+        for (key, faction) in &self.factions {
+            for to in faction.relations.keys().filter(|to| *to != NOBODY && !self.factions.contains_key(*to)) {
+                problems.push(format!("faction {key} minds {to}, which is no faction"));
+            }
+        }
         for character in &self.characters {
             let name = &character.name;
             let lines = &character.lines;
@@ -938,7 +1008,13 @@ mod tests {
         assert!(script.inhabitants.is_some_and(|n| n > 6), "more than a maze has");
         let sentries = script.characters.iter().filter(|c| !c.gang && c.threatened.is_some_and(|t| t.then == Provoked::Attacks));
         assert!(sentries.clone().count() > 0 && sentries.clone().all(|c| (0.0..1.0).contains(&c.in_pairs) && c.in_pairs > 0.0), "some of security in pairs, not all");
-        assert!(script.characters.iter().filter(|c| c.threatened.is_some_and(|t| t.then != Provoked::Attacks)).all(|c| c.in_pairs == 0.0));
+        // Some of the citizens walk about in pairs too, to take what becomes of each other to
+        // heart; most by themselves, to meet and stop to talk.
+        assert!(script
+            .characters
+            .iter()
+            .filter(|c| c.threatened.is_some_and(|t| t.then != Provoked::Attacks))
+            .all(|c| (0.0..0.5).contains(&c.in_pairs) && c.in_pairs > 0.0));
         for character in script.characters.iter().filter(|c| !c.gang) {
             assert!(voices.voices.contains_key(&character.name), "{} has a voice", character.name);
             let summa = character.lines.values().any(|line| line.says.contains("Summa"));
@@ -1142,6 +1218,11 @@ mod tests {
             assert!(gossip.opinions[attitude].iter().all(|lines| lines.len() == 2), "{attitude}");
         }
         assert!(!gossip.closings.is_empty() && !gossip.refusals.is_empty());
+        for kind in ["body", "alarm", "gunfire"] {
+            let telling = &gossip.troubles[kind];
+            assert!(!telling.saw.is_empty() && !telling.heard.is_empty(), "{kind}");
+        }
+        assert!(!gossip.trouble_reactions.is_empty());
         // Every line the droids say parses as System Latin, as the language's own parser has it.
         let lines: Vec<&Bark> = gossip
             .news
@@ -1151,6 +1232,8 @@ mod tests {
             .chain(&gossip.closings)
             .chain(gossip.opinions.values().flatten().flatten())
             .chain(&gossip.refusals)
+            .chain(gossip.troubles.values().flat_map(|t| t.saw.iter().chain(&t.heard)))
+            .chain(&gossip.trouble_reactions)
             .collect();
         let parser = dir.join("data/system_latin/sl_parser.py");
         for line in lines {
@@ -1160,6 +1243,61 @@ mod tests {
             };
             assert!(out.status.success(), "{}: {}", line.says, String::from_utf8_lossy(&out.stdout));
         }
+    }
+
+    #[test]
+    fn the_droids_show_what_they_think_in_passing_and_mourn_their_own_in_good_system_latin() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let parser = dir.join("data/system_latin/sl_parser.py");
+        let mut lines = Vec::new();
+        for path in [SCRIPT, URBS_SCRIPT] {
+            let script = Script::load(path).unwrap();
+            for character in script.characters.iter().filter(|c| c.threatened.is_some()) {
+                for bark in ["greet", "avoid", "glare"] {
+                    lines.push(character.barks.get(bark).unwrap_or_else(|| panic!("{} says {bark}", character.name)).clone());
+                }
+                // Those that walk about with others of their own, and are no sentries, take one of
+                // them shot down to heart; a gang's, with the means to do something about it.
+                let walks_with_others = character.in_pairs > 0.0 || character.in_groups_of >= 2;
+                let sentry = !character.gang && character.threatened.is_some_and(|t| t.then == Provoked::Attacks);
+                if walks_with_others && !sentry {
+                    for bark in ["mourn", "grief_flee"] {
+                        lines.push(character.barks.get(bark).unwrap_or_else(|| panic!("{} says {bark}", character.name)).clone());
+                    }
+                }
+                if walks_with_others && character.gang {
+                    lines.push(character.barks["avenge"].clone());
+                }
+                lines.extend(["tip", "tip_turf", "mourn", "grief_flee", "avenge"].iter().filter_map(|b| character.barks.get(*b).cloned()));
+            }
+        }
+        for line in lines {
+            assert!(!line.means.is_empty(), "{} means nothing", line.says);
+            let Ok(out) = std::process::Command::new("python3").arg(&parser).arg(&line.says).output() else {
+                return; // No Python here: the words are checked where there is.
+            };
+            assert!(out.status.success(), "{}: {}", line.says, String::from_utf8_lossy(&out.stdout));
+        }
+    }
+
+    #[test]
+    fn the_citys_kinds_are_of_factions_that_take_what_is_done_to_each_other_as_they_would() {
+        use hydroxus_ai::social::opinion::Deed;
+        let script = Script::load(URBS_SCRIPT).unwrap();
+        let (mut factions, of) = script.factions(Default::default());
+        assert!(of.iter().all(Option::is_some), "every kind of a faction");
+        let kind = |name: &str| of[script.characters.iter().position(|c| c.name == name).unwrap()];
+        let (security, citizens, gang) = (kind("Defendator"), kind("Explorator"), kind("Praedator"));
+        assert_eq!(citizens, kind("Reparator"));
+        assert_eq!(script.faction_name(gang.unwrap()), Some("The Praedatores"));
+        // One of security shot down: the gang is glad of it; a robbery, it does not mind.
+        factions.hear_of(&Default::default(), Deed::Shooting, security);
+        assert!(factions.standing(gang) > 0.0 && factions.standing(security) < 0.0 && factions.standing(citizens) < 0.0);
+        let before = factions.standing(gang);
+        factions.hear_of(&Default::default(), Deed::Robbing, None);
+        assert_eq!(factions.standing(gang), before);
+        let maze = Script::load(SCRIPT).unwrap();
+        assert!(maze.factions(Default::default()).1.iter().all(Option::is_some));
     }
 
     #[test]

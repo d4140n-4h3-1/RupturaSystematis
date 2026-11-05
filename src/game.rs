@@ -1,7 +1,14 @@
 //! The game itself: loading a level, playing rounds in it, and the player's input.
 
 use hydroxus_ai::perception::detection::{bearing, most_aware, stage_at, Stage as Awareness};
-use hydroxus_ai::social::{chat::Topic, opinion::{Attitude, Deed}};
+use hydroxus_ai::social::{
+    chat::Topic,
+    faction::Faction,
+    opinion::{Attitude, Deed},
+    passing::{self, Gesture, Passing as PassedBy},
+    ties::{self, Grief},
+    trouble::Kind as TroubleKind,
+};
 use crate::player::{
     pistol::{Bolts, Strike},
     posture::Posture,
@@ -150,8 +157,8 @@ struct Meet {
     next_in: f32,
 }
 
-/// The lines of a conversation among `members` about `topic` - news of the player, or what one
-/// thinks of them - as `gossip` has them: by who, as an index into `members`, and feeling how;
+/// The lines of a conversation among `members` about `topic` - news of the player, of trouble
+/// about town, or what one thinks of the player - as `gossip` has them: by who, as an index into `members`, and feeling how;
 /// each picked by `pick` from those there are. A hearer answers as it takes the player
 /// (`attitude`), now that it has heard. None for small talk, or with nothing in `gossip` to say.
 fn gossip_lines(
@@ -185,6 +192,19 @@ fn gossip_lines(
             let answer = one(gossip.reactions.get(name)?)?;
             let closing = one(&gossip.closings)?;
             Some(vec![(t, told, Mood::Warning), (h, answer, mood), (t, closing, Mood::Normal)])
+        }
+        Topic::Trouble { teller, trouble } => {
+            let t = index(teller)?;
+            let h = (0..members.len()).find(|&i| i != t)?;
+            let kind = match trouble.kind {
+                TroubleKind::Body => "body",
+                TroubleKind::Alarm => "alarm",
+                TroubleKind::Gunfire => "gunfire",
+            };
+            let telling = gossip.troubles.get(kind)?;
+            let told = one(if trouble.saw { &telling.saw } else { &telling.heard })?;
+            let answer = one(&gossip.trouble_reactions)?;
+            Some(vec![(t, told, Mood::Warning), (h, answer, Mood::Warning)])
         }
         Topic::Opinion { speaker, attitude } => {
             let s = index(speaker)?;
@@ -752,6 +772,14 @@ pub struct MazeGame {
     #[visit(skip)]
     #[reflect(hidden)]
     talk_in: f32,
+    /// How long since any droid last showed the player what it thinks of them in passing, and
+    /// till the next look round for one that might (see [`MazeGame::pass_by`]).
+    #[visit(skip)]
+    #[reflect(hidden)]
+    passed_by: PassedBy,
+    #[visit(skip)]
+    #[reflect(hidden)]
+    pass_look: f32,
     #[visit(skip)]
     #[reflect(hidden)]
     last_talk: Option<(usize, usize)>,
@@ -1063,6 +1091,7 @@ impl MazeGame {
             Game::BattleRoyale(map) => Some(ctf::ROYALE_MAPS[map].path.to_string()),
             Game::Heist(map) => Some(ctf::HEIST_MAPS[map].path.to_string()),
             Game::Story(map) => Some(ctf::STORY_MAPS[map].path.to_string()),
+            Game::Test(map) => Some(ctf::TEST_MAPS[map].path.to_string()),
             Game::Race(map) => Some(ctf::RACE_MAPS[map].path.to_string()),
             Game::Maze => platform::var("MAZE_MODEL"),
         };
@@ -2296,6 +2325,8 @@ impl MazeGame {
                     None => {
                         let script = self.script.as_ref();
                         let people = script.and_then(|script| script.inhabitants);
+                        // Its kinds' factions, each starting neither for the player nor against.
+                        let (factions, faction_of) = script.map_or_else(Default::default, |script| script.factions(crate::AI.faction));
                         let grouping = |character: usize| {
                             script
                                 .and_then(|script| script.characters.get(character))
@@ -2304,8 +2335,10 @@ impl MazeGame {
                                     groups_of: c.in_groups_of,
                                     share: c.share,
                                     turf: c.turf.map(|turf| (turf.share, turf.reach)),
+                                    faction: faction_of.get(character).copied().flatten(),
                                 })
                         };
+                        self.inhabitants.set_factions(factions);
                         self.inhabitants.populate(
                             scene,
                             liveries,
@@ -2598,9 +2631,55 @@ impl MazeGame {
         let friendly: Vec<usize> =
             witnesses.iter().map(|&(m, _)| m).filter(|&m| self.inhabitants.attitude(m) == Attitude::Friendly).collect();
         let knew: Vec<usize> = witnesses.iter().filter(|&&(_, knows)| knows).map(|&(m, _)| m).collect();
-        self.inhabitants.saw(&knew, Deed::Shooting, player);
+        let changed = self.inhabitants.saw(&knew, Deed::Shooting, player, Some(n));
+        self.factions_changed(changed);
+        // Its own - its partner, the rest of its group - take it as each one's nerve has it; but
+        // a sentry, whose duty comes first. Those that saw who did it hold it against them the
+        // more.
+        let companions = self.inhabitants.companions(n);
+        let grief = |game: &Self, m: usize, knows: bool| {
+            let fights = game.threatened(m).is_some_and(|threatened| threatened.then == Provoked::Attacks);
+            let sentry = game.inhabitants.who(m).zip(game.script.as_ref()).is_some_and(|((c, _), script)| is_sentry(script, c));
+            (companions.contains(&m) && !sentry).then(|| ties::grieve(&crate::AI.ties, game.inhabitants.nerve(m), fights, knows))
+        };
         let mut running = Vec::new();
         for (m, knows) in witnesses {
+            if knows && companions.contains(&m) {
+                self.inhabitants.feel(m, -crate::AI.ties.grudge);
+            }
+            match grief(self, m, knows) {
+                Some(Grief::Avenge) => {
+                    Log::info(format!("Ties: droid {m} goes after whoever shot droid {n}"));
+                    self.wanted += 1;
+                    self.inhabitants.set_hostile(m);
+                    self.inhabitants.set_eyes(m, screen::eyes(Mood::Hostile));
+                    self.bark(m, "avenge", Mood::Hostile);
+                    continue;
+                }
+                Some(Grief::Flee) => {
+                    Log::info(format!("Ties: droid {m} runs from where droid {n} was shot"));
+                    self.inhabitants.set_eyes(m, screen::eyes(Mood::Agitated));
+                    self.bark(m, "grief_flee", Mood::Agitated);
+                    // One that would tell a sentry runs to one; any other only runs.
+                    if self.threatened(m).is_some_and(|threatened| threatened.then == Provoked::Alarm) && !friendly.contains(&m) {
+                        self.inhabitants.witness(m, if knows { player } else { fell }, knows);
+                        running.push((m, knows));
+                    } else {
+                        self.inhabitants.flee_from(m, if knows { player } else { fell });
+                    }
+                    continue;
+                }
+                Some(Grief::Mourn) => {
+                    Log::info(format!("Ties: droid {m} goes to droid {n}, shot down"));
+                    self.inhabitants.set_eyes(m, screen::eyes(Mood::Warning));
+                    self.bark(m, "mourn", Mood::Warning);
+                    // Then, one that would tell a sentry - and does not like the player - does.
+                    let tells = self.threatened(m).is_some_and(|threatened| threatened.then == Provoked::Alarm) && !friendly.contains(&m);
+                    self.inhabitants.mourn(m, fell, tells.then_some((if knows { player } else { fell }, knows)));
+                    continue;
+                }
+                None => (),
+            }
             match self.threatened(m).map(|threatened| threatened.then) {
                 Some(Provoked::Attacks) if knows => self.on_threat(ctx, m, Threat::Provoked),
                 Some(Provoked::Attacks) => {
@@ -3095,7 +3174,7 @@ impl MazeGame {
         let mood = match uneasy {
             Uneasy::Noticed => {
                 let player = self.player.feet(&ctx.scenes[self.scene].graph);
-                self.inhabitants.saw(&[n], Deed::Brandishing, player);
+                self.inhabitants.saw(&[n], Deed::Brandishing, player, Some(n));
                 let line = if self.has_bark(n, "drawn") { "drawn" } else { "warned" };
                 self.bark(n, line, Mood::Warning);
                 Some(Mood::Warning)
@@ -3124,7 +3203,24 @@ impl MazeGame {
         let player = self.player.feet(graph);
         let in_the_dark = self.lights_off && !self.player.flashlight_on();
         let saw = self.inhabitants.onlookers(graph, (player, self.player.collider()), in_the_dark, ONLOOK_REACH);
-        self.inhabitants.saw(&saw, deed, player);
+        let changed = self.inhabitants.saw(&saw, deed, player, None);
+        self.factions_changed(changed);
+    }
+
+    /// Tells the player how each faction in `changed` takes them now, as it does.
+    fn factions_changed(&mut self, changed: Vec<(Faction, Attitude)>) {
+        for (faction, attitude) in changed {
+            let Some(name) = self.script.as_ref().and_then(|script| script.faction_name(faction)).map(str::to_string) else {
+                continue;
+            };
+            let how = match attitude {
+                Attitude::Friendly => "think well of you",
+                Attitude::Neutral => "think nothing much of you",
+                Attitude::Wary => "are wary of you",
+                Attitude::Hostile => "have turned against you",
+            };
+            self.hud.show_note(format!("{name} {how}"));
+        }
     }
 
     /// The `n`th droid has gone on to `threat`, with the pistol pointed at it: its eyes and what
@@ -3133,7 +3229,8 @@ impl MazeGame {
         // Warned the first time, it has seen the player threaten it, and thinks the less of them.
         if threat == Threat::Warned {
             let player = self.player.feet(&ctx.scenes[self.scene].graph);
-            self.inhabitants.saw(&[n], Deed::Threatening, player);
+            let changed = self.inhabitants.saw(&[n], Deed::Threatening, player, Some(n));
+            self.factions_changed(changed);
         }
         let (mood, bark) = match threat {
             Threat::Warned => (Mood::Warning, "warned"),
@@ -3200,6 +3297,7 @@ impl MazeGame {
         }
         self.talk_among(ctx);
         self.meet(ctx);
+        self.pass_by(ctx);
         // In capture the flag, a droid going after one of the other side says so, and the
         // droids' shots leave their pistols.
         for n in engaged {
@@ -3342,6 +3440,69 @@ impl MazeGame {
         talk.next_in = TALK_PAUSE + line.says.len() as f32 * TALK_PER_LETTER;
         talk.line += 1;
         self.talk = Some(talk);
+    }
+
+    /// Has a droid the player passes close by, going about its business, show them what it thinks
+    /// of them (see [`hydroxus_ai::social::passing`]): one that likes them greets them - or tips
+    /// them off, security being about, or a gang's turf near, if it has a word for it - one that
+    /// thinks nothing much of them may nod, one wary of them keeps away, and one that hates them
+    /// stops and glares. Each once in a while, and only so often among them all.
+    fn pass_by(&mut self, ctx: &mut PluginContext) {
+        let tuning = crate::AI.passing;
+        self.passed_by.step(ctx.dt);
+        self.pass_look -= ctx.dt;
+        if self.pass_look > 0.0 || !self.passed_by.ready(tuning.between) || self.talk.is_some() {
+            return;
+        }
+        self.pass_look = 0.5;
+        let Some(script) = self.script.as_ref() else {
+            return;
+        };
+        let graph = &ctx.scenes[self.scene].graph;
+        let player = self.player.feet(graph);
+        let in_the_dark = self.lights_off && !self.player.flashlight_on();
+        let onlookers = self.inhabitants.onlookers(graph, (player, self.player.collider()), in_the_dark, tuning.near);
+        let Some(n) = onlookers
+            .into_iter()
+            .filter(|&n| self.inhabitants.free_to_pass_remark(n))
+            .min_by(|&a, &b| {
+                let away = |n: usize| self.inhabitants.feet(n).map_or(f32::INFINITY, |feet| (feet - player).norm());
+                away(a).total_cmp(&away(b))
+            })
+        else {
+            return;
+        };
+        let Some((character, _)) = self.inhabitants.who(n) else {
+            return;
+        };
+        let barks = &script.characters[character].barks;
+        // What it could tip them off about, that it has a word for.
+        let tip = if barks.contains_key("tip") && self.inhabitants.security_about(player, 60.0, |c| is_sentry(script, c)) {
+            Some("tip")
+        } else if barks.contains_key("tip_turf") && self.inhabitants.turf_about(player, 30.0) {
+            Some("tip_turf")
+        } else {
+            None
+        };
+        let roll = self.rng().below(1000) as f32 / 1000.0;
+        let Some(gesture) = passing::gesture(&tuning, self.inhabitants.attitude(n), tip.is_some(), roll) else {
+            // Letting them by, it has had its chance a while.
+            self.inhabitants.pass_remark_none(n);
+            return;
+        };
+        self.passed_by.did();
+        self.inhabitants.pass_remark(n, gesture.looks());
+        Log::info(format!("Passing: droid {n} {gesture:?}"));
+        let (name, mood) = match gesture {
+            Gesture::Greet => ("greet", Mood::Success),
+            Gesture::Tip => (tip.unwrap_or("tip"), Mood::Success),
+            Gesture::Nod => return,
+            Gesture::Avoid => ("avoid", Mood::Warning),
+            Gesture::Glare => ("glare", Mood::Agitated),
+        };
+        if gesture.says() {
+            self.bark(n, name, mood);
+        }
     }
 
     /// Now and then has two droids that walk about by themselves, and have come close to each
@@ -4006,7 +4167,7 @@ impl MazeGame {
         if let Some(deed) = deed {
             let droid = talking.droid;
             let at = self.inhabitants.feet(droid).unwrap_or_default();
-            self.inhabitants.saw(&[droid], deed, at);
+            self.inhabitants.saw(&[droid], deed, at, Some(droid));
         }
         let Some(talking) = self.talking.as_mut() else {
             return;
@@ -6231,7 +6392,7 @@ mod tests {
     #[test]
     fn news_is_told_answered_as_the_hearer_takes_it_and_closed_and_an_opinion_is_an_exchange() {
         let gossip = gossip();
-        let rumour = Rumour { id: 0, deed: Deed::Robbing, at: V::zeros(), strength: 0.7, saw: false };
+        let rumour = Rumour { id: 0, deed: Deed::Robbing, at: V::zeros(), strength: 0.7, saw: false, victim: None };
         let members = [7, 3];
         let lines = gossip_lines(&gossip, &members, Topic::News { teller: 3, rumour }, |_| Attitude::Wary, &mut |_| 0).unwrap();
         let by: Vec<usize> = lines.iter().map(|(by, _, _)| *by).collect();
