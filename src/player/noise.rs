@@ -4,7 +4,10 @@
 //! droid away from the player. A drone's shots are heard too (see [`SHOT_NOISE`]). Walking, crouched
 //! or crawling, the player makes no sound.
 //!
-//! Each noise is where it is made and how far off it carries, in meters along the corridors.
+//! Each noise is where it is made, how far off it carries, in meters along the corridors, and
+//! whether it is sudden - a shot, a bolt hitting something - which no one mistakes for anything
+//! else, or the sort a sneaking player makes, footfalls and landings, which only make those who
+//! hear them more aware of them (see [`crate::inhabitants::Inhabitants::hear`]).
 
 use super::{posture::Gait, posture::Posture, Player};
 use fyrox::core::algebra::Vector3;
@@ -29,8 +32,9 @@ const HEARD_MOVING: f32 = 0.5;
 
 #[derive(Debug, Default, Clone, PartialEq)]
 pub(super) struct Noises {
-    /// What has been made heard since the game last asked: where, and how far off it carries.
-    made: Vec<(Vector3<f32>, f32)>,
+    /// What has been made heard since the game last asked: where, how far off it carries, and
+    /// whether it is sudden.
+    made: Vec<(Vector3<f32>, f32, bool)>,
     /// How long until the next footfall is heard, in seconds.
     next_footfall: f32,
 }
@@ -47,10 +51,10 @@ fn footfall(posture: Posture, gait: Gait) -> f32 {
 }
 
 impl Player {
-    /// Makes `loudness` heard at `at`.
-    pub(super) fn make_noise(&mut self, at: Vector3<f32>, loudness: f32) {
+    /// Makes `loudness` heard at `at`, `sudden` or not.
+    pub(super) fn make_noise(&mut self, at: Vector3<f32>, loudness: f32, sudden: bool) {
         if loudness > 0.0 {
-            self.noises.made.push((at, loudness));
+            self.noises.made.push((at, loudness, sudden));
         }
     }
 
@@ -63,20 +67,20 @@ impl Player {
         }
         if self.noises.next_footfall <= 0.0 {
             self.noises.next_footfall = FOOTFALL;
-            self.make_noise(feet, footfall(self.posture, gait));
+            self.make_noise(feet, footfall(self.posture, gait), false);
         }
     }
 
     /// Landing at `feet`, falling as fast as the body was: heard if it was a hard landing.
     pub(super) fn thud(&mut self, feet: Vector3<f32>) {
         if self.fall_speed > LOUD_LANDING {
-            self.make_noise(feet, LANDING_NOISE);
+            self.make_noise(feet, LANDING_NOISE, false);
         }
     }
 
-    /// What the player has made heard since this was last asked: where, and how far off it
-    /// carries, in meters.
-    pub fn noises(&mut self) -> Vec<(Vector3<f32>, f32)> {
+    /// What the player has made heard since this was last asked: where, how far off it carries,
+    /// in meters, and whether it is sudden.
+    pub fn noises(&mut self) -> Vec<(Vector3<f32>, f32, bool)> {
         std::mem::take(&mut self.noises.made)
     }
 }

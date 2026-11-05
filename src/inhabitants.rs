@@ -3944,15 +3944,18 @@ impl Inhabitants {
             .position(|droid| droid.collider == collider)
     }
 
-    /// A noise at `at`, that carries `loudness` meters along the corridors of `grid`, whose
-    /// corner is at `origin`. Every hostile droid within earshot that is not on Alert - and has
-    /// not just heard something else, or been shot - runs to where it was, and searches from
-    /// there.
+    /// Has each droid hunting the player, wary or searching, that hears a noise made at `at`,
+    /// carrying `loudness` meters along the floor of `mesh` (see [`Heard`]), take it in. A
+    /// `sudden` one - a shot, a bolt hitting something - it searches from at once. Any other - a
+    /// footfall, a landing - makes it the more aware of the player, the nearer it is (see
+    /// [`Detection::hear`]): enough to notice them, it goes to look where it heard it (see
+    /// [`hydroxus_ai::tactics::investigate`]); sure of them, it searches from there.
     pub fn hear(
         &mut self,
         mesh: &NavMesh,
         at: Vector3<f32>,
         loudness: f32,
+        sudden: bool,
     ) {
         let listening = |droid: &Inhabitant| {
             // Firing blind, it is too busy to - and would only hear its own.
@@ -3971,8 +3974,25 @@ impl Inhabitants {
             if !listening(droid) {
                 continue;
             }
-            if !noise.by(mesh, droid.feet) {
+            let Some(nearness) = noise.nearness(mesh, droid.feet) else {
                 continue;
+            };
+            if !sudden {
+                let eagerness = if droid.alert == Some(Alert::Evasion) { AI.detection.searching } else { 1.0 };
+                match (droid.detection.hear(&AI.detection, nearness, eagerness), droid.investigating.as_mut()) {
+                    // Sure someone is there: it searches from where it heard them, as from a shot.
+                    (Some(Change::Spotted), _) => droid.investigating = None,
+                    // Something there, it thinks: it goes to look.
+                    (Some(Change::Noticed), None) if !droid.talking => {
+                        droid.investigating = Some(Investigation::new(&AI.investigate, at));
+                        continue;
+                    }
+                    (_, Some(look)) => {
+                        look.saw_again(&AI.investigate, at);
+                        continue;
+                    }
+                    _ => continue,
+                }
             }
             if droid.deaf > 0.0 {
                 continue;
