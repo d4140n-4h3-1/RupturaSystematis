@@ -119,6 +119,7 @@ use hydroxus_ai::{
         witness::knows_who,
     },
     tactics::{
+        conduct::{self, Conduct, Reasoners, Role},
         investigate::{self, Investigation},
         blind::{self, BlindFire},
         chase, cover,
@@ -456,6 +457,8 @@ struct Inhabitant {
     radio: bool,
     calling: Option<(f32, Vector3<f32>)>,
     radioed: bool,
+    /// What it chose to do last, by utility (see [`hydroxus_ai::tactics::conduct`]).
+    conduct: Option<Conduct>,
     /// One of its own shot down before it: going to it and kneeling by it (see
     /// [`hydroxus_ai::social::ties`]) - and then, if it saw it done, to tell a sentry: where,
     /// and whether it knows who.
@@ -608,6 +611,7 @@ impl Inhabitant {
         self.told_too_close = false;
         self.calling = None;
         self.radioed = false;
+        self.conduct = None;
         self.mourning = None;
         self.report_after = None;
         self.regarding = 0.0;
@@ -726,11 +730,14 @@ pub struct Grouping {
     pub turf: Option<(f32, f32)>,
     /// The faction its kind is of, if any (see [`hydroxus_ai::social::faction`]).
     pub faction: Option<Faction>,
+    /// What kind of droid it is, which weighs what it chooses to do (see
+    /// [`hydroxus_ai::tactics::conduct`]): one of a side is a fighter, whatever its kind.
+    pub role: Role,
 }
 
 impl Default for Grouping {
     fn default() -> Self {
-        Self { in_pairs: 0.0, groups_of: 0, share: 1.0, turf: None, faction: None }
+        Self { in_pairs: 0.0, groups_of: 0, share: 1.0, turf: None, faction: None, role: Role::Sentry }
     }
 }
 
@@ -876,6 +883,8 @@ pub struct Inhabitants {
     last_sight: Option<(Vector3<f32>, Vector3<f32>)>,
     /// Where a noise or an alarm has sent droids to search, to search from.
     search_from: Option<Vector3<f32>>,
+    /// How each role chooses what to do (see [`hydroxus_ai::tactics::conduct`]).
+    reasoners: Reasoners,
     /// The last radio call for help that went out: how long ago, in seconds, and where the player
     /// was seen (see [`RADIO_QUIET`]).
     last_call: Option<(f32, Vector3<f32>)>,
@@ -2087,6 +2096,7 @@ impl Inhabitants {
             radio,
             calling: None,
             radioed: false,
+            conduct: None,
             mourning: None,
             report_after: None,
             regarding: 0.0,
@@ -2842,6 +2852,43 @@ impl Inhabitants {
                     }
                 }
             }
+            // Held to nothing - not down, carried, in a chase, talking, nor just turned hostile -
+            // it chooses what to do, by utility: of all that is open to it, what its role makes
+            // most of (see `hydroxus_ai::tactics::conduct`).
+            let foe_at = fighting.and_then(foe_place);
+            let held = droid.down
+                || on_trip
+                || droid.pursuit.is_some()
+                || droid.talking
+                || droid.warned > 0
+                || droid.alert.is_some() && droid.windup > 0.0;
+            droid.conduct = if held {
+                None
+            } else {
+                let calm = droid.alert.is_none();
+                let reading = conduct::Reading {
+                    hunting: droid.alert == Some(Alert::Alert),
+                    foe: foe_at.is_some(),
+                    shot_at: droid.shot_from.is_some() && droid.side.is_some(),
+                    investigating: droid.investigating.is_some() && droid.alert.is_some_and(|alert| alert != Alert::Alert),
+                    searching: droid.alert == Some(Alert::Evasion),
+                    reporting: droid.witness.and_then(|witness| witness.sentry()).is_some(),
+                    sheltering: droid.cover.is_some(),
+                    mourning: calm && droid.mourning.is_some(),
+                    afraid: calm && droid.unease.afraid(),
+                    watching: calm && droid.unease.watching(),
+                    avoiding: calm && droid.avoiding > 0.0 && flat(player - droid.feet).norm() < AI.passing.near * 1.5,
+                    regarding: calm && droid.regarding > 0.0,
+                    partnered: partners[me].is_some_and(|leader| leader.about && !groups.leads(me)),
+                    nerve: ties::nerve(droid.code.wrapping_mul(7919) ^ me as u32),
+                    wariness: droid.wariness.level,
+                };
+                let role = match droid.side {
+                    Some(_) => Role::Fighter,
+                    None => self.groupings.get(droid.character).map_or(Role::Sentry, |g| g.role),
+                };
+                Some(self.reasoners.choose(role, &reading, droid.conduct))
+            };
             // Stopped, it stays where it went down - aboard the train, going along with it.
             if droid.down {
                 droid.route.clear();
@@ -2908,7 +2955,10 @@ impl Inhabitants {
                 if to_them.norm() > 1.0e-3 {
                     droid.heading = to_them.x.atan2(to_them.z);
                 }
-            } else if let Some(mut mourning) = droid.mourning.filter(|_| droid.alert.is_none()) {
+            } else if droid.alert.is_some() && droid.windup > 0.0 {
+                // Just turned hostile, it stands a moment where it is.
+                droid.route.clear();
+            } else if let (Some(Conduct::Mourn), Some(mut mourning)) = (droid.conduct, droid.mourning) {
                 // One of its own down: it goes to it, and kneels by it a while - and then, having
                 // seen it done, goes to tell a sentry.
                 droid.mourning = match mourning.step(&AI.ties, droid.feet, dt) {
@@ -2931,7 +2981,7 @@ impl Inhabitants {
                         mourned.push((me, at, knows));
                     }
                 }
-            } else if droid.alert.is_none() && droid.avoiding > 0.0 && flat(player - droid.feet).norm() < AI.passing.near * 1.5 {
+            } else if droid.conduct == Some(Conduct::Avoid) {
                 // Wary of the player passing: it keeps its distance.
                 droid.replan -= dt;
                 if droid.replan <= 0.0 || droid.route.is_empty() {
@@ -2941,7 +2991,7 @@ impl Inhabitants {
                         droid.route = route_to(droid.feet, to);
                     }
                 }
-            } else if droid.alert.is_none() && droid.regarding > 0.0 {
+            } else if droid.conduct == Some(Conduct::Regard) {
                 // Passing the player, it stops and looks at them: a greeting, a nod, a glare.
                 droid.route.clear();
                 droid.waiting = 0.0;
@@ -2950,7 +3000,7 @@ impl Inhabitants {
                 if to_them.norm() > 1.0e-3 {
                     droid.heading = to_them.x.atan2(to_them.z);
                 }
-            } else if droid.alert.is_none() && droid.unease.afraid() {
+            } else if droid.conduct == Some(Conduct::BackAway) {
                 // The player too near with a weapon drawn: it backs away from them.
                 droid.replan -= dt;
                 if droid.replan <= 0.0 || droid.route.is_empty() {
@@ -2960,7 +3010,7 @@ impl Inhabitants {
                         droid.route = route_to(droid.feet, to);
                     }
                 }
-            } else if droid.alert.is_none() && droid.unease.watching() {
+            } else if droid.conduct == Some(Conduct::Watch) {
                 // Uneasy, it stands watching whoever has the weapon out.
                 droid.route.clear();
                 droid.waiting = 0.0;
@@ -2969,10 +3019,7 @@ impl Inhabitants {
                 if to_them.norm() > 1.0e-3 {
                     droid.heading = to_them.x.atan2(to_them.z);
                 }
-            } else if droid.alert.is_some() && droid.windup > 0.0 {
-                // Just turned hostile, it stands a moment where it is.
-                droid.route.clear();
-            } else if droid.alert == Some(Alert::Alert) {
+            } else if droid.conduct == Some(Conduct::Chase) {
                 // After the player, the way to them worked out again every so often as they move.
                 droid.replan -= dt;
                 // Not while it stands to shoot, which leaves it no route; and with no way there
@@ -2984,7 +3031,7 @@ impl Inhabitants {
                     (droid.route, droid.trip) = go_to(droid.feet, cut_off.unwrap_or(player));
                     droid.no_way = droid.route.is_empty();
                 }
-            } else if let Some((feet, _)) = fighting.and_then(foe_place) {
+            } else if let (Some(Conduct::Fight), Some((feet, _))) = (droid.conduct, foe_at) {
                 // After one of the other side, the way to it worked out again every so often.
                 droid.replan -= dt;
                 // As after the player: not while it stands to shoot, nor before it is time again.
@@ -2993,7 +3040,7 @@ impl Inhabitants {
                     (droid.route, droid.trip) = go_to(droid.feet, feet);
                     droid.no_way = droid.route.is_empty();
                 }
-            } else if let Some((from, _)) = droid.shot_from.filter(|_| droid.side.is_some()) {
+            } else if let (Some(Conduct::ShootBack), Some((from, _))) = (droid.conduct, droid.shot_from) {
                 // Shot at by someone it did not see: after them, where the shot came from.
                 droid.replan -= dt;
                 // As after the player: not while it stands to shoot, nor before it is time again.
@@ -3002,7 +3049,7 @@ impl Inhabitants {
                     (droid.route, droid.trip) = go_to(droid.feet, from);
                     droid.no_way = droid.route.is_empty();
                 }
-            } else if let Some(mut look) = droid.investigating.filter(|_| droid.alert.is_some_and(|alert| alert != Alert::Alert)) {
+            } else if let (Some(Conduct::Investigate), Some(mut look)) = (droid.conduct, droid.investigating) {
                 // Having noticed the player: it looks that way, goes over to where it did, and
                 // looks about there - and then, finding nothing, goes back to what it was doing.
                 droid.investigating = match look.step(&AI.investigate, droid.feet, droid.heading, dt) {
@@ -3023,7 +3070,7 @@ impl Inhabitants {
                         None
                     }
                 };
-            } else if droid.alert == Some(Alert::Evasion) {
+            } else if droid.conduct == Some(Conduct::Search) {
                 if droid.route.is_empty() {
                     match droid.looking {
                         // Looking about where it is, one way and then the other.
@@ -3077,7 +3124,7 @@ impl Inhabitants {
                         }
                     }
                 }
-            } else if let Some(sentry) = droid.witness.and_then(|witness| witness.sentry()) {
+            } else if let (Some(Conduct::Report), Some(sentry)) = (droid.conduct, droid.witness.and_then(|witness| witness.sentry())) {
                 // A witness, on its way to tell a sentry: the way to it worked out again every
                 // so often as it walks about.
                 droid.replan -= dt;
@@ -3087,7 +3134,7 @@ impl Inhabitants {
                         (droid.route, droid.trip) = go_to(droid.feet, feet);
                     }
                 }
-            } else if let Some((danger, picked)) = droid.cover {
+            } else if let (Some(Conduct::Shelter), Some((danger, picked))) = (droid.conduct, droid.cover) {
                 // A bystander to a shootout: running from it to somewhere it cannot be seen
                 // from, if there is anywhere about, or else as far off as it can; and there,
                 // crouched, it faces the way of it.
@@ -3118,7 +3165,7 @@ impl Inhabitants {
                         droid.heading = to.x.atan2(to.z);
                     }
                 }
-            } else if let Some(leader) = partners[me].filter(|leader| leader.about && !groups.leads(me)) {
+            } else if let (Some(Conduct::Follow), Some(leader)) = (droid.conduct, partners[me].filter(|leader| leader.about && !groups.leads(me))) {
                 // Keeping beside its partner, on its right and a step behind - or, one of a
                 // group, wherever about the one leading it it keeps (see [`ABOUT_LEADER`]) - where
                 // that is going to be in a moment, as it walks; or else behind it, with no floor

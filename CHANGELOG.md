@@ -28,6 +28,14 @@ What changed in Ruptura Systematis, newest first. How to play it is in the [READ
   **The radios work**: one that spots you radios for help, and two and a half seconds later every
   security droid within 300 m comes to search where it saw you, and the drone too. Take it down
   before it finishes and no one hears. One call to a sighting: the others know it's been called in.
+- **Every droid chooses what to do by weighing its options** (utility scoring), as the drones
+  already did on patrol: chasing, searching, investigating, telling security, sheltering,
+  mourning, backing off, keeping away, following its partner or going about its business - each
+  scored by what kind of droid it is. Security goes after you first; a citizen tells security and
+  gets out of the way first; a gang member, and a droid on a side in battle, goes for the other
+  side first. Danger comes before company: caught by a shootout, a droid takes cover rather than
+  stop to look at you - or, unless it has the nerve to stay, kneel by one of its own - and the
+  warier it is, the less it stops to look at anyone.
 - **The conversation panel no longer covers the face** of whoever you're talking to: it sits low,
   is never more than 40% of the screen high nor wider than the window, and its text is a little
   smaller. Who's talking and what they say stay put at the top; the replies under them scroll,

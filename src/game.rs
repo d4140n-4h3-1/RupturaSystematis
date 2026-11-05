@@ -9,6 +9,7 @@ use hydroxus_ai::social::{
     ties::{self, Grief},
     trouble::Kind as TroubleKind,
 };
+use hydroxus_ai::tactics::conduct::Role;
 use crate::player::{
     pistol::{Bolts, Strike},
     posture::Posture,
@@ -2353,6 +2354,13 @@ impl MazeGame {
                                     share: c.share,
                                     turf: c.turf.map(|turf| (turf.share, turf.reach)),
                                     faction: faction_of.get(character).copied().flatten(),
+                                    // A gang's, a citizen's - one that runs to tell security - or
+                                    // else security's, choosing what to do.
+                                    role: match c.threatened.map(|t| t.then) {
+                                        _ if c.gang => Role::Gang,
+                                        Some(Provoked::Alarm) => Role::Citizen,
+                                        _ => Role::Sentry,
+                                    },
                                 })
                         };
                         self.inhabitants.set_factions(factions);
