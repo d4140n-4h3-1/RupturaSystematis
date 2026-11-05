@@ -3087,18 +3087,33 @@ impl MazeGame {
     }
 
     /// The `n`th droid has gone on to `uneasy` with the player's weapon drawn near it: noticing it,
-    /// it says so and thinks the less of them; its eyes show how it takes it.
+    /// it says so (its `drawn` bark, or else its `warned`) and thinks the less of them; the player
+    /// too close with it, it tells them so as it backs away (`drawn_close`), once; and at ease
+    /// again with the weapon put away, it says that too (`drawn_put_away`). Its eyes show how it
+    /// takes it.
     fn on_unease(&mut self, ctx: &mut PluginContext, n: usize, uneasy: Uneasy) {
         let mood = match uneasy {
             Uneasy::Noticed => {
                 let player = self.player.feet(&ctx.scenes[self.scene].graph);
                 self.inhabitants.saw(&[n], Deed::Brandishing, player);
-                self.bark(n, "warned", Mood::Warning);
+                let line = if self.has_bark(n, "drawn") { "drawn" } else { "warned" };
+                self.bark(n, line, Mood::Warning);
                 Some(Mood::Warning)
             }
-            Uneasy::Afraid => Some(Mood::Agitated),
+            Uneasy::Afraid => {
+                if self.inhabitants.tells_too_close(n) {
+                    self.bark(n, "drawn_close", Mood::Agitated);
+                }
+                Some(Mood::Agitated)
+            }
             Uneasy::Wary => Some(Mood::Warning),
-            Uneasy::Settled => None,
+            Uneasy::Settled => {
+                // Put away, it says so; only gone out of its sight with it, it has nothing to say.
+                if !self.player.armed() {
+                    self.bark(n, "drawn_put_away", Mood::Normal);
+                }
+                None
+            }
         };
         self.inhabitants.set_eyes(n, mood.and_then(screen::eyes));
     }
@@ -3441,6 +3456,14 @@ impl MazeGame {
         if self.inhabitants.feet(n).is_some_and(|feet| (feet - self.heard_at).norm() <= ROYALE_HEARD_WITHIN) {
             self.bark_anyway(n, name, mood);
         }
+    }
+
+    /// Whether the `n`th droid has a bark `name` to say.
+    fn has_bark(&self, n: usize, name: &str) -> bool {
+        self.script
+            .as_ref()
+            .zip(self.inhabitants.who(n))
+            .is_some_and(|(script, (character, _))| script.characters[character].barks.contains_key(name))
     }
 
     /// Has the `n`th droid say its bark `name`, however far off it is.

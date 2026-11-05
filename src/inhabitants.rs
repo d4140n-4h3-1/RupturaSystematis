@@ -416,6 +416,9 @@ struct Inhabitant {
     /// How it takes the player's weapon drawn near it, not pointed at it (see
     /// [`hydroxus_ai::tactics::threat::Unease`]).
     unease: Unease,
+    /// Whether it has told the player off for coming too close with it, since it last grew
+    /// uneasy: once is enough, however often they step in and out.
+    told_too_close: bool,
     /// Where it last saw the player's feet, and which way they were going then, roughly.
     lost_at: Vector3<f32>,
     lost_going: Vector3<f32>,
@@ -554,6 +557,7 @@ impl Inhabitant {
         self.investigating = None;
         self.wariness = Wariness::default();
         self.unease.reset();
+        self.told_too_close = false;
         self.searched = 0;
         self.looking = None;
         self.deaf = 0.0;
@@ -1959,6 +1963,7 @@ impl Inhabitants {
             investigating: None,
             wariness: Wariness::default(),
             unease: Unease::default(),
+            told_too_close: false,
             lost_at: feet,
             lost_going: Vector3::zeros(),
             search_left: 0.0,
@@ -3467,6 +3472,7 @@ impl Inhabitants {
                 if droid.unease.uneasy() {
                     droid.unease.reset();
                 }
+                droid.told_too_close = false;
                 continue;
             }
             // Pointed at it, it takes it as that says.
@@ -3479,6 +3485,9 @@ impl Inhabitants {
                 && Sight::default().could_see(None, droid.feet, droid.heading, player, posture.into(), in_the_dark)
                 && in_sight(droid.feet);
             if let Some(stage) = droid.unease.step(&AI.threat, sees, distance, dt) {
+                if stage == Uneasy::Settled {
+                    droid.told_too_close = false;
+                }
                 stages.push((n, stage));
             }
         }
@@ -4478,6 +4487,12 @@ impl Inhabitants {
         if let Some(witness) = self.droids.get_mut(n).and_then(|droid| droid.witness.as_mut()) {
             witness.knows = true;
         }
+    }
+
+    /// Whether the `n`th droid, backing away from a weapon drawn too near it, has yet to tell the
+    /// player so since it grew uneasy - and from now on, has.
+    pub fn tells_too_close(&mut self, n: usize) -> bool {
+        self.droids.get_mut(n).is_some_and(|droid| !std::mem::replace(&mut droid.told_too_close, true))
     }
 
     /// Has the `n`th droid's eyes glow `colour`, or their own colour with none. Hostile red is its

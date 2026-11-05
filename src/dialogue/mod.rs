@@ -1163,6 +1163,28 @@ mod tests {
     }
 
     #[test]
+    fn every_droid_that_minds_a_weapon_has_words_for_one_drawn_in_good_system_latin() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let parser = dir.join("data/system_latin/sl_parser.py");
+        let mut minding = 0;
+        for path in [SCRIPT, URBS_SCRIPT] {
+            let script = Script::load(path).unwrap();
+            for character in script.characters.iter().filter(|c| c.threatened.is_some()) {
+                minding += 1;
+                for bark in ["drawn", "drawn_close", "drawn_put_away"] {
+                    let line = character.barks.get(bark).unwrap_or_else(|| panic!("{} says {bark}", character.name));
+                    assert!(!line.means.is_empty(), "{} {bark} means nothing", character.name);
+                    let Ok(out) = std::process::Command::new("python3").arg(&parser).arg(&line.says).output() else {
+                        return; // No Python here: the words are checked where there is.
+                    };
+                    assert!(out.status.success(), "{}: {}", line.says, String::from_utf8_lossy(&out.stdout));
+                }
+            }
+        }
+        assert!(minding >= 7, "the maze's and the city's kinds alike");
+    }
+
+    #[test]
     fn what_a_droid_thinks_of_the_player_sways_its_checks_within_reason() {
         let script = script();
         let liked = Conversation::from(&script, 0, None).unwrap().swayed(20);

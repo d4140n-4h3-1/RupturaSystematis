@@ -129,6 +129,18 @@
           "says": "Accipatum. Observo tu.",
           "means": "Acknowledged. I am watching you."
         },
+        "drawn": {
+          "says": "Telum activum detectum. Observo tu.",
+          "means": "Drawn weapon detected. I am watching you."
+        },
+        "drawn_close": {
+          "says": "Sta. Non appropinqua. Telum periculosum.",
+          "means": "Halt. Come no closer. Your weapon is dangerous."
+        },
+        "drawn_put_away": {
+          "says": "Affirmatum. Telum desactivatum. Continua.",
+          "means": "Good. Weapon put away. Carry on."
+        },
         "alarmed": {
           "says": "Sirenatio accipatum. Zeto fur.",
           "means": "Alarm received. Hunting the thief."
@@ -386,6 +398,18 @@
         "calmed": {
           "says": "Accipatum.",
           "means": "Acknowledged."
+        },
+        "drawn": {
+          "says": "Quid? Cur telum activum?",
+          "means": "What? Why is your weapon out?"
+        },
+        "drawn_close": {
+          "says": "Recedo. Non appropinqua.",
+          "means": "I am backing off. Come no closer."
+        },
+        "drawn_put_away": {
+          "says": "Securum iterum.",
+          "means": "Safe again."
         },
         "witnessed": {
           "says": "Aggressio detectum. Quaero praesidium.",
@@ -656,6 +680,18 @@
         "calmed": {
           "says": "Accipatum.",
           "means": "Acknowledged."
+        },
+        "drawn": {
+          "says": "Ego reparo. Cur telum activum?",
+          "means": "I am only doing repairs. Why is your weapon out?"
+        },
+        "drawn_close": {
+          "says": "Recedo. Ego inermum.",
+          "means": "I am backing off. I am unarmed."
+        },
+        "drawn_put_away": {
+          "says": "Affirmatum. Resumo reparatio.",
+          "means": "Good. Back to my repairs."
         },
         "witnessed": {
           "says": "Aggressio detectum. Quaero praesidium.",
@@ -1033,6 +1069,18 @@
         "calmed": {
           "says": "Affirmatum. Observo tu.",
           "means": "Good. I am watching you."
+        },
+        "drawn": {
+          "says": "Telum activum in zona nos.",
+          "means": "A weapon out, on our turf."
+        },
+        "drawn_close": {
+          "says": "Si appropinquas, tunc deletabso tu.",
+          "means": "Come any closer and I will delete you."
+        },
+        "drawn_put_away": {
+          "says": "Telum desactivatum. Receda, simia.",
+          "means": "Put away. Now back off, ape."
         },
         "spotted": {
           "says": "Intrusor detectum. Zeto.",
