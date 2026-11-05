@@ -11,7 +11,8 @@
 //! Each gait standing has a cycle of its own: walking, running with Caps Lock, sprinting with
 //! Shift. Crouching and crawling share the crouch, played faster for the quicker gaits and slower
 //! down on the floor. Standing still, the droid settles into its idle, or its rest pose if it has
-//! none; crouched, it holds the crouch where it stopped. Going from one cycle to another, it
+//! none; crouched or crawling, into its crouch idle - feet set, breathing, glancing about - or
+//! without one it holds the crouch where it stopped. Going from one cycle to another, it
 //! carries on at the same point in the stride, with the same foot down - whichever foot each
 //! cycle starts on.
 //!
@@ -271,6 +272,9 @@ const IN_PLACE: f32 = 0.3;
 const FALLING_AFTER: f32 = 0.2;
 /// The droid's idle, played standing still. It stays where it is, so has no travel to take out.
 const IDLE: &str = "droid_idle_cycle";
+/// Its idle crouched - and crawling, which shares the crouch - played crouched and still. In place
+/// too. Without it the droid holds the crouch where it stopped.
+const CROUCH_IDLE: &str = "droid_crouch_idle";
 /// Its idle, walk and jog in cover, leaning back against a wall, if it has them: for the wall on
 /// its left, and on its right, like [`Wall::index`]. The droid faces along the wall in cover, and
 /// each is turned on that, its back to the wall.
@@ -1670,6 +1674,8 @@ pub struct Avatar {
     gaited: usize,
     /// Played standing still, when the droid has one.
     idle: Option<Handle<Animation>>,
+    /// Played crouched or crawling and still, when the droid has one.
+    crouch_idle: Option<Handle<Animation>>,
     /// Played in cover in place of the idle, and of the walk and the jog as indexes into
     /// `cycles`, when the droid has them: for each side the wall can be on, like [`Wall::index`].
     cover_idle: [Option<Handle<Animation>>; 2],
@@ -1698,6 +1704,8 @@ pub struct Avatar {
     stepping: Option<Step>,
     /// The wall it was in cover against as of the last frame.
     covered: Option<Wall>,
+    /// Whether it was crouched, or crawling, as of the last frame.
+    crouched: bool,
     /// Its skids by name, as far as it has them.
     skids: FxHashMap<&'static str, Skid>,
     skidding: Option<Skidding>,
@@ -2332,6 +2340,16 @@ impl Avatar {
                 None
             }
         };
+        let crouch_idle = match container.find_by_name_mut(CROUCH_IDLE) {
+            Some((handle, animation)) => {
+                animation.set_loop(true);
+                Some(handle)
+            }
+            None => {
+                info(format!("Droid: it has no {CROUCH_IDLE}; crouched and still, it holds the crouch"));
+                None
+            }
+        };
         let leaps = LEAPS.map(|heights| {
             heights.map(|names| {
                 let moves = names.map(|name| {
@@ -2574,6 +2592,7 @@ impl Avatar {
             cycles,
             gaited,
             idle,
+            crouch_idle,
             cover_idle,
             cover_walk,
             cover_jog,
@@ -2587,6 +2606,7 @@ impl Avatar {
             strafes,
             stepping: None,
             covered: None,
+            crouched: false,
             skids,
             skidding: None,
             leaps,
@@ -3597,7 +3617,12 @@ impl Avatar {
         }
 
         let crouched = going.posture != Posture::Standing;
-        let mut wanted = choose(&self.gaits(), going.gait, crouched, going.speed >= STILL);
+        let moving = going.speed >= STILL;
+        let mut wanted = choose(&self.gaits(), going.gait, crouched, moving);
+        // Crouched and still, its crouch idle, if it has one, in place of holding the crouch.
+        if crouched && !moving && self.crouch_idle.is_some() {
+            wanted = None;
+        }
         // In cover, shuffling along the wall in place of walking or jogging.
         if let (Some(wall), Some(index), false) = (going.cover, wanted, crouched) {
             let shuffle = match self.cycles[index].gait {
@@ -3628,9 +3653,10 @@ impl Avatar {
         let raised = matches!(self.arms, Arms::Raising | Arms::Aiming | Arms::Firing(_));
         // Only standing still, where the pose it holds there shows: on the move the pistol's own
         // aim keeps the barrel pointed, rather than it being let go to the shuffle's lowered hand.
+        // Standing only: the poses at the corner are made standing up.
         let cornered = going
             .cover
-            .filter(|_| going.corner && raised && wanted.is_none())
+            .filter(|_| going.corner && raised && wanted.is_none() && !crouched)
             .map(|wall| (wall, going.peeking))
             .filter(|&(wall, out)| self.corner_clip(wall, out).is_some());
         if let Some((wall, _)) = cornered {
@@ -3658,19 +3684,23 @@ impl Avatar {
             0.0
         };
         self.against_weight += (against - self.against_weight).clamp(-step, step);
-        // Standing still, going into cover or out of it, or round the corner to aim or back,
-        // changes one idle for the other.
+        // Standing still, going into cover or out of it, round the corner to aim or back, or
+        // crouching or standing up, changes one idle for the other.
         if wanted.is_none()
             && self.playing.is_none()
-            && (going.cover != self.covered || cornered != self.cornered)
+            && (going.cover != self.covered
+                || cornered != self.cornered
+                || crouched != self.crouched)
         {
             self.covered = going.cover;
             self.cornered = cornered;
+            self.crouched = crouched;
             self.rewind_idle(graph);
             self.fade_from_here(graph);
         }
         self.covered = going.cover;
         self.cornered = cornered;
+        self.crouched = crouched;
         if wanted != self.playing {
             // The new cycle picks up at the same point in the stride, with the same foot down, so
             // the feet carry on.
@@ -3780,7 +3810,6 @@ impl Avatar {
         steps
     }
 
-    /// The idle to play standing still: the one for cover, in cover, if the droid has it.
     /// What it holds aiming round the corner with the wall on the `wall` side: leaning `out`
     /// round it, or only reaching the pistol out.
     fn corner_clip(&self, wall: Wall, out: bool) -> Option<Handle<Animation>> {
@@ -3791,7 +3820,12 @@ impl Avatar {
         }
     }
 
+    /// The idle to play still: crouched, the crouch's; standing, the one for cover, in cover, if
+    /// the droid has it.
     fn idle_now(&self) -> Option<Handle<Animation>> {
+        if self.crouched && self.crouch_idle.is_some() {
+            return self.crouch_idle;
+        }
         let aiming = self
             .cornered
             .and_then(|(wall, out)| self.corner_clip(wall, out));
