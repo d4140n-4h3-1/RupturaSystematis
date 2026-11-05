@@ -394,8 +394,9 @@ The droids' and drones' AI, in a crate of its own
 ([hydroxus-ai](https://github.com/d4140n-4h3-1/hydroxus-ai)) that knows nothing of the engine
 but its vectors: the walk grid and the routes over it, what an NPC sees and hears, Metal Gear's
 alert phases, making way in a corridor, getting about over more than one floor and by ferry,
-joining a chase, pacing it, taking a pistol pointed at it, and walking about in pairs and groups.
-The game casts the rays, moves the droids and plays
+joining a chase, pacing it, taking a pistol pointed at it, walking about in pairs and groups,
+the drones' patrols and their flight through the air, and the traffic on the streets. The game
+casts the rays, moves the droids and plays
 their animations; the crate decides what they make of what is round them.
 
 ### hydroxus-voice

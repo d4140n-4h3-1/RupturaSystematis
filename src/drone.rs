@@ -3,15 +3,19 @@
 //! trip away to the next and waiting a while at each - paying the player no heed, calm. More wait
 //! out of sight, to be called in (see [`Drone::call_in`]): a failed hack brings one.
 //!
+//! What it does - patrolling, searching, on Alert, and its flight - is decided by its mind,
+//! [`hydroxus_ai::tactics::patrol`], and its way through the air by
+//! [`hydroxus_ai::navigation::flight`]; this is the drone in the scene, which sees, flies and fires.
+//!
 //! It turns hostile when the alarm is sounded (see [`Drone::alarm`]) or when the player's pistol
 //! hits a droid - or the drone itself (see [`Drone::shot`]). Then it goes about the player as a
 //! sentry does, but by air:
 //!
 //! - **Searching**: it flies to where the player was and scans there, then to one spot after
-//!   another nearby, scanning at each, for [`SEARCH`] seconds; and then it is calm again, and
+//!   another nearby, scanning at each, for [`SEARCH`](hydroxus_ai::tactics::patrol::SEARCH) seconds; and then it is calm again, and
 //!   patrols as before. It sees in front of it as a sentry that is not on Alert does - less far
 //!   the lower the player is, and with the lights off.
-//! - **Alert**: it can see the player. It comes on to [`ENGAGE`] from them, keeps facing them and
+//! - **Alert**: it can see the player. It comes on to [`ENGAGE`](hydroxus_ai::tactics::patrol::ENGAGE) from them, keeps facing them and
 //!   fires every [`FIRE_EVERY`] seconds - the quadcopter three times as often - while it can see them (see [`crate::drone_shot`]), each
 //!   shot hurting them where it hits. Losing them, it searches.
 //!
@@ -87,6 +91,7 @@ use hydroxus_ai::{
         walk,
     },
     perception::sight::Sight,
+    tactics::patrol::{self, Patrol, Speeds},
 };
 use serde::Deserialize;
 use std::{collections::HashMap, f32::consts::PI};
@@ -149,22 +154,12 @@ const CALLED_FROM: f32 = 40.0;
 /// How near where it is called to a patrolling drone has to be, in meters as the crow flies, to
 /// answer the call itself, rather than one being called in from nearer.
 pub const ANSWERS_WITHIN: f32 = 25.0;
-/// How far it goes on patrol each time it sets off, and how far between the spots it searches,
-/// in meters of walking, from least to most; and how long it waits between trips, in seconds.
-const TRIP: (f32, f32) = (15.0, 60.0);
-/// On a side in capture the flag, how far from its flag it patrols, in meters.
-const POST_REACH: f32 = 9.0;
-const SEARCH_TRIP: (f32, f32) = (5.0, 20.0);
-const REST: (f32, f32) = (3.0, 8.0);
+/// How far it goes on patrol, from its flag on a side in capture the flag, and how long it waits
+/// between trips: its mind's (see [`hydroxus_ai::tactics::patrol`]).
+use hydroxus_ai::tactics::patrol::{POST_REACH, REST};
 /// How fast it flies, in meters per second: patrolling, and hostile; how quickly it gets up to
 /// speed, in meters per second per second; and how quickly it turns, in radians a second.
-#[derive(Debug, Clone, Copy, PartialEq)]
-struct Flight {
-    patrol: f32,
-    hurry: f32,
-    acceleration: f32,
-    turn_rate: f32,
-}
+type Flight = Speeds;
 
 /// The security drone's flight; and the quadcopter's, getting on for twice as fast, quicker off
 /// the mark and quicker to turn - outrunning a running droid, hostile.
@@ -272,21 +267,10 @@ impl Kind {
         }
     }
 }
-/// How near the next point on its route it has to get, in meters, before making for the one after,
-/// and how near the last counts as there.
-const REACHED: f32 = 0.6;
-const ARRIVED: f32 = 0.15;
-/// How quickly it follows the floor up and down.
-const FLOOR_EASING: f32 = 4.0;
-/// How long it searches once it has lost the player, or been sent to look for them, in seconds.
-pub const SEARCH: f32 = 30.0;
-/// On Alert: how near the player it comes, in meters, how far off it fires from, how often, and
-/// how soon after spotting them the first time; and how often it works out its way to them again.
-const ENGAGE: f32 = 6.0;
-const FIRE_RANGE: f32 = 20.0;
+/// On Alert, how often it fires, in seconds. How near the player it comes, how far off it fires
+/// from, how soon after spotting them it first fires, and how long it searches, are its mind's
+/// (see [`hydroxus_ai::tactics::patrol`]).
 const FIRE_EVERY: f32 = 1.5;
-const FIRST_SHOT: f32 = 0.8;
-const REPLAN: f32 = 0.5;
 /// How far it looks for a way anywhere, in meters of walking. With
 /// no way there - the player up on a roof it has no way under, say - a search with no bound goes
 /// over every cell it can reach in the whole city before it gives up, a tenth of a second and more.
@@ -327,15 +311,6 @@ const SLEW: f32 = 2.0;
 /// to rest, still for the physics, as a fallen droid is.
 const WRECK_STILL: (f32, f32) = (0.05, 0.1);
 const WRECK_SETTLES: f32 = 0.5;
-/// Flying free (see [`flight`]): how far it keeps from anything solid on its way, in meters - its
-/// rotors' guards reach 0.69 m out; how far up it looks for a way over what is in its way, and in
-/// steps of how much; how many cuts it tries across the corners of a way along the floor; and
-/// how far from anything solid its body has to stay as it flies, or it stops and finds another
-/// way - its body's ball, so as to get along a corridor narrower than its guards.
-const FLIGHT_CLEARANCE: f32 = 0.75;
-const CLIMB: f32 = 80.0;
-const CLIMB_STEP: f32 = 1.5;
-const SHORTCUTS: usize = 40;
 /// How near anyone it comes, flying, in meters between its body and theirs.
 const CLEARANCE: f32 = 0.05;
 /// How near a bolt has to fly past its body to be taken as shot at, in meters.
@@ -417,28 +392,13 @@ pub(crate) fn light_colour(colour: Vector3<f32>) -> Color {
     Color::opaque(byte(colour.x), byte(colour.y), byte(colour.z))
 }
 
-/// `angle` brought round to between -π and π.
-fn wrap(angle: f32) -> f32 {
-    (angle + PI).rem_euclid(2.0 * PI) - PI
-}
-
 /// `vector` along the ground.
 fn flat(vector: Vector3<f32>) -> Vector3<f32> {
     Vector3::new(vector.x, 0.0, vector.z)
 }
 
-/// How the drone is going about the player.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum State {
-    /// Calm: it patrols, paying the player no heed.
-    Patrol,
-    /// It can see the player, and fires at them.
-    Alert,
-    /// It is looking for the player, `left` seconds more.
-    Search { left: f32 },
-    /// Brought down.
-    Down,
-}
+/// How the drone is going about the player (see [`hydroxus_ai::tactics::patrol`]).
+pub use hydroxus_ai::tactics::patrol::State;
 
 /// Where the player is, for the drone to look for them: their feet and the middle of their body,
 /// what their body is to anything that hits it, how they hold themselves, and whether it is too
@@ -503,30 +463,11 @@ pub struct Drone {
     playing: &'static str,
     since: f32,
     fired: bool,
-    /// How it is going about the player.
-    state: State,
+    /// What it is doing, where it is and where it is going: patrolling, searching, on Alert (see
+    /// [`hydroxus_ai::tactics::patrol`]).
+    mind: Patrol,
     /// Whether it has been put down in this round's maze.
     placed: bool,
-    /// Where it hovers - the model's root - which way it faces, in radians, left positive from
-    /// the world's +z, and how fast it is flying, in meters per second.
-    at: Vector3<f32>,
-    heading: f32,
-    speed: f32,
-    /// The rest of its route, as points on the floor, the next one last.
-    route: Vec<Vector3<f32>>,
-    /// How long it has left to wait before its next trip, or to scan where it is, in seconds.
-    resting: f32,
-    scanning: f32,
-    /// Where it last saw the player's feet, or was sent to look for them; and how many spots it has
-    /// searched since.
-    lost_at: Vector3<f32>,
-    searched: u32,
-    /// On Alert, how long until it fires again, and until it works out its way to them again.
-    fire_in: f32,
-    replan: f32,
-    /// Whether there was no way to the player the last time it worked one out: it waits for
-    /// `replan` to try again, rather than trying every frame.
-    no_way: bool,
     /// How many of the pistol's bolts have hit it.
     hits: u32,
     /// Brought down, a quadcopter falls under physics (see [`Drone::fall`]): while its body is
@@ -535,11 +476,10 @@ pub struct Drone {
     falling: Option<f32>,
     /// Whether its body is the wreck's, not the ball it flies in.
     wrecked: bool,
-    /// In capture the flag, its side, and where it patrols round: its side's flag. On a side,
-    /// it watches all the while, patrolling too, and what it goes after is whichever of the other
-    /// side the game shows it (see [`crate::ctf`]).
+    /// In capture the flag, its side; it patrols round its side's flag (its mind's post),
+    /// watching all the while, and what it goes after is whichever of the other side the game
+    /// shows it (see [`crate::ctf`]).
     side: Option<Side>,
-    post: Option<Vector3<f32>>,
 }
 
 impl Drone {
@@ -628,24 +568,12 @@ impl Drone {
             playing: DEATH,
             since: 0.0,
             fired: false,
-            state: State::Patrol,
+            mind: Patrol::new(HOVER, kind.flies_free(), kind.flight(), SCAN_LENGTH),
             placed: false,
-            at: Vector3::zeros(),
-            heading: 0.0,
-            speed: 0.0,
-            route: Vec::new(),
-            resting: 0.0,
-            scanning: 0.0,
-            lost_at: Vector3::zeros(),
-            searched: 0,
-            fire_in: 0.0,
-            replan: 0.0,
-            no_way: false,
             hits: 0,
             falling: None,
             wrecked: false,
             side: None,
-            post: None,
         };
         drone.play(graph, IDLE);
         Some(drone)
@@ -661,7 +589,8 @@ impl Drone {
         rng: &mut Rng,
     ) -> bool {
         self.side = None;
-        self.post = None;
+        self.mind.post = None;
+        self.mind.watches = false;
         self.put_down(graph, mesh, feet, f32::INFINITY, rng)
     }
 
@@ -683,10 +612,12 @@ impl Drone {
             return false;
         }
         self.side = Some(side);
-        self.post = Some(post);
-        self.at = at + Vector3::new(0.0, HOVER, 0.0);
+        self.mind.post = Some(post);
+        // On a side, it watches all the while.
+        self.mind.watches = true;
+        self.mind.at = at + Vector3::new(0.0, HOVER, 0.0);
         if let Ok(hull) = graph.try_get_mut_of_type::<RigidBody>(self.hull) {
-            hull.local_transform_mut().set_position(self.at);
+            hull.local_transform_mut().set_position(self.mind.at);
         }
         self.pose(graph);
         Log::info(format!("Drone: {}'s, by its flag", side.name()));
@@ -700,9 +631,9 @@ impl Drone {
 
     /// What it would go after, as a target, for another drone: its body, where it hovers.
     pub fn as_target(&self) -> Option<Target> {
-        (self.placed && self.state != State::Down).then(|| Target {
-            feet: self.at - Vector3::new(0.0, HOVER, 0.0),
-            middle: self.at,
+        (self.placed && self.mind.state != State::Down).then(|| Target {
+            feet: self.mind.at - Vector3::new(0.0, HOVER, 0.0),
+            middle: self.mind.at,
             collider: self.collider,
             posture: Posture::Standing,
             in_the_dark: false,
@@ -755,14 +686,10 @@ impl Drone {
         spot: Vector3<f32>,
         rng: &mut Rng,
     ) -> bool {
-        self.at = spot + Vector3::new(0.0, HOVER, 0.0);
-        self.heading = inhabitants::between(rng, (-PI, PI));
-        self.state = State::Patrol;
+        let heading = inhabitants::between(rng, (-PI, PI));
+        let resting = inhabitants::between(rng, REST);
+        self.mind.put_at(spot, heading, resting);
         self.placed = true;
-        self.speed = 0.0;
-        self.route.clear();
-        self.resting = inhabitants::between(rng, REST);
-        self.scanning = 0.0;
         self.hits = 0;
         // A wreck's body is no good for flying in: it gets its ball back.
         if self.wrecked && graph.is_valid_handle(self.hull) {
@@ -775,12 +702,12 @@ impl Drone {
         }
         self.pose(graph);
         if let Ok(hull) = graph.try_get_mut_of_type::<RigidBody>(self.hull) {
-            hull.local_transform_mut().set_position(self.at);
+            hull.local_transform_mut().set_position(self.mind.at);
         }
         self.play(graph, IDLE);
         graph[self.root].set_visibility(true);
         graph[self.lamp].set_visibility(true);
-        Log::info(format!("Drone: patrolling from {:.1} m away", flat(self.at - feet).norm()));
+        Log::info(format!("Drone: patrolling from {:.1} m away", flat(self.mind.at - feet).norm()));
         true
     }
 
@@ -808,8 +735,7 @@ impl Drone {
         self.placed = false;
         self.wrecked = false;
         self.falling = None;
-        self.state = State::Patrol;
-        self.route.clear();
+        self.mind.calm();
         graph[self.root].set_visibility(false);
         graph[self.lamp].set_visibility(false);
         if graph.is_valid_handle(self.hull) {
@@ -827,12 +753,12 @@ impl Drone {
     }
 
     pub fn state(&self) -> State {
-        self.state
+        self.mind.state
     }
 
     /// Where it is hovering.
     pub fn at(&self) -> Vector3<f32> {
-        self.at
+        self.mind.at
     }
 
     /// What the animations move about: where it speaks from.
@@ -848,7 +774,7 @@ impl Drone {
     /// Where its health bar goes - over the top of it - and how much health it has left, from 0
     /// to 1, while it is after the player or has been hit, and is up.
     pub fn health_bar(&self, graph: &Graph) -> Option<(Vector3<f32>, f32)> {
-        let shown = match self.state {
+        let shown = match self.mind.state {
             State::Down => false,
             State::Alert | State::Search { .. } => true,
             State::Patrol => self.hits > 0,
@@ -861,7 +787,7 @@ impl Drone {
 
     /// How it feels, which colours its glow: calm, searching, or after the player.
     pub fn mood(&self) -> Mood {
-        match self.state {
+        match self.mind.state {
             State::Patrol => Mood::Normal,
             State::Search { .. } | State::Down => Mood::Agitated,
             State::Alert => Mood::Hostile,
@@ -870,26 +796,18 @@ impl Drone {
 
     /// Gives up on the player, the one it was after arrested: back to its patrol.
     pub fn stand_down(&mut self) {
-        if matches!(self.state, State::Alert | State::Search { .. }) {
-            self.state = State::Patrol;
-            self.route.clear();
-            self.scanning = 0.0;
-            self.resting = REST.0;
-        }
+        self.mind.stand_down();
     }
 
     /// The alarm sounded, or a droid shot, with the player's feet at `at`: calm or searching, it
     /// searches there. What it has to say about it, if anything.
     pub fn alarm(&mut self, at: Vector3<f32>) -> Option<&'static str> {
-        match self.state {
+        match self.mind.state {
             State::Down | State::Alert => None,
             _ if !self.placed => None,
             // The player's own side's pays the alarm no heed.
             _ if self.side.is_some_and(Side::is_players) => None,
-            was => {
-                self.search(at);
-                (was == State::Patrol).then_some("alarm")
-            }
+            _ => self.mind.alerted(at, "alarm"),
         }
     }
 
@@ -897,41 +815,35 @@ impl Drone {
     /// with none: one that went within [`NEAR_MISS`] of its body, not its own side's, has it search
     /// where it was fired from, unless it is after the player already. What it says, if anything.
     pub fn near_miss(&mut self, passes: &[Pass], fired_by: Option<Side>) -> Option<&'static str> {
-        if !self.placed || matches!(self.state, State::Down | State::Alert) {
+        if !self.placed || matches!(self.mind.state, State::Down | State::Alert) {
             return None;
         }
         if fired_by.is_some() && fired_by == self.side {
             return None;
         }
-        let pass = passes.iter().find(|pass| pass.nearest(self.at) <= BODY_RADIUS + NEAR_MISS)?;
-        let was = self.state;
-        self.search(pass.fired_at);
-        (was == State::Patrol).then_some("searching")
+        let pass = passes.iter().find(|pass| pass.nearest(self.mind.at) <= BODY_RADIUS + NEAR_MISS)?;
+        self.mind.alerted(pass.fired_at, "searching")
     }
 
     /// A bolt that hit `collider`, fired by the player from `from`: if it hit the drone, it takes
     /// the hit, and searches where it came from if it was not after the player already. Whether it
     /// was the drone, and whether that brought it down.
     pub fn shot(&mut self, graph: &mut Graph, collider: Handle<Collider>, from: Vector3<f32>) -> Option<bool> {
-        if collider != self.collider || self.state == State::Down || !self.placed {
+        if collider != self.collider || self.mind.state == State::Down || !self.placed {
             return None;
         }
         self.hits += 1;
         if self.hits >= HITS {
-            self.state = State::Down;
-            self.route.clear();
             // Its body goes down with it (see `update`), and lies on the floor as solid as ever:
             // the drone's as its death has it, the quadcopter's falling.
             if self.kind == Kind::Quad {
                 self.fall(graph, from);
             }
-            self.speed = 0.0;
+            self.mind.down();
             self.play(graph, DEATH);
             return Some(true);
         }
-        if self.state != State::Alert {
-            self.search(from);
-        }
+        self.mind.hit(from);
         Some(false)
     }
 
@@ -943,8 +855,8 @@ impl Drone {
         if graph.is_valid_handle(self.hull) {
             graph.remove_node(self.hull);
         }
-        let away = flat(self.at - from).try_normalize(1.0e-4).unwrap_or_else(Vector3::z);
-        (self.hull, self.collider) = wreck(graph, self.at, self.heading, self.speed, away);
+        let away = flat(self.mind.at - from).try_normalize(1.0e-4).unwrap_or_else(Vector3::z);
+        (self.hull, self.collider) = wreck(graph, self.mind.at, self.mind.heading, self.mind.speed, away);
         self.wrecked = true;
         self.falling = Some(0.0);
     }
@@ -965,7 +877,7 @@ impl Drone {
                 self.falling = None;
             }
         }
-        self.at = at;
+        self.mind.at = at;
         graph[self.root]
             .local_transform_mut()
             .set_position(at)
@@ -974,11 +886,7 @@ impl Drone {
 
     /// Searches from `at`, going there first.
     fn search(&mut self, at: Vector3<f32>) {
-        self.state = State::Search { left: SEARCH };
-        self.lost_at = at;
-        self.searched = 0;
-        self.route.clear();
-        self.scanning = 0.0;
+        self.mind.search(at);
     }
 
     /// Starts the animation called `name` from its start, looping those it hovers in, unless it
@@ -1015,24 +923,24 @@ impl Drone {
     fn pose(&self, graph: &mut Graph) {
         graph[self.root]
             .local_transform_mut()
-            .set_position(self.at)
-            .set_rotation(UnitQuaternion::from_axis_angle(&Vector3::y_axis(), self.heading));
+            .set_position(self.mind.at)
+            .set_rotation(UnitQuaternion::from_axis_angle(&Vector3::y_axis(), self.mind.heading));
     }
 
     /// Whether it can see the `player`: in front of it, as a sentry sees - from as far as it sees
     /// at all on Alert - and with nothing in the way from its eye to the middle of their body.
     /// Whether it can see `player` - or whoever else it is shown as a target - from where it is.
     pub fn sees(&self, graph: &Graph, player: &Target) -> bool {
-        if !self.placed || self.state == State::Down {
+        if !self.placed || self.mind.state == State::Down {
             return false;
         }
-        let alert = match self.state {
+        let alert = match self.mind.state {
             State::Alert => Alert::Alert,
             _ => Alert::Evasion,
         };
-        let under = self.at - Vector3::new(0.0, HOVER, 0.0);
+        let under = self.mind.at - Vector3::new(0.0, HOVER, 0.0);
         let stance = player.posture.into();
-        if !Sight::default().could_see(Some(alert), under, self.heading, player.feet, stance, player.in_the_dark) {
+        if !Sight::default().could_see(Some(alert), under, self.mind.heading, player.feet, stance, player.in_the_dark) {
             return false;
         }
         let from = graph[self.body].global_position();
@@ -1084,9 +992,9 @@ impl Drone {
             }
             // Its body goes where the animations take it: bobbing as it hovers, and down to the
             // floor when it is shot down. As of the last frame, which is as near as matters.
-            let at = match self.state {
+            let at = match self.mind.state {
                 State::Down => graph[self.body].global_position(),
-                _ => self.at,
+                _ => self.mind.at,
             };
             // Moved by hand, it would push anyone in its way with no end of force - down through
             // the floor, even, settling or falling onto them. So it never moves into anyone: it
@@ -1100,10 +1008,10 @@ impl Drone {
                 }
             }
             // Which animation goes with what it is doing: firing and scanning play through.
-            let next = match self.state {
+            let next = match self.mind.state {
                 State::Down => DEATH,
-                State::Alert if self.fire_in <= 0.0 => {
-                    self.fire_in = self.kind.fire_every();
+                State::Alert if self.mind.fire_in <= 0.0 => {
+                    self.mind.fire_in = self.kind.fire_every();
                     // Firing again before the last has played through - the quadcopter does - it
                     // starts again from the start.
                     if self.playing == FIRE {
@@ -1112,8 +1020,8 @@ impl Drone {
                     FIRE
                 }
                 _ if self.playing == FIRE && self.since < FIRE_LENGTH => FIRE,
-                State::Search { .. } if self.scanning > 0.0 => SCAN,
-                _ if self.speed > 0.2 => PATROL,
+                State::Search { .. } if self.mind.scanning > 0.0 => SCAN,
+                _ if self.mind.speed > 0.2 => PATROL,
                 _ => IDLE,
             };
             self.play(graph, next);
@@ -1160,7 +1068,9 @@ impl Drone {
             .unwrap_or(0.0)
     }
 
-    /// Looks for the player and decides where to go. What it has to say, if anything.
+    /// Looks for the player and decides where to go (see [`Patrol::think`]). What it has to say,
+    /// if anything.
+    #[allow(clippy::too_many_arguments)]
     fn think(
         &mut self,
         graph: &Graph,
@@ -1171,212 +1081,17 @@ impl Drone {
         rng: &mut Rng,
         dt: f32,
     ) -> Option<&'static str> {
+        let sees = self.mind.looks() && self.sees(graph, player);
         let air = Air { graph, hull: self.hull, leaves };
-        // A way to `to`, if there is any: none looked for where there is none to be had (see
-        // [`ROUTE_REACH`]).
-        let ground = |to: Vector3<f32>| match reachable(to) {
-            true => walk::route_to(mesh, self.at - Vector3::new(0.0, HOVER, 0.0), to, ROUTE_REACH),
-            false => Vec::new(),
-        };
-        // Flying free, through the air to its height over `to`: there whether there is a way
-        // along the floor or not.
-        let route_to = |to: Vector3<f32>| match self.kind.flies_free() {
-            true => flight(air, self.at, to + Vector3::new(0.0, HOVER, 0.0), || ground(to)),
-            false => ground(to),
-        };
-        // A trip along the floor, or flying free, through the air to its height over the end of it.
-        let lift = |route: Vec<Vector3<f32>>| match (self.kind.flies_free(), route.first()) {
-            (true, Some(&end)) => flight(air, self.at, end + Vector3::new(0.0, HOVER, 0.0), || route),
-            _ => route,
-        };
-        // On a side, it watches all the while.
-        let hostile = matches!(self.state, State::Alert | State::Search { .. }) || self.side.is_some();
-        let sees = hostile && self.sees(graph, player);
-        let under = self.at - Vector3::new(0.0, HOVER, 0.0);
-        match self.state {
-            State::Down => None,
-            State::Patrol if sees => {
-                self.state = State::Alert;
-                self.fire_in = FIRST_SHOT;
-                self.replan = 0.0;
-                self.scanning = 0.0;
-                Some("spotted")
-            }
-            State::Patrol => {
-                if self.route.is_empty() {
-                    self.resting -= dt;
-                    if self.resting <= 0.0 {
-                        self.route = match self.post {
-                            // On a side, round its flag.
-                            Some(post) => walk::spot_near(mesh, post, POST_REACH, rng)
-                                .map(&route_to)
-                                .unwrap_or_default(),
-                            None => lift(walk::plan(mesh, under, TRIP, rng)),
-                        };
-                        self.resting = inhabitants::between(rng, REST);
-                    }
-                }
-                None
-            }
-            State::Search { .. } if sees => {
-                self.state = State::Alert;
-                self.fire_in = FIRST_SHOT;
-                self.replan = 0.0;
-                self.scanning = 0.0;
-                Some("spotted")
-            }
-            State::Alert if !sees => {
-                let at = self.lost_at;
-                self.search(at);
-                Some("searching")
-            }
-            State::Alert => {
-                self.lost_at = player.feet;
-                self.fire_in -= dt;
-                // Facing them, coming on to within its range of them, and no nearer.
-                let to = flat(player.feet - under);
-                self.heading = to.x.atan2(to.z);
-                self.replan -= dt;
-                // Flying free, as near as the crow flies to its height over them.
-                let near = match self.kind.flies_free() {
-                    true => (player.feet + Vector3::new(0.0, HOVER, 0.0) - self.at).norm(),
-                    false => to.norm(),
-                };
-                if near <= ENGAGE {
-                    self.route.clear();
-                } else if self.replan <= 0.0 || self.route.is_empty() && !self.no_way {
-                    self.replan = REPLAN;
-                    self.route = route_to(player.feet);
-                    self.no_way = self.route.is_empty();
-                }
-                // Out of range, it holds its fire till it is nearer.
-                if to.norm() > FIRE_RANGE {
-                    self.fire_in = self.fire_in.max(0.1);
-                }
-                None
-            }
-            State::Search { left } => {
-                // Its time runs from when it gets to where it was sent, not while it is on its way.
-                let on_its_way = self.searched <= 1 && self.scanning == 0.0 && !self.route.is_empty();
-                let left = if on_its_way { left } else { left - dt };
-                if left <= 0.0 {
-                    self.state = State::Patrol;
-                    self.route.clear();
-                    self.scanning = 0.0;
-                    self.resting = REST.0;
-                    return Some("calm");
-                }
-                self.state = State::Search { left };
-                let mut says = None;
-                if self.scanning > 0.0 {
-                    self.scanning -= dt;
-                    // Done scanning: on to another spot nearby.
-                    if self.scanning <= 0.0 {
-                        self.scanning = 0.0;
-                        self.searched += 1;
-                        self.route = lift(walk::plan(mesh, under, SEARCH_TRIP, rng));
-                    }
-                } else if self.route.is_empty() {
-                    if self.searched == 0 && flat(self.lost_at - under).norm() > REACHED {
-                        // First where the player was.
-                        self.searched = 1;
-                        self.route = route_to(self.lost_at);
-                        says = Some("searching");
-                    } else {
-                        // Got there, or has nowhere to go: it scans.
-                        self.searched = self.searched.max(1);
-                        self.scanning = SCAN_LENGTH;
-                    }
-                }
-                says
-            }
-        }
+        let mut ways = Ways { mesh, air, reachable, rng, at: self.mind.at, flies_free: self.kind.flies_free() };
+        self.mind.think(sees, player.feet, &mut ways, dt)
     }
 
     /// Flies on along its route for another `dt`, turning to face the way it goes - or the player,
-    /// on Alert - and hovering over the floor.
-    fn fly(
-        &mut self,
-        graph: &Graph,
-        mesh: &NavMesh,
-        player: &Target,
-        leaves: Option<&Graph>,
-        dt: f32,
-    ) {
-        if self.state == State::Down {
-            return;
-        }
-        let under = self.at - Vector3::new(0.0, HOVER, 0.0);
-        // Flying free, its route is through the air, up and down as well as along; otherwise
-        // along the floor under it.
-        let free = self.kind.flies_free();
-        let toward = |next: Vector3<f32>| match free {
-            true => next - self.at,
-            false => flat(next - under),
-        };
-        // Past the points it has got near, the last one only once it is there.
-        while let Some(&next) = self.route.last() {
-            let near = if self.route.len() == 1 { ARRIVED } else { REACHED };
-            if toward(next).norm() > near {
-                break;
-            }
-            self.route.pop();
-        }
-        let hurry = matches!(self.state, State::Alert | State::Search { .. });
-        let flight = self.kind.flight();
-        let top = if hurry { flight.hurry } else { flight.patrol };
-        let (way, wanted) = match self.route.last() {
-            Some(&next) => {
-                let to = toward(next);
-                let distance = to.norm();
-                // Slowing down for the end of its route.
-                let wanted = match self.route.len() {
-                    1 => top.min((2.0 * flight.acceleration * distance).sqrt()),
-                    _ => top,
-                };
-                (to / distance.max(1.0e-4), wanted)
-            }
-            None => (Vector3::zeros(), 0.0),
-        };
-        self.speed = match wanted > self.speed {
-            true => (self.speed + flight.acceleration * dt).min(wanted),
-            false => (self.speed - 2.0 * flight.acceleration * dt).max(wanted),
-        };
-        let mut next = self.at + way * self.speed * dt;
-        // Facing the way it goes, or the player on Alert.
-        let facing = match self.state {
-            State::Alert => {
-                let to = flat(player.feet - under);
-                (to.norm() > 1.0e-3).then(|| to.x.atan2(to.z))
-            }
-            // Not turning as it rises or drops straight up or down.
-            _ => (self.speed > 0.1 && flat(way).norm() > 0.3).then(|| way.x.atan2(way.z)),
-        };
-        if let Some(facing) = facing {
-            let turn = wrap(facing - self.heading);
-            self.heading = wrap(self.heading + turn.clamp(-flight.turn_rate * dt, flight.turn_rate * dt));
-        }
-        // Hovering over the floor where it is, if there is floor there - unless it flies free, at
-        // the height its route has. Flying free, it never flies into anything solid: something in
-        // its way after all - something moved there, or a way along the floor too tight to fly -
-        // it stops, and finds another way.
-        if free {
-            if !clear(Air { graph, hull: self.hull, leaves }, self.at, next, BODY_RADIUS) {
-                self.speed = 0.0;
-                self.route.clear();
-                self.replan = 0.0;
-                return;
-            }
-        } else if let Some(floor) = walk::floor_under(mesh, next - Vector3::new(0.0, HOVER, 0.0)) {
-            let height = floor + HOVER;
-            next.y += (height - next.y) * (1.0 - (-FLOOR_EASING * dt).exp());
-        }
-        // Never into anyone, sideways, up or down: it waits for them to move.
-        if blocked(graph, self.hull, self.at, next - self.at) {
-            self.speed = 0.0;
-        } else {
-            self.at = next;
-        }
+    /// on Alert - and hovering over the floor (see [`Patrol::fly`]).
+    fn fly(&mut self, graph: &Graph, mesh: &NavMesh, player: &Target, leaves: Option<&Graph>, dt: f32) {
+        let around = Around { air: Air { graph, hull: self.hull, leaves }, mesh };
+        self.mind.fly(player.feet, &around, dt);
     }
 
     /// Glows along with the animation it is playing, in its mood's colour, and lights what is
@@ -1479,6 +1194,78 @@ struct Air<'a> {
     leaves: Option<&'a Graph>,
 }
 
+/// A drone's ways about the level, for its mind (see [`hydroxus_ai::tactics::patrol::Ways`]):
+/// along the floor of the `mesh`, where `reachable` says there is any way at all (see
+/// [`ROUTE_REACH`]) - or, flying free, through the `air` from where it is, `at`.
+struct Ways<'a, 'r> {
+    mesh: &'a NavMesh,
+    air: Air<'a>,
+    reachable: &'a dyn Fn(Vector3<f32>) -> bool,
+    rng: &'r mut Rng,
+    at: Vector3<f32>,
+    flies_free: bool,
+}
+
+impl Ways<'_, '_> {
+    /// A way along the floor to `to`, if there is any: none looked for where there is none to be
+    /// had.
+    fn ground(&self, to: Vector3<f32>) -> Vec<Vector3<f32>> {
+        match (self.reachable)(to) {
+            true => walk::route_to(self.mesh, self.at - Vector3::new(0.0, HOVER, 0.0), to, ROUTE_REACH),
+            false => Vec::new(),
+        }
+    }
+}
+
+impl patrol::Ways for Ways<'_, '_> {
+    fn route_to(&mut self, to: Vector3<f32>) -> Vec<Vector3<f32>> {
+        // Flying free, through the air to its height over `to`: there whether there is a way
+        // along the floor or not.
+        match self.flies_free {
+            true => flight(self.air, self.at, to + Vector3::new(0.0, HOVER, 0.0), || self.ground(to)),
+            false => self.ground(to),
+        }
+    }
+
+    fn trip(&mut self, under: Vector3<f32>, reach: (f32, f32)) -> Vec<Vector3<f32>> {
+        let route = walk::plan(self.mesh, under, reach, self.rng);
+        // Flying free, through the air to its height over the end of it.
+        match (self.flies_free, route.first()) {
+            (true, Some(&end)) => flight(self.air, self.at, end + Vector3::new(0.0, HOVER, 0.0), || route),
+            _ => route,
+        }
+    }
+
+    fn spot_near(&mut self, post: Vector3<f32>, reach: f32) -> Option<Vector3<f32>> {
+        walk::spot_near(self.mesh, post, reach, self.rng)
+    }
+
+    fn between(&mut self, range: (f32, f32)) -> f32 {
+        inhabitants::between(self.rng, range)
+    }
+}
+
+/// What is round a drone as it flies, for its mind (see [`hydroxus_ai::tactics::patrol::Air`]):
+/// the `air` it flies through, and the floor of the `mesh` under it.
+struct Around<'a> {
+    air: Air<'a>,
+    mesh: &'a NavMesh,
+}
+
+impl patrol::Air for Around<'_> {
+    fn clear(&self, from: Vector3<f32>, to: Vector3<f32>) -> bool {
+        clear(self.air, from, to, BODY_RADIUS)
+    }
+
+    fn floor_under(&self, at: Vector3<f32>) -> Option<f32> {
+        walk::floor_under(self.mesh, at)
+    }
+
+    fn blocked(&self, from: Vector3<f32>, step: Vector3<f32>) -> bool {
+        blocked(self.air.graph, self.air.hull, from, step)
+    }
+}
+
 /// Whether a ball `radius` across its middle could fly from `from` to `to` through the `air`
 /// without touching anything solid that stays where it is - the maze, the city - nor any leaves.
 /// Not the characters, whom a drone looks out for as it flies (see [`blocked`]), nor anything
@@ -1513,74 +1300,16 @@ fn clear(air: Air, from: Vector3<f32>, to: Vector3<f32>, radius: f32) -> bool {
         .is_none()
 }
 
-/// How far a drone could rise from `at` through the `air`, up to `most`, keeping
-/// [`FLIGHT_CLEARANCE`] from anything in its way.
-fn headroom(air: Air, at: Vector3<f32>, most: f32) -> f32 {
-    let (mut low, mut high) = (0.0, most);
-    if clear(air, at, at + Vector3::new(0.0, most, 0.0), FLIGHT_CLEARANCE) {
-        return most;
-    }
-    // Halving the way to whatever is overhead.
-    for _ in 0..8 {
-        let middle = (low + high) / 2.0;
-        match clear(air, at, at + Vector3::new(0.0, middle, 0.0), FLIGHT_CLEARANCE) {
-            true => low = middle,
-            false => high = middle,
-        }
-    }
-    low
-}
-
 /// The way a quadcopter flies from `from` to `to`, through the `air` at any height - past the
-/// leaves, too - as a route: points in the air, the last one first, keeping [`FLIGHT_CLEARANCE`] from
-/// anything solid. Straight there, if nothing is in the way. If something is - a wall, a building
-/// - up as little as it can, over it and down on the other side: as long as there is nothing
-/// overhead, up to [`CLIMB`] above the higher of the two. Under a roof, along its `ground` route -
-/// along the floor, the last point first, as the walk grid has it - at its height over the floor,
-/// its corners cut where they can be. Empty if there is no way: none overhead, and none along the
-/// floor.
+/// leaves, too - as a route, the last point first: [`hydroxus_ai::navigation::flight::flight`],
+/// with [`clear`] saying what is in its way and `ground` its way along the floor, under a roof.
 fn flight(
     air: Air,
     from: Vector3<f32>,
     to: Vector3<f32>,
     ground: impl FnOnce() -> Vec<Vector3<f32>>,
 ) -> Vec<Vector3<f32>> {
-    if clear(air, from, to, FLIGHT_CLEARANCE) {
-        return vec![to];
-    }
-    // As high as it can rise at either end, and the lowest it can cross between at that height.
-    let top = (from.y + headroom(air, from, CLIMB)).min(to.y + headroom(air, to, CLIMB));
-    let mut height = from.y.max(to.y) + CLIMB_STEP;
-    while height <= top {
-        let (up, over) = (Vector3::new(from.x, height, from.z), Vector3::new(to.x, height, to.z));
-        if clear(air, up, over, FLIGHT_CLEARANCE) {
-            return vec![to, over, up];
-        }
-        height += CLIMB_STEP;
-    }
-    // Along the floor, first point first, cutting straight across to the furthest point it can.
-    let along: Vec<Vector3<f32>> = ground().into_iter().rev().map(|at| at + Vector3::new(0.0, HOVER, 0.0)).collect();
-    let mut way = Vec::with_capacity(along.len());
-    let (mut at, mut next, mut tries) = (from, 0, 0);
-    while next < along.len() {
-        let mut furthest = next;
-        while furthest + 1 < along.len() && tries < SHORTCUTS {
-            tries += 1;
-            if !clear(air, at, along[furthest + 1], FLIGHT_CLEARANCE) {
-                break;
-            }
-            furthest += 1;
-        }
-        way.push(along[furthest]);
-        at = along[furthest];
-        next = furthest + 1;
-        if tries >= SHORTCUTS {
-            way.extend_from_slice(&along[next..]);
-            break;
-        }
-    }
-    way.reverse();
-    way
+    hydroxus_ai::navigation::flight::flight(&|a, b, radius| clear(air, a, b, radius), from, to, HOVER, ground)
 }
 
 /// Whether the drone whose body is `hull`, its middle at `at`, would run into anyone - the player
@@ -1654,6 +1383,8 @@ pub(crate) fn claim_glows(graph: &mut Graph, nodes: &[Handle<Node>]) -> Vec<(Mat
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hydroxus_ai::navigation::flight::{CLIMB_STEP, FLIGHT_CLEARANCE};
+    use hydroxus_ai::tactics::patrol::wrap;
 
     #[test]
     fn its_green_glows_past_the_engines_threshold_whenever_it_is_lit() {
