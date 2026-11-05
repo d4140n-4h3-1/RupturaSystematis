@@ -16,6 +16,7 @@
 //! (see [`Hud::show_overhead_bars`]).
 
 use crate::{computer::FONT, credits::Credits, inhabitants::Alert};
+use hydroxus_ai::perception::detection::Stage;
 use fyrox::{
     asset::untyped::ResourceKind,
     core::{algebra::Vector2, color::Color, pool::Handle, uuid::Uuid},
@@ -47,6 +48,8 @@ const CAUTION_YELLOW: Color = Color::opaque(255, 225, 40);
 /// The stamina bar: how big it is inside its frame, in pixels, and its colours - with plenty left,
 /// running low, and winded - and below how much it counts as running low.
 const BAR: (f32, f32) = (180.0, 10.0);
+/// How wide the sneaking meter's bar is inside its frame, in pixels.
+const DETECTION_BAR: f32 = 140.0;
 const STAMINA_GREEN: Color = Color::opaque(90, 230, 120);
 /// The health bar's colour, and its name's, while it is the shield's.
 const SHIELD_BLUE: Color = Color::opaque(70, 150, 255);
@@ -60,6 +63,9 @@ const HEALTH_RED: Color = Color::opaque(230, 50, 70);
 const CREDITS_GOLD: Color = Color::opaque(255, 205, 80);
 const HEALTH_LOW: f32 = 0.34;
 const HURT_RED: u8 = 90;
+/// The sneaking meter's colours: unseen, noticed, and spotted - as Fallout's.
+const HIDDEN_GREY: Color = Color::opaque(215, 215, 215);
+const DANGER_RED: Color = Color::opaque(255, 70, 50);
 
 /// What the status line is about.
 pub enum Status {
@@ -94,6 +100,9 @@ pub enum Status {
         shield_ready: bool,
         /// What there is to do next, in a heist, after the time.
         objective: Option<String>,
+        /// How aware of the player the most aware of those watching for them is, from 0 to 1, and
+        /// its stage, while it is to be shown: sneaking, or someone is becoming aware of them.
+        detection: Option<(Stage, f32)>,
     },
     /// A race: the lap and the clock, the laps so far, how fast the bike is going and how much
     /// boost it has left (see [`crate::race`]).
@@ -137,6 +146,12 @@ pub struct Hud {
     /// is only sent when it changes.
     blink: f32,
     shown_alert: Option<(String, Color)>,
+    /// The sneaking meter under the alert - its panel, its name and what fills its bar - and what
+    /// it last showed.
+    detection: Handle<UiNode>,
+    detection_label: Handle<Text>,
+    detection_fill: Handle<Border>,
+    shown_detection: Option<(String, Color, f32)>,
     shown_stamina: Option<(f32, Color, u32)>,
     /// The bars over the sentries' and the drone's heads - each its stamina and its health, a
     /// frame and what fills it - of which those not needed are hidden; and where they go.
@@ -181,6 +196,51 @@ impl Hud {
         .with_font_size(34.0.into())
         .with_horizontal_text_alignment(HorizontalAlignment::Center)
         .build(ctx);
+        // The sneaking meter, under the alert: what the watchers make of the player, and how
+        // aware the most aware of them is.
+        let detection_label = TextBuilder::new(
+            WidgetBuilder::new()
+                .with_horizontal_alignment(HorizontalAlignment::Center)
+                .with_margin(Thickness::bottom(3.0))
+                .with_foreground(Brush::Solid(HIDDEN_GREY).into()),
+        )
+        .with_font_size(20.0.into())
+        .with_horizontal_text_alignment(HorizontalAlignment::Center)
+        .with_text("[ HIDDEN ]")
+        .build(ctx);
+        let detection_fill = BorderBuilder::new(
+            WidgetBuilder::new()
+                .with_horizontal_alignment(HorizontalAlignment::Left)
+                .with_margin(Thickness::uniform(2.0))
+                .with_width(0.0)
+                .with_height(4.0)
+                .with_background(Brush::Solid(HIDDEN_GREY).into()),
+        )
+        .with_stroke_thickness(Thickness::zero().into())
+        .build(ctx);
+        let detection_frame = BorderBuilder::new(
+            WidgetBuilder::new()
+                .with_horizontal_alignment(HorizontalAlignment::Center)
+                .with_width(DETECTION_BAR + 4.0)
+                .with_height(8.0)
+                .with_foreground(Brush::Solid(Color::opaque(200, 200, 200)).into())
+                .with_background(Brush::Solid(Color::from_rgba(0, 0, 0, 120)).into())
+                .with_child(detection_fill),
+        )
+        .with_stroke_thickness(Thickness::uniform(1.0).into())
+        .build(ctx);
+        let detection = StackPanelBuilder::new(
+            WidgetBuilder::new()
+                .with_horizontal_alignment(HorizontalAlignment::Center)
+                .with_vertical_alignment(VerticalAlignment::Top)
+                .with_margin(Thickness::top(88.0))
+                .with_visibility(false)
+                .with_child(detection_label)
+                .with_child(detection_frame),
+        )
+        .with_orientation(Orientation::Vertical)
+        .build(ctx)
+        .to_base();
         let stamina_fill = BorderBuilder::new(
             WidgetBuilder::new()
                 .with_horizontal_alignment(HorizontalAlignment::Left)
@@ -354,6 +414,7 @@ impl Hud {
                 .with_child(health)
                 .with_child(banner)
                 .with_child(alert)
+                .with_child(detection)
                 .with_child(bottom)
                 .with_child(fade),
         )
@@ -363,6 +424,9 @@ impl Hud {
             status,
             banner,
             alert,
+            detection,
+            detection_label,
+            detection_fill,
             stamina,
             stamina_fill,
             stamina_label,
@@ -407,9 +471,9 @@ impl Hud {
         self.note_time = (self.note_time - dt).max(0.0);
         self.blink = (self.blink + dt) % BLINK;
         let blinking_on = self.blink < BLINK_ON;
-        let (text, alarm, breath, health, (armed, gun, ammo), credits, shield, shield_ready) = match status {
-            Status::Loading => ("Loading the maze...".to_string(), None, None, None, (false, None, None), None, None, false),
-            Status::Blank => (String::new(), None, None, None, (false, None, None), None, None, false),
+        let (text, alarm, breath, health, (armed, gun, ammo), credits, shield, shield_ready, detection) = match status {
+            Status::Loading => ("Loading the maze...".to_string(), None, None, None, (false, None, None), None, None, false, None),
+            Status::Blank => (String::new(), None, None, None, (false, None, None), None, None, false, None),
             Status::Race(race) => {
                 let mut text = format!(
                     "Pos {}/{}    Lap {}/{}    Time {}",
@@ -429,7 +493,7 @@ impl Hud {
                 if self.note_time > 0.0 {
                     text += &format!("\n{}", self.note);
                 }
-                (text, None, None, None, (false, None, None), None, None, false)
+                (text, None, None, None, (false, None, None), None, None, false, None)
             }
             Status::Round {
                 time,
@@ -446,6 +510,7 @@ impl Hud {
                 shield,
                 shield_ready,
                 objective,
+                detection,
             } => {
                 let mut text = format!("Time {}", format_time(time));
                 if let Some(objective) = objective {
@@ -460,7 +525,7 @@ impl Hud {
                 if self.note_time > 0.0 {
                     text += &format!("\n{}", self.note);
                 }
-                (text, alarm, Some((breath, frozen)), Some(health), (armed, Some(gun), ammo), Some(credits), shield, shield_ready)
+                (text, alarm, Some((breath, frozen)), Some(health), (armed, Some(gun), ammo), Some(credits), shield, shield_ready, detection)
             }
         };
         ui.send(self.status, TextMessage::Text(text));
@@ -473,6 +538,20 @@ impl Hud {
                 ui.send(self.alert, WidgetMessage::Foreground(Brush::Solid(*colour).into()));
             }
             self.shown_alert = alert;
+        }
+
+        let detection = detection.map(|(stage, level)| detection_shown(stage, level));
+        if detection != self.shown_detection {
+            ui.send(self.detection, WidgetMessage::Visibility(detection.is_some()));
+            if let Some((text, colour, level)) = &detection {
+                if self.shown_detection.as_ref().is_none_or(|(was, _, _)| was != text) {
+                    ui.send(self.detection_label, TextMessage::Text(text.clone()));
+                    ui.send(self.detection_label, WidgetMessage::Foreground(Brush::Solid(*colour).into()));
+                    ui.send(self.detection_fill, WidgetMessage::Background(Brush::Solid(*colour).into()));
+                }
+                ui.send(self.detection_fill, WidgetMessage::Width(DETECTION_BAR * level));
+            }
+            self.shown_detection = detection;
         }
 
         let stamina = breath.map(|((left, winded), frozen)| {
@@ -684,6 +763,19 @@ fn alert_shown(alert: Alert, left: f32, blinking_on: bool) -> Option<(String, Co
     }
 }
 
+/// What the sneaking meter says, in what colour, and how full its bar is, for the most aware
+/// watcher at `stage`, `level` aware: Fallout's `[ HIDDEN ]`, `[ CAUTION ]` and `[ DANGER ]`, the
+/// bar in steps of a fiftieth, so that it is only sent when it moves.
+fn detection_shown(stage: Stage, level: f32) -> (String, Color, f32) {
+    let level = (level.clamp(0.0, 1.0) * 50.0).round() / 50.0;
+    let (text, colour) = match stage {
+        Stage::Hidden => ("[ HIDDEN ]", HIDDEN_GREY),
+        Stage::Caution => ("[ CAUTION ]", CAUTION_YELLOW),
+        Stage::Danger => ("[ DANGER ]", DANGER_RED),
+    };
+    (text.to_string(), colour, level)
+}
+
 /// How full the stamina bar is and its colour, with `left` of it, winded or not, and with what
 /// blinks showing or not. The bar only goes dark, blinking, while winded.
 fn stamina_shown(left: f32, winded: bool, blinking_on: bool) -> (f32, Color) {
@@ -710,6 +802,13 @@ pub fn format_time(seconds: f32) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_sneaking_meter_says_hidden_caution_or_danger_and_fills() {
+        assert_eq!(detection_shown(Stage::Hidden, 0.0), ("[ HIDDEN ]".to_string(), HIDDEN_GREY, 0.0));
+        assert_eq!(detection_shown(Stage::Caution, 0.513), ("[ CAUTION ]".to_string(), CAUTION_YELLOW, 0.52));
+        assert_eq!(detection_shown(Stage::Danger, 1.4), ("[ DANGER ]".to_string(), DANGER_RED, 1.0));
+    }
 
     #[test]
     fn a_health_bar_over_a_head_blinks_brighter_only_once_low() {
