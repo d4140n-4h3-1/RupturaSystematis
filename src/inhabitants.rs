@@ -94,6 +94,7 @@
 //! next stage off; with the pistol off it for [`CALM`] seconds, it calms down again.
 
 pub use hydroxus_ai::alert::Alert;
+use hydroxus_ai::alert::{Incident, Wariness};
 pub use hydroxus_ai::tactics::threat::Threat;
 pub(crate) use hydroxus_ai::navigation::route::between;
 use hydroxus_ai::navigation::walk::route_to;
@@ -405,6 +406,9 @@ struct Inhabitant {
     /// Having noticed the player, not sure enough to go after them, going to look where it did
     /// (see [`hydroxus_ai::tactics::investigate`]).
     investigating: Option<Investigation>,
+    /// How wary it is from what it has been through: the longer it searches and stays wary, and
+    /// the more keenly it looks (see [`hydroxus_ai::alert::Wariness`]).
+    wariness: Wariness,
     /// Where it last saw the player's feet, and which way they were going then, roughly.
     lost_at: Vector3<f32>,
     lost_going: Vector3<f32>,
@@ -541,6 +545,7 @@ impl Inhabitant {
         self.lost_going = Vector3::zeros();
         self.detection.reset();
         self.investigating = None;
+        self.wariness = Wariness::default();
         self.searched = 0;
         self.looking = None;
         self.deaf = 0.0;
@@ -1021,9 +1026,21 @@ impl Inhabitant {
                 self.route.clear();
                 self.looking = None;
                 self.resting = REST.0;
-                self.search_left = AI.alert.caution;
+                self.search_left = self.wariness.lasts(&AI.alert, Alert::Caution).unwrap_or(AI.alert.caution);
             }
         }
+    }
+
+    /// It went through `incident`: the warier for it.
+    fn note(&mut self, incident: Incident) {
+        self.wariness.note(&AI.alert, incident);
+    }
+
+    /// How keenly it looks and listens for the player: the more searching, and the more the
+    /// warier it is.
+    fn eagerness(&self) -> f32 {
+        let searching = if self.alert == Some(Alert::Evasion) { AI.detection.searching } else { 1.0 };
+        searching * self.wariness.keenness(&AI.alert)
     }
 
     /// Starts searching from where it last saw the player.
@@ -1031,7 +1048,7 @@ impl Inhabitant {
         self.route.clear();
         self.looking = None;
         self.searched = 0;
-        self.search_left = AI.alert.evasion;
+        self.search_left = self.wariness.lasts(&AI.alert, Alert::Evasion).unwrap_or(AI.alert.evasion);
     }
 }
 
@@ -1932,6 +1949,7 @@ impl Inhabitants {
             sees_player: false,
             detection: Detection::default(),
             investigating: None,
+            wariness: Wariness::default(),
             lost_at: feet,
             lost_going: Vector3::zeros(),
             search_left: 0.0,
@@ -2543,6 +2561,7 @@ impl Inhabitants {
                 droid.aimed_at = if blind.is_some() { droid.aimed_at.or(target) } else { target };
             }
             droid.resting = (droid.resting - dt).max(0.0);
+            droid.wariness.step(&AI.alert, dt);
             droid.windup = (droid.windup - dt).max(0.0);
             droid.deaf = (droid.deaf - dt).max(0.0);
             if droid.sees_player {
@@ -2567,6 +2586,9 @@ impl Inhabitants {
                     }
                     next => next,
                 };
+                if alert == Alert::Alert && next == Some(Alert::Evasion) {
+                    droid.note(Incident::Lost);
+                }
                 droid.enter(me, next, &mut alerts);
             }
             // In battle royale, going about its business, it gives up on anywhere outside the
@@ -3291,9 +3313,13 @@ impl Inhabitants {
                     droid.detection.alert();
                     true
                 }
-                Some(alert) => {
-                    let eagerness = if alert == Alert::Evasion { AI.detection.searching } else { 1.0 };
-                    let change = droid.detection.step(&AI.detection, visible, eagerness, dt);
+                Some(_) => {
+                    let change = droid.detection.step(&AI.detection, visible, droid.eagerness(), dt);
+                    match change {
+                        Some(Change::Noticed) => droid.note(Incident::Noticed),
+                        Some(Change::Spotted) => droid.note(Incident::Spotted),
+                        _ => (),
+                    }
                     // Noticing them, it goes to look; glimpsing them again, it looks there instead.
                     match (change, droid.investigating.as_mut()) {
                         (Some(Change::Spotted), _) => droid.investigating = None,
@@ -3489,6 +3515,7 @@ impl Inhabitants {
             droid.threat = 0.0;
             droid.lost_at = player;
             droid.lost_going = Vector3::zeros();
+            droid.note(Incident::Alarm);
             droid.alert = None;
             droid.enter(m, Some(Alert::Evasion), &mut self.alerts);
             self.alarmed.push(m);
@@ -3612,6 +3639,7 @@ impl Inhabitants {
             if let Some((m, _)) = finder {
                 Log::info(format!("Body found: droid {n}, by droid {m}"));
                 found.push((m, lies));
+                self.droids[m].note(Incident::FoundBody);
                 self.droids[n].found = true;
             }
         }
@@ -3775,6 +3803,7 @@ impl Inhabitants {
         }
         droid.lost_at = at;
         droid.lost_going = Vector3::zeros();
+        droid.note(Incident::Alarm);
         droid.alert = None;
         droid.enter(n, Some(Alert::Evasion), &mut self.alerts);
         self.alarmed.push(n);
@@ -3977,14 +4006,20 @@ impl Inhabitants {
             let Some(nearness) = noise.nearness(mesh, droid.feet) else {
                 continue;
             };
-            if !sudden {
-                let eagerness = if droid.alert == Some(Alert::Evasion) { AI.detection.searching } else { 1.0 };
+            if sudden {
+                droid.note(Incident::Gunfire);
+            } else {
+                let eagerness = droid.eagerness();
                 match (droid.detection.hear(&AI.detection, nearness, eagerness), droid.investigating.as_mut()) {
                     // Sure someone is there: it searches from where it heard them, as from a shot.
-                    (Some(Change::Spotted), _) => droid.investigating = None,
+                    (Some(Change::Spotted), _) => {
+                        droid.investigating = None;
+                        droid.note(Incident::Heard);
+                    }
                     // Something there, it thinks: it goes to look.
                     (Some(Change::Noticed), None) if !droid.talking => {
                         droid.investigating = Some(Investigation::new(&AI.investigate, at));
+                        droid.note(Incident::Noticed);
                         continue;
                     }
                     (_, Some(look)) => {
@@ -4052,6 +4087,7 @@ impl Inhabitants {
             let near = passes.iter().find(|pass| bolts::felt(&AI.bolts, pass.nearest(chest)));
             if near.is_some() {
                 missed.push(n);
+                droid.note(Incident::ShotAt);
             }
             // Searching, or wary, it notices one going by further off too, as one on a side does.
             let Some(pass) = near.or(noticed.filter(|_| droid.alert.is_some() || droid.side.is_some())) else {
@@ -4207,6 +4243,7 @@ impl Inhabitants {
         // A good headshot stops it there and then.
         let headshot = droid.headshot(graph, strike.at, strike.way);
         droid.hits += 1;
+        droid.note(Incident::Hurt);
         if droid.hits < droid.stopped_by() && headshot.is_none() {
             if droid.side.is_some() {
                 // In capture the flag, it turns to whoever it was, to see them, and goes after
