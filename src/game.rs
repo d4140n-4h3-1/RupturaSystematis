@@ -4243,8 +4243,8 @@ impl MazeGame {
         self.want_mouse = !self.menu.is_open();
     }
 
-    /// Keeps the camera on the face of the droid being talked to, as it moves, and has it say its
-    /// line once that is ready.
+    /// Keeps the camera on the face of the droid being talked to, as it moves, has it say its
+    /// line once that is ready, and keeps the panel off its face (see [`DialogueScreen::fit`]).
     fn keep_talking(&mut self, ctx: &mut PluginContext) {
         let Some(droid) = self.talking.as_ref().map(|talking| talking.droid) else {
             return;
@@ -4253,6 +4253,7 @@ impl MazeGame {
             Some(face) => self.player.talk_to(Some(face)),
             None => self.stop_talking(ctx),
         }
+        self.dialogue.fit(ctx.user_interfaces.first());
         self.say_when_made(ctx);
     }
 
