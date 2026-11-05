@@ -111,12 +111,13 @@ use hydroxus_ai::{
     },
     perception::{
         bolts,
-        detection::{most_aware, Detection, Stage},
+        detection::{most_aware, Change, Detection, Stage},
         hearing::Heard,
         sight::Sight,
         witness::knows_who,
     },
     tactics::{
+        investigate::{self, Investigation},
         blind::{self, BlindFire},
         chase, cover,
         fire,
@@ -401,6 +402,9 @@ struct Inhabitant {
     /// has filled (see [`hydroxus_ai::perception::detection`]), or straight away on Alert.
     sees_player: bool,
     detection: Detection,
+    /// Having noticed the player, not sure enough to go after them, going to look where it did
+    /// (see [`hydroxus_ai::tactics::investigate`]).
+    investigating: Option<Investigation>,
     /// Where it last saw the player's feet, and which way they were going then, roughly.
     lost_at: Vector3<f32>,
     lost_going: Vector3<f32>,
@@ -536,6 +540,7 @@ impl Inhabitant {
         self.lost_at = feet;
         self.lost_going = Vector3::zeros();
         self.detection.reset();
+        self.investigating = None;
         self.searched = 0;
         self.looking = None;
         self.deaf = 0.0;
@@ -1005,6 +1010,10 @@ impl Inhabitant {
         }
         self.alert = alert;
         news.push((n, alert));
+        // After them, or calm again, it has nothing to look into.
+        if matches!(alert, Some(Alert::Alert) | None) {
+            self.investigating = None;
+        }
         match alert {
             Some(Alert::Alert) => self.replan = 0.0,
             Some(Alert::Evasion) => self.search_afresh(),
@@ -1922,6 +1931,7 @@ impl Inhabitants {
             alert: None,
             sees_player: false,
             detection: Detection::default(),
+            investigating: None,
             lost_at: feet,
             lost_going: Vector3::zeros(),
             search_left: 0.0,
@@ -2735,6 +2745,27 @@ impl Inhabitants {
                     (droid.route, droid.trip) = go_to(droid.feet, from);
                     droid.no_way = droid.route.is_empty();
                 }
+            } else if let Some(mut look) = droid.investigating.filter(|_| droid.alert.is_some_and(|alert| alert != Alert::Alert)) {
+                // Having noticed the player: it looks that way, goes over to where it did, and
+                // looks about there - and then, finding nothing, goes back to what it was doing.
+                droid.investigating = match look.step(&AI.investigate, droid.feet, droid.heading, dt) {
+                    investigate::Doing::Face { heading } | investigate::Doing::LookAround { heading } => {
+                        droid.route.clear();
+                        droid.heading = heading;
+                        Some(look)
+                    }
+                    investigate::Doing::GoTo { at, afresh } if afresh || droid.route.is_empty() => {
+                        (droid.route, droid.trip) = go_to(droid.feet, at);
+                        // No way there: it gives it up.
+                        (!droid.route.is_empty()).then_some(look)
+                    }
+                    investigate::Doing::GoTo { .. } => Some(look),
+                    investigate::Doing::Done => {
+                        droid.route.clear();
+                        droid.looking = None;
+                        None
+                    }
+                };
             } else if droid.alert == Some(Alert::Evasion) {
                 if droid.route.is_empty() {
                     match droid.looking {
@@ -3262,7 +3293,16 @@ impl Inhabitants {
                 }
                 Some(alert) => {
                     let eagerness = if alert == Alert::Evasion { AI.detection.searching } else { 1.0 };
-                    droid.detection.step(&AI.detection, visible, eagerness, dt);
+                    let change = droid.detection.step(&AI.detection, visible, eagerness, dt);
+                    // Noticing them, it goes to look; glimpsing them again, it looks there instead.
+                    match (change, droid.investigating.as_mut()) {
+                        (Some(Change::Spotted), _) => droid.investigating = None,
+                        (Some(Change::Noticed), None) if !droid.talking => {
+                            droid.investigating = Some(Investigation::new(&AI.investigate, player));
+                        }
+                        (_, Some(look)) if visible > 0.0 => look.saw_again(&AI.investigate, player),
+                        _ => (),
+                    }
                     droid.detection.spotted() && visible > 0.0
                 }
                 None => {
