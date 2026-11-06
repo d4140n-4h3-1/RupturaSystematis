@@ -81,7 +81,8 @@ impl Posture {
         match self {
             Posture::Standing => 1.6,
             Posture::Crouching => 1.05,
-            Posture::Crawling => 0.45,
+            // Prone, the head raised off the floor (the droid's prone crawl has its eyes about here).
+            Posture::Crawling => 0.28,
         }
     }
 
