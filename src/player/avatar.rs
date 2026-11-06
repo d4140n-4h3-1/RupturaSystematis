@@ -12,7 +12,8 @@
 //! Shift. Crouching and crawling share the crouch, played faster for the quicker gaits and slower
 //! down on the floor. Standing still, the droid settles into its idle, or its rest pose if it has
 //! none; crouched or crawling, into its crouch idle - feet set, breathing, glancing about - or
-//! without one it holds the crouch where it stopped. Going from one cycle to another, it
+//! without one it holds the crouch where it stopped. Crawling, it goes on its forearms and knees
+//! in its crawl and rests in the crawl's idle, if it has them; otherwise it crawls in the crouch. Going from one cycle to another, it
 //! carries on at the same point in the stride, with the same foot down - whichever foot each
 //! cycle starts on.
 //!
@@ -275,6 +276,12 @@ const IDLE: &str = "droid_idle_cycle";
 /// Its idle crouched - and crawling, which shares the crouch - played crouched and still. In place
 /// too. Without it the droid holds the crouch where it stopped.
 const CROUCH_IDLE: &str = "droid_crouch_idle";
+/// Its crawl, on forearms and knees, and its idle down there, if it has them: played crawling in
+/// place of the crouch. Without them, crawling plays the crouch, slower ([`CRAWLING_RATES`]).
+const CRAWL: &str = "droid_crawl_cycle";
+const CRAWL_IDLE: &str = "droid_crawl_idle";
+/// How fast the crawl is played for each gait, like [`CROUCHING_RATES`].
+const CRAWL_RATES: [f32; 4] = [1.0, 1.3, 1.45, 1.6];
 /// Its idle, walk and jog in cover, leaning back against a wall, if it has them: for the wall on
 /// its left, and on its right, like [`Wall::index`]. The droid faces along the wall in cover, and
 /// each is turned on that, its back to the wall.
@@ -1676,6 +1683,9 @@ pub struct Avatar {
     idle: Option<Handle<Animation>>,
     /// Played crouched or crawling and still, when the droid has one.
     crouch_idle: Option<Handle<Animation>>,
+    /// Its crawl as an index into `cycles`, and its idle crawling, when it has them.
+    crawl: Option<usize>,
+    crawl_idle: Option<Handle<Animation>>,
     /// Played in cover in place of the idle, and of the walk and the jog as indexes into
     /// `cycles`, when the droid has them: for each side the wall can be on, like [`Wall::index`].
     cover_idle: [Option<Handle<Animation>>; 2],
@@ -1704,8 +1714,9 @@ pub struct Avatar {
     stepping: Option<Step>,
     /// The wall it was in cover against as of the last frame.
     covered: Option<Wall>,
-    /// Whether it was crouched, or crawling, as of the last frame.
+    /// Whether it was crouched, or crawling, as of the last frame; and crawling.
     crouched: bool,
+    crawling: bool,
     /// Its skids by name, as far as it has them.
     skids: FxHashMap<&'static str, Skid>,
     skidding: Option<Skidding>,
@@ -2229,6 +2240,27 @@ impl Avatar {
         };
         let cover_walk = COVER_WALK.map(|name| cover_cycle(name, Gait::Walking));
         let cover_jog = COVER_JOG.map(|name| cover_cycle(name, Gait::Jogging));
+        // Crawling: made or not yet, crawling plays the crouch without it.
+        let crawl = container.find_by_name_mut(CRAWL).and_then(|(handle, animation)| {
+            let (pace, phase) = measure(animation);
+            let speed = pace.map(|pace| pace.z).filter(|s| *s > STILL)?;
+            info(format!("Droid: its {CRAWL} goes {speed:.2} m/s"));
+            cycles.push(Cycle {
+                animation: handle,
+                gait: None,
+                speed,
+                way: 0.0,
+                phase,
+            });
+            Some(cycles.len() - 1)
+        });
+        let crawl_idle = container.find_by_name_mut(CRAWL_IDLE).map(|(handle, animation)| {
+            animation.set_loop(true);
+            handle
+        });
+        if crawl.is_none() || crawl_idle.is_none() {
+            info(format!("Droid: without {CRAWL} and {CRAWL_IDLE} it crawls in its crouch"));
+        }
         let strafes: [[Option<usize>; 7]; 4] = std::array::from_fn(|row| {
             STRAFES[row].map(|name| {
                 let Some((handle, animation)) = container.find_by_name_mut(name) else {
@@ -2593,6 +2625,8 @@ impl Avatar {
             gaited,
             idle,
             crouch_idle,
+            crawl,
+            crawl_idle,
             cover_idle,
             cover_walk,
             cover_jog,
@@ -2607,6 +2641,7 @@ impl Avatar {
             stepping: None,
             covered: None,
             crouched: false,
+            crawling: false,
             skids,
             skidding: None,
             leaps,
@@ -2761,6 +2796,7 @@ impl Avatar {
                 let borrowed = gait == Gait::Running && self.cycles[index].gait != Some(gait);
                 (index, if borrowed { RUN_PACE } else { 1.0 })
             }
+            Posture::Crawling if self.crawl.is_some() => (self.crawl?, CRAWL_RATES[gait.rank()]),
             _ => (
                 gaits.iter().position(Option::is_none)?,
                 crouch_rate(posture, gait),
@@ -3619,8 +3655,15 @@ impl Avatar {
         let crouched = going.posture != Posture::Standing;
         let moving = going.speed >= STILL;
         let mut wanted = choose(&self.gaits(), going.gait, crouched, moving);
-        // Crouched and still, its crouch idle, if it has one, in place of holding the crouch.
-        if crouched && !moving && self.crouch_idle.is_some() {
+        // Crawling, its crawl, if it has one, in place of the crouch.
+        let crawling = going.posture == Posture::Crawling && self.crawl.is_some();
+        if crawling && moving {
+            wanted = self.crawl;
+        }
+        // Crouched and still, its crouch idle - or crawl idle - if it has one, in place of holding
+        // the crouch.
+        let still_idle = if crawling { self.crawl_idle } else { self.crouch_idle };
+        if crouched && !moving && still_idle.is_some() {
             wanted = None;
         }
         // In cover, shuffling along the wall in place of walking or jogging.
@@ -3690,17 +3733,20 @@ impl Avatar {
             && self.playing.is_none()
             && (going.cover != self.covered
                 || cornered != self.cornered
-                || crouched != self.crouched)
+                || crouched != self.crouched
+                || crawling != self.crawling)
         {
             self.covered = going.cover;
             self.cornered = cornered;
             self.crouched = crouched;
+            self.crawling = crawling;
             self.rewind_idle(graph);
             self.fade_from_here(graph);
         }
         self.covered = going.cover;
         self.cornered = cornered;
         self.crouched = crouched;
+        self.crawling = crawling;
         if wanted != self.playing {
             // The new cycle picks up at the same point in the stride, with the same foot down, so
             // the feet carry on.
@@ -3793,6 +3839,8 @@ impl Avatar {
             (Posture::Standing, Gait::Walking) => &[0, 1, 2],
             (Posture::Standing, Gait::Jogging) => &[1, 0, 2],
             (Posture::Standing, _) => &[2, 1, 0],
+            // Crawling in its own crawl, there are none: it turns to crawl the way it goes.
+            (Posture::Crawling, _) if self.crawl.is_some() => &[],
             _ => &[3],
         };
         for side in 0..STRAFES[0].len() {
@@ -3823,6 +3871,9 @@ impl Avatar {
     /// The idle to play still: crouched, the crouch's; standing, the one for cover, in cover, if
     /// the droid has it.
     fn idle_now(&self) -> Option<Handle<Animation>> {
+        if self.crawling && self.crawl_idle.is_some() {
+            return self.crawl_idle;
+        }
         if self.crouched && self.crouch_idle.is_some() {
             return self.crouch_idle;
         }
