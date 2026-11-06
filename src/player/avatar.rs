@@ -2211,7 +2211,10 @@ impl Avatar {
         }
         // The rest are only ever played by name.
         let gaited = cycles.len();
-        // The highest bones the cycles move: the walk's, or whichever cycle came first.
+        // The highest bones the cycles move: the walk's, or whichever cycle came first. Highest of
+        // all, with nothing it moves above them: a bone under one that moves goes with it already
+        // (the upper arms, under shoulders the walk leaves be, would be shifted twice over, and
+        // by the wrong way with the body pitched over, crawling).
         let tops: Vec<(Handle<Node>, Bone)> = {
             let animation = &mut container[cycles[0].animation];
             animation.tick(0.0);
@@ -2219,9 +2222,19 @@ impl Avatar {
                 let (position, rotation) = posed(animation, bone);
                 position.is_some() || rotation.is_some()
             };
+            let moved_above = |bone: Handle<Node>| {
+                let mut at = parents.get(&bone).copied();
+                while let Some(parent) = at {
+                    if moves(parent) {
+                        return true;
+                    }
+                    at = parents.get(&parent).copied();
+                }
+                false
+            };
             rest.keys()
                 .copied()
-                .filter(|&bone| moves(bone) && !parents.get(&bone).is_some_and(|&p| moves(p)))
+                .filter(|&bone| moves(bone) && !moved_above(bone))
                 .map(|bone| {
                     let above = chain(|node| parents[&node], root, parents[&bone]);
                     (bone, place(&above, |bone| rest[&bone]))
@@ -3803,7 +3816,11 @@ impl Avatar {
             animation.set_speed(if backwards { -rate } else { rate });
             animation.tick(dt);
             take_pose(animation, &mut target);
-            self.hold_in_place(animation, &mut target, way);
+            // The crawl is made in place, its body where it is to be: nothing to take out, and
+            // taken out it would jump between it and its idle.
+            if Some(index) != self.crawl {
+                self.hold_in_place(animation, &mut target, way);
+            }
         } else if let Some(idle) = self.idle_now() {
             let Some(container) = self.container(graph) else {
                 return;
