@@ -1783,6 +1783,11 @@ pub struct Avatar {
     arms: Arms,
     /// How far over to the pistol the upper body is, from 0 to 1.
     arms_weight: f32,
+    /// Crawling with the gun only carried - at the ready, or being drawn or put away - how far the
+    /// crawl has the arms back from it, from 0 to 1: its hands are flat on the floor, and the
+    /// standing ready pose would put them through it. The gun is out of sight meanwhile. Raised to
+    /// aim or fire, the gun has the arms again.
+    crawl_stow: f32,
     /// Where the pistol had the upper body as it went from one of its animations to the next,
     /// and how far through going over it is, from 0 to 1.
     arms_from: FxHashMap<Handle<Node>, Bone>,
@@ -2675,6 +2680,7 @@ impl Avatar {
             moving_weight: 0.0,
             arms: Arms::Holstered,
             arms_weight: 0.0,
+            crawl_stow: 0.0,
             arms_from: Default::default(),
             arms_blend: 1.0,
             queued: false,
@@ -3093,7 +3099,7 @@ impl Avatar {
             Arms::Drawing => into >= pistol.show_at,
             Arms::Ready | Arms::Raising | Arms::Lowering | Arms::Aiming | Arms::Firing(_) => true,
             Arms::Holstering => into <= pistol.hide_after,
-        };
+        } && self.crawl_stow < 0.5;
         if show != shown {
             graph[pistol.node].set_visibility(show);
         }
@@ -3109,6 +3115,9 @@ impl Avatar {
         };
         let step = dt / ARMS_FADE;
         self.arms_weight += (out - self.arms_weight).clamp(-step, step);
+        let carried = matches!(self.arms, Arms::Drawing | Arms::Ready | Arms::Lowering | Arms::Holstering);
+        let stow = if self.crawling && carried { 1.0 } else { 0.0 };
+        self.crawl_stow += (stow - self.crawl_stow).clamp(-step, step);
         // Held in both hands, as the rifle is, the left arm keeps hold of it at the ready too.
         let free = if self.arms == Arms::Ready && !pistol.two_handed { 1.0 } else { 0.0 };
         let step = dt / LEFT_ARM_FADE;
@@ -3281,11 +3290,13 @@ impl Avatar {
     /// as far through the change to it as the fade has got after another `dt` - and strafing,
     /// with the face and shoulders squared to straight ahead.
     fn put(&mut self, graph: &mut Graph, mut target: FxHashMap<Handle<Node>, Bone>, dt: f32) {
+        // Crawling with the gun only carried, the crawl keeps the arms (see `crawl_stow`).
+        let arms_weight = self.arms_weight * (1.0 - self.crawl_stow);
         // At the ready the left arm swings with the legs - pumping in a run, in step with it - as
         // far as it has let go of the pistol's pose.
         let held = 1.0 - self.left_free * self.left_free * (3.0 - 2.0 * self.left_free);
         let smooth = |x: f32| x * x * (3.0 - 2.0 * x);
-        let at_ready = smooth(self.arms_weight) * (1.0 - held);
+        let at_ready = smooth(arms_weight) * (1.0 - held);
         // How the legs twist the shoulders and carry the hips, off how they do on average: the
         // swing of the stride, which the upper body takes at the ready.
         let stride = self.square.as_ref().map(|square| {
@@ -3313,8 +3324,8 @@ impl Avatar {
         let own_aim = 1.0 - smooth(self.corner_weight);
         // Against the wall, no twist of the body to aim.
         let square_on = 1.0 - smooth(self.against_weight);
-        if self.arms_weight > 0.0 {
-            let w = own_aim * smooth(self.arms_weight);
+        if arms_weight > 0.0 {
+            let w = own_aim * smooth(arms_weight);
             for (bone, pose) in &self.arms_pose {
                 if let Some(target) = target.get_mut(bone) {
                     *target = target.towards(*pose, arm_weight(bone, w));
@@ -3381,8 +3392,8 @@ impl Avatar {
         }
         // The pistol follows the camera, as far over to the pistol as the upper body has gone:
         // the aims' offsets laid on top, from where the droid itself faces.
-        if let Some(aims) = self.gun.as_ref().and_then(|gun| gun.aims.as_ref()).filter(|_| self.arms_weight > 0.0) {
-            let w = smooth(self.arms_weight);
+        if let Some(aims) = self.gun.as_ref().and_then(|gun| gun.aims.as_ref()).filter(|_| arms_weight > 0.0) {
+            let w = smooth(arms_weight);
             // Squared up, the upper body already faces the body's ahead; otherwise the droid's.
             let facing = self.heading * (1.0 - self.square_weight);
             let (pitch, yaw) = (self.look.0, wrap(self.look.1 - facing));
