@@ -280,6 +280,14 @@ const CROUCH_IDLE: &str = "droid_crouch_idle";
 /// place of the crouch. Without them, crawling plays the crouch, slower ([`CRAWLING_RATES`]).
 const CRAWL: &str = "droid_crawl_cycle";
 const CRAWL_IDLE: &str = "droid_crawl_idle";
+/// Going down to the floor and getting up off it, standing still, if it has them: played once, from
+/// the idle of the posture it leaves to the idle of the one it comes to.
+const TRANSITIONS: [(Posture, Posture, &str); 4] = [
+    (Posture::Crouching, Posture::Crawling, "droid_down_crouch_prone"),
+    (Posture::Standing, Posture::Crawling, "droid_down_stand_prone"),
+    (Posture::Crawling, Posture::Crouching, "droid_up_prone_crouch"),
+    (Posture::Crawling, Posture::Standing, "droid_up_prone_stand"),
+];
 /// How fast the crawl is played for each gait, like [`CROUCHING_RATES`].
 const CRAWL_RATES: [f32; 4] = [1.0, 1.3, 1.45, 1.6];
 /// Its idle, walk and jog in cover, leaning back against a wall, if it has them: for the wall on
@@ -1686,6 +1694,11 @@ pub struct Avatar {
     /// Its crawl as an index into `cycles`, and its idle crawling, when it has them.
     crawl: Option<usize>,
     crawl_idle: Option<Handle<Animation>>,
+    /// Its transitions from one posture to another, as far as it has them (see [`TRANSITIONS`]),
+    /// the one under way, if any, and the posture it was in as of the last frame.
+    transitions: Vec<(Posture, Posture, Handle<Animation>)>,
+    changing: Option<Handle<Animation>>,
+    posture_was: Option<Posture>,
     /// Played in cover in place of the idle, and of the walk and the jog as indexes into
     /// `cycles`, when the droid has them: for each side the wall can be on, like [`Wall::index`].
     cover_idle: [Option<Handle<Animation>>; 2],
@@ -2276,6 +2289,17 @@ impl Avatar {
             animation.set_loop(true);
             handle
         });
+        let transitions: Vec<(Posture, Posture, Handle<Animation>)> = TRANSITIONS
+            .iter()
+            .filter_map(|&(from, to, name)| {
+                let (handle, animation) = container.find_by_name_mut(name)?;
+                animation.set_loop(false);
+                Some((from, to, handle))
+            })
+            .collect();
+        if transitions.len() < TRANSITIONS.len() {
+            info("Droid: without all its droid_down_*/droid_up_* clips, it goes down and up in a fade".to_string());
+        }
         if crawl.is_none() || crawl_idle.is_none() {
             info(format!("Droid: without {CRAWL} and {CRAWL_IDLE} it crawls in its crouch"));
         }
@@ -2645,6 +2669,9 @@ impl Avatar {
             crouch_idle,
             crawl,
             crawl_idle,
+            transitions,
+            changing: None,
+            posture_was: None,
             cover_idle,
             cover_walk,
             cover_jog,
@@ -3675,6 +3702,9 @@ impl Avatar {
         if self.leap(graph, going, dt) {
             return;
         }
+        if self.change_posture(graph, going, dt) {
+            return;
+        }
 
         let crouched = going.posture != Posture::Standing;
         let moving = going.speed >= STILL;
@@ -4205,6 +4235,61 @@ impl Avatar {
         let mut target = self.rest.clone();
         take_pose(animation, &mut target);
         self.hold_in_place(animation, &mut target, 0.0);
+        self.put(graph, target, dt);
+        true
+    }
+
+    /// Going down to the floor or getting up off it, standing still: plays the transition from the
+    /// posture it was in to the one it is in now, if it has one, for another `dt`, and hands over to
+    /// the idle there as it ends. Setting off or leaving the ground cuts it short, and the cycles
+    /// take over from wherever it got to. False while there is none under way.
+    fn change_posture(&mut self, graph: &mut Graph, going: Going, dt: f32) -> bool {
+        let was = self.posture_was.replace(going.posture);
+        if let Some(was) = was.filter(|&was| was != going.posture) {
+            self.changing = None;
+            let clip = self
+                .transitions
+                .iter()
+                .find(|&&(from, to, _)| from == was && to == going.posture)
+                .map(|&(_, _, clip)| clip)
+                .filter(|_| going.grounded && going.speed < STILL && self.crawl.is_some());
+            if let Some(clip) = clip {
+                if let Some(container) = self.container(graph) {
+                    let animation = &mut container[clip];
+                    animation.set_speed(1.0);
+                    animation.rewind();
+                }
+                self.changing = Some(clip);
+                self.playing = None;
+                // So a gun carried is put out of the way going down, and back coming up.
+                self.crawling = going.posture == Posture::Crawling;
+                self.fade_from_here(graph);
+            }
+        }
+        let Some(clip) = self.changing else {
+            return false;
+        };
+        if going.speed >= STILL || !going.grounded {
+            self.changing = None;
+            self.fade_from_here(graph);
+            return false;
+        }
+        let Some(container) = self.container(graph) else {
+            return false;
+        };
+        let animation = &mut container[clip];
+        if animation.has_ended() {
+            // It ends on the first frame of the idle it comes to, which goes on from there.
+            self.changing = None;
+            self.crouched = going.posture != Posture::Standing;
+            self.crawling = going.posture == Posture::Crawling && self.crawl.is_some();
+            self.rewind_idle(graph);
+            self.fade_from_here(graph);
+            return false;
+        }
+        animation.tick(dt);
+        let mut target = self.rest.clone();
+        take_pose(animation, &mut target);
         self.put(graph, target, dt);
         true
     }
