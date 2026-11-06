@@ -155,7 +155,10 @@ impl Player {
                 wish -= right;
             }
         }
-        let speed = self.top_speed(self.gait());
+        // Going down to the floor or getting up off it, the droid stops to, rather than its feet
+        // sliding along the floor; it sets off again after.
+        let changing = self.avatar.as_ref().is_some_and(|avatar| avatar.changing_posture());
+        let speed = if changing { 0.0 } else { self.top_speed(self.gait()) };
         // In cover, the wall has its say in where the body goes.
         let target = self.keep_cover(graph, wish, speed).unwrap_or_else(|| {
             wish.try_normalize(f32::EPSILON)

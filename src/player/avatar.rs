@@ -4239,10 +4239,11 @@ impl Avatar {
         true
     }
 
-    /// Going down to the floor or getting up off it, standing still: plays the transition from the
-    /// posture it was in to the one it is in now, if it has one, for another `dt`, and hands over to
-    /// the idle there as it ends. Setting off or leaving the ground cuts it short, and the cycles
-    /// take over from wherever it got to. False while there is none under way.
+    /// Going down to the floor or getting up off it: plays the transition from the posture it was in
+    /// to the one it is in now, if it has one, for another `dt`, and hands over to the idle there as
+    /// it ends - or to the cycles, on the move. On the move too: the droid stops to go down or get up
+    /// (see [`Avatar::changing_posture`]) and sets off again after. Leaving the ground cuts it short,
+    /// and the cycles take over from wherever it got to. False while there is none under way.
     fn change_posture(&mut self, graph: &mut Graph, going: Going, dt: f32) -> bool {
         let was = self.posture_was.replace(going.posture);
         if let Some(was) = was.filter(|&was| was != going.posture) {
@@ -4252,7 +4253,7 @@ impl Avatar {
                 .iter()
                 .find(|&&(from, to, _)| from == was && to == going.posture)
                 .map(|&(_, _, clip)| clip)
-                .filter(|_| going.grounded && going.speed < STILL && self.crawl.is_some());
+                .filter(|_| going.grounded && self.crawl.is_some());
             if let Some(clip) = clip {
                 if let Some(container) = self.container(graph) {
                     let animation = &mut container[clip];
@@ -4269,7 +4270,7 @@ impl Avatar {
         let Some(clip) = self.changing else {
             return false;
         };
-        if going.speed >= STILL || !going.grounded {
+        if !going.grounded {
             self.changing = None;
             self.fade_from_here(graph);
             return false;
@@ -4292,6 +4293,12 @@ impl Avatar {
         take_pose(animation, &mut target);
         self.put(graph, target, dt);
         true
+    }
+
+    /// Whether it is going down to the floor or getting up off it, which it stops to do: the player
+    /// goes nowhere meanwhile, rather than its feet sliding along the floor.
+    pub fn changing_posture(&self) -> bool {
+        self.changing.is_some()
     }
 
     /// Hands back from the jump under way, if any, to the cycles.
