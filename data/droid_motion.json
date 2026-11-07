@@ -9194,7 +9194,11 @@
    "holster": "droid_pistol_holster",
    "ready": "droid_pistol_ready",
    "ready_to_aim": "droid_pistol_ready_to_aim",
-   "aim_to_ready": "droid_pistol_aim_to_ready"
+   "aim_to_ready": "droid_pistol_aim_to_ready",
+   "prone": {
+    "aim": "droid_pistol_prone_aim",
+    "fire": "droid_pistol_prone_fire"
+   }
   },
   "show_frame": 6,
   "hide_after_frame": 9,
@@ -11546,7 +11550,11 @@
    "holster": "droid_rifle_holster",
    "ready": "droid_rifle_ready",
    "ready_to_aim": "droid_rifle_ready_to_aim",
-   "aim_to_ready": "droid_rifle_aim_to_ready"
+   "aim_to_ready": "droid_rifle_aim_to_ready",
+   "prone": {
+    "aim": "droid_rifle_prone_aim",
+    "fire": "droid_rifle_prone_fire"
+   }
   },
   "moving": {
    "walk": "droid_rifle_walk",

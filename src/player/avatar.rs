@@ -383,6 +383,10 @@ const RIFLE_INTERVAL: f32 = 0.1;
 /// How far up, down and to either side the rifle is brought round to where the camera looks, by
 /// the back, in degrees.
 const RIFLE_AIM_REACH: f32 = 60.0;
+/// How far up and down, and either side, the droid lying aiming turns its back to bring the gun
+/// round, in degrees: up on its elbows, not far. Past either side the body turns on the floor.
+const PRONE_AIM_PITCH: f32 = 20.0;
+const PRONE_AIM_YAW: f32 = 25.0;
 /// The bone its upper body hangs off, which the pistol has from the moment it is drawn: the
 /// middle of its back, with the chest, the arms and the head above it.
 const UPPER_BODY: &str = "DEF-spine.002";
@@ -1162,10 +1166,15 @@ impl Aims {
     /// Aims that move no bone, only reaching so far up, down and either side: the barrel is
     /// brought round by turning the back alone.
     fn by_the_back() -> Self {
-        let reach = RIFLE_AIM_REACH.to_radians();
+        Self::by_the_back_within(RIFLE_AIM_REACH, RIFLE_AIM_REACH)
+    }
+
+    /// As [`Aims::by_the_back`], reaching `pitch` degrees up and down and `yaw` either side.
+    fn by_the_back_within(pitch: f32, yaw: f32) -> Self {
+        let (pitch, yaw) = (pitch.to_radians(), yaw.to_radians());
         Self {
-            pitches: vec![-reach, reach],
-            yaws: vec![-reach, reach],
+            pitches: vec![-pitch, pitch],
+            yaws: vec![-yaw, yaw],
             offsets: vec![vec![FxHashMap::default(); 2]; 2],
         }
     }
@@ -1235,6 +1244,23 @@ struct PistolClips {
     ready_to_aim: Option<String>,
     #[serde(default)]
     aim_to_ready: Option<String>,
+    /// Aiming and firing lying on the floor, up on the elbows, if it has them.
+    #[serde(default)]
+    prone: Option<ProneClips>,
+}
+
+/// A gun's clips for aiming it lying down: the whole body as it lies aiming, and the shot.
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+struct ProneClips {
+    aim: String,
+    fire: String,
+}
+
+/// A gun's animations for aiming it lying down (see [`ProneClips`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Prone {
+    aim: Handle<Animation>,
+    fire: Handle<Animation>,
 }
 
 /// How far into an animation frame `frame` is, counted from one, in seconds.
@@ -1253,6 +1279,8 @@ struct Pistol {
     holster: Handle<Animation>,
     /// Held at the ready, raised from there to aim, and lowered back, if it has them.
     ready: Option<Ready>,
+    /// Aimed and fired lying down, if it has them.
+    prone: Option<Prone>,
     /// How far into the draw it shows, into the holster it goes, and into firing the shot
     /// leaves, in seconds.
     show_at: f32,
@@ -1714,6 +1742,10 @@ pub struct Avatar {
     /// the pistol's own aim, from 0 to 1, and to reaching rather than leaning out.
     cornered: Option<(Wall, bool)>,
     corner_weight: f32,
+    /// Whether it lies aiming, its gun's prone hold played on the whole body (see [`Prone`]),
+    /// and the little way it turns its back to aim from there.
+    lying_aimed: bool,
+    prone_aims: Aims,
     reach_weight: f32,
     /// How far over it has gone to keeping its body square to the wall it has its back against,
     /// from 0 to 1: in cover, but for leaning out round the corner.
@@ -2532,6 +2564,15 @@ impl Avatar {
                             None
                         }
                     };
+                    let prone = clips.prone.as_ref().and_then(|prone| {
+                        Some(Prone {
+                            aim: find(&prone.aim, true)?,
+                            fire: find(&prone.fire, false)?,
+                        })
+                    });
+                    if prone.is_none() {
+                        info(format!("Droid: without prone clips, its {what} aims lying down as standing"));
+                    }
                     let moving: Vec<(Handle<Animation>, Handle<Animation>)> = motion
                         .moving
                         .as_ref()
@@ -2552,6 +2593,7 @@ impl Avatar {
                             fire,
                             holster,
                             ready,
+                            prone,
                             show_at: frame_time(motion.show_frame),
                             hide_after: frame_time(motion.hide_after_frame),
                             shot_at: frame_time(motion.shot_frame),
@@ -2687,6 +2729,8 @@ impl Avatar {
             covered: None,
             crouched: false,
             crawling: false,
+            lying_aimed: false,
+            prone_aims: Aims::by_the_back_within(PRONE_AIM_PITCH, PRONE_AIM_YAW),
             skids,
             skidding: None,
             leaps,
@@ -3123,6 +3167,19 @@ impl Avatar {
             animation.tick(dt);
             into = animation.time_position() - animation.time_slice().start;
             take_pose(animation, &mut self.arms_pose);
+            // Lying aiming, the hold is the prone one, up on the elbows; the shot as far through as
+            // the one standing, which keeps the time.
+            if let Some(prone) = pistol.prone.filter(|_| self.lying_aimed) {
+                let firing = matches!(self.arms, Arms::Firing(_));
+                let animation = &mut container[if firing { prone.fire } else { prone.aim }];
+                if firing {
+                    let start = animation.time_slice().start;
+                    animation.set_time_position(start + into);
+                }
+                // Nothing else plays it: its pose is only worked out when it is ticked.
+                animation.tick(0.0);
+                take_pose(animation, &mut self.arms_pose);
+            }
             if self.arms_blend < 1.0 {
                 self.arms_blend = (self.arms_blend + dt / ARMS_BLEND).min(1.0);
                 let t = self.arms_blend * self.arms_blend * (3.0 - 2.0 * self.arms_blend);
@@ -3432,7 +3489,12 @@ impl Avatar {
         }
         // The pistol follows the camera, as far over to the pistol as the upper body has gone:
         // the aims' offsets laid on top, from where the droid itself faces.
-        if let Some(aims) = self.gun.as_ref().and_then(|gun| gun.aims.as_ref()).filter(|_| arms_weight > 0.0) {
+        // Lying aiming, no aims of the standing hold: the back alone, a little way.
+        let aims = match self.lying_aimed {
+            true => Some(&self.prone_aims),
+            false => self.gun.as_ref().and_then(|gun| gun.aims.as_ref()),
+        };
+        if let Some(aims) = aims.filter(|_| arms_weight > 0.0) {
             let w = smooth(arms_weight);
             // Squared up, the upper body already faces the body's ahead; otherwise the droid's.
             let facing = self.heading * (1.0 - self.square_weight);
@@ -3672,7 +3734,9 @@ impl Avatar {
         self.light_eyes(graph);
         self.travel = None;
         self.arm(graph, going, dt);
-        self.squaring = going.strafing;
+        // Lying aiming, the prone hold is made facing ahead already, the rifle's with the body
+        // angled to it: squaring the shoulders would only turn it off.
+        self.squaring = going.strafing && !self.lying_aimed;
         self.look = going.look;
         self.speed = going.speed;
         self.lifted = going.lifted;
@@ -3783,17 +3847,24 @@ impl Avatar {
         self.against_weight += (against - self.against_weight).clamp(-step, step);
         // Standing still, going into cover or out of it, round the corner to aim or back, or
         // crouching or standing up, changes one idle for the other.
+        // Lying still with the gun raised, it lies aiming, if the gun has a prone hold.
+        let lying_aimed = crawling
+            && wanted.is_none()
+            && self.gun.as_ref().is_some_and(|gun| gun.pistol.prone.is_some())
+            && matches!(self.arms, Arms::Raising | Arms::Aiming | Arms::Firing(_) | Arms::Lowering);
         if wanted.is_none()
             && self.playing.is_none()
             && (going.cover != self.covered
                 || cornered != self.cornered
                 || crouched != self.crouched
-                || crawling != self.crawling)
+                || crawling != self.crawling
+                || lying_aimed != self.lying_aimed)
         {
             self.covered = going.cover;
             self.cornered = cornered;
             self.crouched = crouched;
             self.crawling = crawling;
+            self.lying_aimed = lying_aimed;
             self.rewind_idle(graph);
             self.fade_from_here(graph);
         }
@@ -3801,6 +3872,7 @@ impl Avatar {
         self.cornered = cornered;
         self.crouched = crouched;
         self.crawling = crawling;
+        self.lying_aimed = lying_aimed;
         if wanted != self.playing {
             // The new cycle picks up at the same point in the stride, with the same foot down, so
             // the feet carry on.
@@ -3929,6 +4001,9 @@ impl Avatar {
     /// The idle to play still: crouched, the crouch's; standing, the one for cover, in cover, if
     /// the droid has it.
     fn idle_now(&self) -> Option<Handle<Animation>> {
+        if let Some(prone) = self.gun.as_ref().and_then(|gun| gun.pistol.prone).filter(|_| self.lying_aimed) {
+            return Some(prone.aim);
+        }
         if self.crawling && self.crawl_idle.is_some() {
             return self.crawl_idle;
         }
@@ -4293,6 +4368,14 @@ impl Avatar {
         take_pose(animation, &mut target);
         self.put(graph, target, dt);
         true
+    }
+
+    /// Whether it lies with its gun raised, which it stops crawling to do, up on its elbows: the
+    /// player goes nowhere meanwhile, but turns. Only with a gun that has a prone hold.
+    pub fn aiming_lying(&self) -> bool {
+        self.crawling
+            && self.gun.as_ref().is_some_and(|gun| gun.pistol.prone.is_some())
+            && matches!(self.arms, Arms::Raising | Arms::Aiming | Arms::Firing(_))
     }
 
     /// Whether it is going down to the floor or getting up off it, which it stops to do: the player
