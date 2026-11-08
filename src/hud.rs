@@ -74,9 +74,15 @@ const STAMINA_FROZEN: Color = Color::opaque(150, 235, 255);
 const HEALTH_RED: Color = Color::opaque(230, 50, 70);
 /// The colour the player's credits are written in.
 const CREDITS_GOLD: Color = Color::opaque(255, 205, 80);
+/// The wanted level under the credits: its colour, and the most stars there are - wanted for more
+/// counts than that, it is still that many (see [`crate::inhabitants`]'s `relentless`: how hard
+/// security comes after them, the more stars).
+const WANTED_RED: Color = Color::opaque(255, 85, 65);
+pub const WANTED_MOST: u32 = 5;
 const HEALTH_LOW: f32 = 0.34;
 const HURT_RED: u8 = 90;
-/// The sneaking meter's colours: unseen, noticed, and spotted - as Fallout's.
+/// The sneaking meter's colours: unseen, noticed, and spotted - as Fallout's. In view of someone
+/// who has not spotted them, `[ DETECTED ]`, the player is in no danger yet: unseen's grey.
 const HIDDEN_GREY: Color = Color::opaque(215, 215, 215);
 const DANGER_RED: Color = Color::opaque(255, 70, 50);
 
@@ -106,6 +112,8 @@ pub enum Status {
         alarm: Option<(Alert, f32)>,
         /// The player's credits.
         credits: Credits,
+        /// How many stars the player is wanted at (see [`wanted_shown`]).
+        wanted: u32,
         /// While the shield is up, how much of its health it has left, from 0 to 1: the health
         /// bar is its, then.
         shield: Option<f32>,
@@ -113,9 +121,10 @@ pub enum Status {
         shield_ready: bool,
         /// What there is to do next, in a heist, after the time.
         objective: Option<String>,
-        /// How aware of the player the most aware of those watching for them is, from 0 to 1, and
-        /// its stage, while it is to be shown: sneaking, or someone is becoming aware of them.
-        detection: Option<(Stage, f32)>,
+        /// How aware of the player the most aware of those watching for them is, from 0 to 1, its
+        /// stage, and whether any of them has the player in view right now, while it is to be
+        /// shown: sneaking, someone is becoming aware of them, or someone sees them.
+        detection: Option<(Stage, f32, bool)>,
         /// Which way each of those becoming aware of the player is, from where they look - 0
         /// straight ahead, right positive, in radians - with its stage and how aware it is, the
         /// most aware first.
@@ -159,6 +168,9 @@ pub struct Hud {
     /// The player's credits in the top right, and what it last said.
     credits: Handle<Text>,
     shown_credits: Option<Credits>,
+    /// The wanted level under them, and what it last said.
+    wanted: Handle<Text>,
+    shown_wanted: Option<String>,
     /// How long it has been blinking, in seconds, and what was last put on screen, so that each
     /// is only sent when it changes.
     blink: f32,
@@ -454,9 +466,22 @@ impl Hud {
         .with_font_size(22.0.into())
         .with_horizontal_text_alignment(HorizontalAlignment::Right)
         .build(ctx);
+        // The wanted level, just under the credits: a star and how many.
+        let wanted = TextBuilder::new(
+            WidgetBuilder::new()
+                .with_horizontal_alignment(HorizontalAlignment::Right)
+                .with_vertical_alignment(VerticalAlignment::Top)
+                .with_margin(Thickness { left: 12.0, top: 42.0, right: 12.0, bottom: 12.0 })
+                .with_visibility(false)
+                .with_foreground(Brush::Solid(WANTED_RED).into()),
+        )
+        .with_font_size(22.0.into())
+        .with_horizontal_text_alignment(HorizontalAlignment::Right)
+        .build(ctx);
         let screen = ScreenBuilder::new(
             WidgetBuilder::new()
                 .with_child(credits)
+                .with_child(wanted)
                 .with_child(hurt)
                 .with_child(health)
                 .with_child(banner)
@@ -489,6 +514,7 @@ impl Hud {
             gun_label,
             rounds: endless,
             credits,
+            wanted,
             screen,
             ..Default::default()
         }
@@ -521,6 +547,10 @@ impl Hud {
         self.note_time = (self.note_time - dt).max(0.0);
         self.blink = (self.blink + dt) % BLINK;
         let blinking_on = self.blink < BLINK_ON;
+        let wanted = match &status {
+            Status::Round { wanted, .. } => wanted_shown(*wanted),
+            _ => None,
+        };
         let (text, alarm, breath, health, (armed, gun, ammo), credits, shield, shield_ready, (detection, watchers)) = match status {
             Status::Loading => ("Loading the maze...".to_string(), None, None, None, (false, None, None), None, None, false, (None, Vec::new())),
             Status::Blank => (String::new(), None, None, None, (false, None, None), None, None, false, (None, Vec::new())),
@@ -562,6 +592,7 @@ impl Hud {
                 objective,
                 detection,
                 watchers,
+                ..
             } => {
                 let mut text = format!("Time {}", format_time(time));
                 if let Some(objective) = objective {
@@ -591,7 +622,7 @@ impl Hud {
             self.shown_alert = alert;
         }
 
-        let detection = detection.map(|(stage, level)| detection_shown(stage, level));
+        let detection = detection.map(|(stage, level, in_view)| detection_shown(stage, level, in_view));
         if detection != self.shown_detection {
             ui.send(self.detection, WidgetMessage::Visibility(detection.is_some()));
             if let Some((text, colour, level)) = &detection {
@@ -684,6 +715,14 @@ impl Hud {
                 ui.send(self.hurt, WidgetMessage::Visibility(false));
             }
             self.shown_health = health;
+        }
+
+        if wanted != self.shown_wanted {
+            ui.send(self.wanted, WidgetMessage::Visibility(wanted.is_some()));
+            if let Some(wanted) = &wanted {
+                ui.send(self.wanted, TextMessage::Text(wanted.clone()));
+            }
+            self.shown_wanted = wanted;
         }
 
         if credits != self.shown_credits {
@@ -833,15 +872,24 @@ fn alert_shown(alert: Alert, left: f32, blinking_on: bool) -> Option<(String, Co
     }
 }
 
+/// The wanted level at `stars` stars: a star and how many, no more than [`WANTED_MOST`]; nothing
+/// while the player is wanted for nothing.
+fn wanted_shown(stars: u32) -> Option<String> {
+    (stars > 0).then(|| format!("\u{2605} {}", stars.min(WANTED_MOST)))
+}
+
 /// What the sneaking meter says, in what colour, and how full its bar is, for the most aware
-/// watcher at `stage`, `level` aware: Fallout's `[ HIDDEN ]`, `[ CAUTION ]` and `[ DANGER ]`, the
-/// bar in steps of a fiftieth, so that it is only sent when it moves.
-fn detection_shown(stage: Stage, level: f32) -> (String, Color, f32) {
+/// watcher at `stage`, `level` aware, and with the player `in_view` of any of them or not:
+/// Fallout's `[ HIDDEN ]`, `[ CAUTION ]` and `[ DANGER ]` - and `[ DETECTED ]` whenever someone
+/// can see them, short of `[ DANGER ]`, even one that is calm or has not noticed them yet. The bar
+/// in steps of a fiftieth, so that it is only sent when it moves.
+fn detection_shown(stage: Stage, level: f32, in_view: bool) -> (String, Color, f32) {
     let level = (level.clamp(0.0, 1.0) * 50.0).round() / 50.0;
     let (text, colour) = match stage {
+        Stage::Danger => ("[ DANGER ]", DANGER_RED),
+        _ if in_view => ("[ DETECTED ]", HIDDEN_GREY),
         Stage::Hidden => ("[ HIDDEN ]", HIDDEN_GREY),
         Stage::Caution => ("[ CAUTION ]", CAUTION_YELLOW),
-        Stage::Danger => ("[ DANGER ]", DANGER_RED),
     };
     (text.to_string(), colour, level)
 }
@@ -910,9 +958,17 @@ mod tests {
 
     #[test]
     fn the_sneaking_meter_says_hidden_caution_or_danger_and_fills() {
-        assert_eq!(detection_shown(Stage::Hidden, 0.0), ("[ HIDDEN ]".to_string(), HIDDEN_GREY, 0.0));
-        assert_eq!(detection_shown(Stage::Caution, 0.513), ("[ CAUTION ]".to_string(), CAUTION_YELLOW, 0.52));
-        assert_eq!(detection_shown(Stage::Danger, 1.4), ("[ DANGER ]".to_string(), DANGER_RED, 1.0));
+        assert_eq!(wanted_shown(0), None, "wanted for nothing: nothing shown");
+        assert_eq!(wanted_shown(1), Some("\u{2605} 1".to_string()));
+        assert_eq!(wanted_shown(5), Some("\u{2605} 5".to_string()));
+        assert_eq!(wanted_shown(9), Some("\u{2605} 5".to_string()), "no more than five");
+        assert_eq!(detection_shown(Stage::Hidden, 0.0, false), ("[ HIDDEN ]".to_string(), HIDDEN_GREY, 0.0));
+        assert_eq!(detection_shown(Stage::Caution, 0.513, false), ("[ CAUTION ]".to_string(), CAUTION_YELLOW, 0.52));
+        assert_eq!(detection_shown(Stage::Danger, 1.4, false), ("[ DANGER ]".to_string(), DANGER_RED, 1.0));
+        // Seen, even by one not aware of them at all, it says so; spotted, danger says more.
+        assert_eq!(detection_shown(Stage::Hidden, 0.0, true), ("[ DETECTED ]".to_string(), HIDDEN_GREY, 0.0));
+        assert_eq!(detection_shown(Stage::Caution, 0.5, true), ("[ DETECTED ]".to_string(), HIDDEN_GREY, 0.5));
+        assert_eq!(detection_shown(Stage::Danger, 1.0, true), ("[ DANGER ]".to_string(), DANGER_RED, 1.0));
     }
 
     #[test]

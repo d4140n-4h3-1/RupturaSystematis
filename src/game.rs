@@ -887,6 +887,11 @@ pub struct MazeGame {
     #[visit(skip)]
     #[reflect(hidden)]
     drone_targets: Vec<Option<Target>>,
+    /// Whether any drone watching for the player - not one of their side's - has them in view, as
+    /// of this frame: for the sneaking meter's `[ DETECTED ]`.
+    #[visit(skip)]
+    #[reflect(hidden)]
+    drones_see_player: bool,
     #[visit(skip)]
     #[reflect(hidden)]
     drone_placed: bool,
@@ -1593,6 +1598,11 @@ impl MazeGame {
         self.traffic = Some(traffic);
     }
 
+    /// How many stars the player is wanted at: one a count, no more than [`hud::WANTED_MOST`].
+    fn stars(&self) -> u32 {
+        self.wanted.min(hud::WANTED_MOST)
+    }
+
     /// On the test level, a sentry's helicopter put up over the city (see [`helicopter`]): circling
     /// over its streets, clear of its roofs, from where the player starts.
     fn start_helicopters(&mut self, ctx: &mut PluginContext) {
@@ -2001,6 +2011,7 @@ impl MazeGame {
                     || self.talking.is_some(),
                 alarm: self.inhabitants.alarm(),
                 credits: self.credits,
+                wanted: self.stars(),
                 shield: self.shield.as_ref().filter(|s| s.charge.is_up()).map(|s| s.charge.health()),
                 shield_ready: self.shield.as_ref().is_some_and(Shield::can_raise),
                 objective: self.heist.as_ref().map(Heist::objective).or_else(|| self.jail_objective()),
@@ -2308,9 +2319,11 @@ impl MazeGame {
     /// them along. Whether any caught the player, and whose phase changed.
     /// What the sneaking meter shows (see [`hydroxus_ai::perception::detection`]): how aware of the
     /// player the most aware of the droids and drones watching for them is - while the player is
-    /// sneaking, crouched or crawling, or any of them is becoming aware of them - and nothing once
-    /// any is after them, on Alert, which the alert says.
-    fn sneaking_meter(&self) -> Option<(Awareness, f32)> {
+    /// sneaking, crouched or crawling, or any of them is becoming aware of them - and, sneaking,
+    /// whether any droid or drone has them in view right now, calm or not, aware of them or not,
+    /// which the meter shows as `[ DETECTED ]`; and nothing once any is after them, on Alert,
+    /// which the alert says. Upright, there is no `[ DETECTED ]`.
+    fn sneaking_meter(&self) -> Option<(Awareness, f32, bool)> {
         let hunted = self.inhabitants.alarm().is_some_and(|(alert, _)| alert == Alert::Alert)
             || self.drones.iter().any(Drone::on_alert);
         if hunted {
@@ -2321,7 +2334,8 @@ impl MazeGame {
         let level = droids.max(drones);
         let sneaking = self.player.posture() != Posture::Standing;
         let stage = stage_at(&crate::AI.detection, level);
-        (sneaking || level > 0.0).then_some((stage, level))
+        let in_view = sneaking && (self.inhabitants.player_in_view() || self.drones_see_player);
+        (sneaking || level > 0.0).then_some((stage, level, in_view))
     }
 
     /// Which way each droid and drone becoming aware of the player is, from where they look - 0
@@ -2468,6 +2482,8 @@ impl MazeGame {
         // away.
         let in_the_dark = self.lights_off && !self.player.flashlight_on();
         let posture = self.player.posture();
+        // The more stars the player is wanted at, the more relentless security is after them.
+        self.inhabitants.set_wanted(self.wanted.min(hud::WANTED_MOST));
         self.inhabitants
             .look_for_player(player, posture, in_the_dark, self.player.armed(), |there| self.player.can_see(graph, there), ctx.dt);
         // A sentry's eyes are no flashlight: with the lights off, the others see it only near.
@@ -5397,6 +5413,10 @@ impl MazeGame {
             in_the_dark: self.lights_off && !self.player.flashlight_on(),
             armed: self.player.armed(),
         };
+        self.drones_see_player = self.drones.iter().any(|drone| {
+            let theirs = drone.side().filter(|_| sided).is_some_and(|side| side.is_players());
+            !theirs && (drone.detection().is_some() || drone.on_alert()) && drone.sees(graph, &player)
+        });
         // In capture the flag, whoever of the other side each drone on a side sees, nearest
         // first - the player among them for blue's; or, seeing none, the one it went after last.
         let targets: Vec<Target> = (0..self.drones.len())

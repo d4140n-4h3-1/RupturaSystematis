@@ -438,6 +438,9 @@ struct Inhabitant {
     /// Whether, being hostile, it can see the player, as of this frame: once its awareness of them
     /// has filled (see [`hydroxus_ai::perception::detection`]), or straight away on Alert.
     sees_player: bool,
+    /// Whether it has the player in view, as of this frame, whatever it makes of them - calm,
+    /// not yet aware of them, or after them: for the sneaking meter's `[ DETECTED ]`.
+    in_view: bool,
     detection: Detection,
     /// Having noticed the player, not sure enough to go after them, going to look where it did
     /// (see [`hydroxus_ai::tactics::investigate`]).
@@ -512,6 +515,9 @@ struct Inhabitant {
     easing: bool,
     /// Whether it is a sentry.
     sentry: bool,
+    /// A sentry's: how many stars the player is wanted at, as of this frame (see
+    /// [`relentless`]); 0 for any other droid, which the player's record is nothing to.
+    stars: u32,
     /// How many of the pistol's bolts have hit it while hostile.
     hits: u32,
     /// Whether it has been stopped, and stays where it went down.
@@ -1171,7 +1177,7 @@ impl Inhabitant {
     /// warier it is.
     fn eagerness(&self) -> f32 {
         let searching = if self.alert == Some(Alert::Evasion) { AI.detection.searching } else { 1.0 };
-        searching * self.wariness.keenness(&AI.alert)
+        searching * self.wariness.keenness(&AI.alert) * keener(self.stars)
     }
 
     /// Starts searching from where it last saw the player.
@@ -2088,6 +2094,7 @@ impl Inhabitants {
             with: None,
             alert: None,
             sees_player: false,
+            in_view: false,
             detection: Detection::default(),
             investigating: None,
             wariness: Wariness::default(),
@@ -2122,6 +2129,7 @@ impl Inhabitants {
             most: SENTRY_STAMINA,
             easing: false,
             sentry: false,
+            stars: 0,
             hits: 0,
             down: false,
             ragdoll: None,
@@ -2759,7 +2767,8 @@ impl Inhabitants {
             // is done standing, having just turned hostile.
             if let Some(alert) = droid.alert.filter(|_| droid.windup == 0.0 && !droid.down) {
                 if alert != Alert::Alert {
-                    droid.search_left -= dt;
+                    // Wanted, security's search runs down the more slowly the more stars.
+                    droid.search_left -= dt / relentless(droid.stars);
                 }
                 let next = alert.next(droid.sees_player, droid.search_left);
                 // One guarding its side's end never calms down.
@@ -3654,11 +3663,16 @@ impl Inhabitants {
         // A weapon drawn catches the eye.
         let conspicuous = if armed { AI.detection.armed } else { 1.0 };
         for droid in &mut self.droids {
-            let alert = droid.alert.filter(|_| !droid.down && droid.hunts_player());
-            let visible = alert.map_or(0.0, |alert| {
-                let visible = AI.sight.visibility(Some(alert), droid.feet, droid.heading, player, posture.into(), in_the_dark);
-                if visible > 0.0 && in_sight(droid.feet) { visible } else { 0.0 }
-            });
+            // Whether it has them in view, as it looks now - calm or not, and whatever it makes of
+            // it: only one hostile and watching becomes aware of them for it.
+            let looking = !droid.down && droid.hunts_player();
+            let seen = match looking {
+                true => seen_by(droid.alert, droid.feet, droid.heading, player, posture, in_the_dark, &in_sight),
+                false => 0.0,
+            };
+            droid.in_view = seen > 0.0;
+            let alert = droid.alert.filter(|_| looking);
+            let visible = if alert.is_some() { seen } else { 0.0 };
             droid.sees_player = match alert {
                 Some(Alert::Alert) if visible > 0.0 => {
                     droid.detection.alert();
@@ -3703,6 +3717,12 @@ impl Inhabitants {
             return None;
         }
         Some(most_aware(&AI.detection, watching.iter().map(|droid| &droid.detection)))
+    }
+
+    /// Whether any droid that has anything to do with the player's being found has them in view
+    /// right now, calm or not (see [`Inhabitant::in_view`]): the sneaking meter's `[ DETECTED ]`.
+    pub fn player_in_view(&self) -> bool {
+        self.droids.iter().any(|droid| droid.in_view)
     }
 
     /// Where each hostile droid not after the player yet that is becoming aware of them stands, and
@@ -4679,9 +4699,16 @@ impl Inhabitants {
             .iter()
             .filter(raised)
             .filter(|droid| droid.alert == Some(alert))
-            .map(|droid| droid.search_left)
+            .map(|droid| droid.search_left * relentless(droid.stars))
             .fold(0.0, f32::max);
         Some((alert, left))
+    }
+
+    /// The player wanted at `stars` stars (see [`relentless`]): each sentry told, for this frame.
+    pub fn set_wanted(&mut self, stars: u32) {
+        for droid in &mut self.droids {
+            droid.stars = if droid.sentry { stars } else { 0 };
+        }
     }
 
     /// How much breath each sentry that is hostile, or has spent some, has left.
@@ -4994,9 +5021,64 @@ impl Inhabitants {
     }
 }
 
+/// How relentless security is after a player wanted at `stars` stars: how many times as long as
+/// otherwise each sentry searches - and stays wary - before it calms down, [`RELENTLESS_PER_STAR`]
+/// more for each star; five stars, three and a half times as long.
+pub(crate) fn relentless(stars: u32) -> f32 {
+    1.0 + RELENTLESS_PER_STAR * stars as f32
+}
+
+/// And how many times as keenly it looks and listens for them, [`KEENER_PER_STAR`] more a star.
+fn keener(stars: u32) -> f32 {
+    1.0 + KEENER_PER_STAR * stars as f32
+}
+
+/// See [`relentless`] and [`keener`].
+const RELENTLESS_PER_STAR: f32 = 0.5;
+const KEENER_PER_STAR: f32 = 0.15;
+
+/// How visible the player at `player` in `posture` is to a droid at `feet` facing `heading`, in
+/// `alert` - or calm, with none - `in_the_dark` or not: as
+/// [`Sight::visibility`](hydroxus_ai::perception::sight::Sight::visibility) has it, and 0 wherever
+/// `in_sight` says something is in the way.
+fn seen_by(
+    alert: Option<Alert>,
+    feet: Vector3<f32>,
+    heading: f32,
+    player: Vector3<f32>,
+    posture: Posture,
+    in_the_dark: bool,
+    in_sight: &dyn Fn(Vector3<f32>) -> bool,
+) -> f32 {
+    let visible = AI.sight.visibility(alert, feet, heading, player, posture.into(), in_the_dark);
+    if visible > 0.0 && in_sight(feet) { visible } else { 0.0 }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_more_stars_the_more_relentless_security_is() {
+        assert_eq!(relentless(0), 1.0, "wanted for nothing: as ever");
+        assert_eq!(keener(0), 1.0);
+        let lengths: Vec<f32> = (0..=5).map(relentless).collect();
+        assert!(lengths.windows(2).all(|w| w[1] > w[0]), "every star searches longer: {lengths:?}");
+        assert_eq!(relentless(5), 3.5);
+        assert!(keener(5) > keener(1) && keener(1) > 1.0);
+    }
+
+    #[test]
+    fn a_calm_droid_facing_the_player_has_them_in_view() {
+        // Facing +z (heading 0), the player a few metres ahead, standing, in the light.
+        let (feet, ahead, behind) = (Vector3::zeros(), Vector3::new(0.0, 0.0, 4.0), Vector3::new(0.0, 0.0, -4.0));
+        let clear = |_: Vector3<f32>| true;
+        let walled = |_: Vector3<f32>| false;
+        assert!(seen_by(None, feet, 0.0, ahead, Posture::Standing, false, &clear) > 0.0, "calm, it sees them all the same");
+        assert_eq!(seen_by(None, feet, 0.0, behind, Posture::Standing, false, &clear), 0.0, "not behind it");
+        assert_eq!(seen_by(None, feet, 0.0, ahead, Posture::Standing, false, &walled), 0.0, "not through a wall");
+        assert!(seen_by(Some(Alert::Caution), feet, 0.0, ahead, Posture::Standing, false, &clear) > 0.0);
+    }
 
     #[test]
     fn droids_rifles_fire_three_round_bursts_and_full_auto_is_rare() {
