@@ -4,9 +4,10 @@
 //! `maze::player::avatar`): red in the hostile droid's colours, `data/droid_hostile.glb`, and cyan
 //! in the full deform droid's, `data/droid_full_deform.glb`, with every one of the game's droid's
 //! animations: walking with no enemy about, jogging to one, running for cover and sprinting when
-//! falling back hurt - skidding as they stop and turn, and standing, stepping round to face
-//! another way rather than turning on their heels, their body following where they look -
-//! strafing and crouch-strafing while they face a target, a jump now and then as they break for cover, the gun drawn, raised, aimed up,
+//! falling back hurt - skidding as they stop and turn, and standing, stepping round to face another
+//! way rather than turning on their heels - lying, shuffling round on their elbows - their body
+//! following where they look - strafing and crouch-strafing while they face a target, a jump now
+//! and then as they break for cover, the gun drawn, raised, aimed up,
 //! down and to the side at the target and fired - a glowing bolt from its muzzle, the game's own
 //! (see `maze::player::pistol`), green from a pistol and blue from a rifle, which does its harm
 //! when it gets there - and holstered once the fighting is over. Shot
@@ -201,6 +202,8 @@ const TURN_SPEED: f32 = 8.0;
 /// How far off a target a droid's body can be turned, in radians, for it to fire at them: as far
 /// as its aim reaches round. Further, it steps round first.
 const BODY_AIM: f32 = 0.9;
+/// Lying flat, as far: its aim lying reaches round only a little way.
+const PRONE_BODY_AIM: f32 = 0.45;
 
 /// Eye and chest heights, standing and crouched. Low cover is about 1.1 m tall, so a crouched
 /// droid behind it is hidden and a standing one can shoot over it.
@@ -1784,7 +1787,8 @@ impl Battle {
         let body = droid.heading + droid.avatar.facing();
         let peeking = matches!(droid.task, Task::Peeking { .. });
         let facing = heading_of(to - from).is_some_and(|h| {
-            angle_between(h, droid.heading) < 0.35 && (peeking || angle_between(h, body) < BODY_AIM)
+            let reach = if droid.prone { PRONE_BODY_AIM } else { BODY_AIM };
+            angle_between(h, droid.heading) < 0.35 && (peeking || angle_between(h, body) < reach)
         });
         if !facing {
             return;

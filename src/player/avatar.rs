@@ -41,7 +41,9 @@
 //! it does not turn on its heels: its feet stay where they are, and once it is well off the way
 //! it is to face - far off at once, a little after a moment - it steps round, an eighth, a quarter
 //! or a half turn, head first and hips last, each foot lifted and put down turned the new way.
-//! Nearer than that its head and its aim make up the difference. Turned by what it hangs from
+//! Nearer than that its head and its aim make up the difference. Lying flat, in its crawl, it
+//! shuffles round on its elbows instead, its legs dragged after, the gun put by meanwhile - at once
+//! past where its aim lying reaches. Turned by what it hangs from
 //! (see [`Avatar::parent_turned`]), it goes on facing as it did across the world, and turns after.
 //!
 //! Sprinting or running flat out, and only then, the droid skids, with the skids for that gait;
@@ -295,11 +297,12 @@ const TRANSITIONS: [(Posture, Posture, &str); 4] = [
     (Posture::Crawling, Posture::Crouching, "droid_up_prone_crouch"),
     (Posture::Crawling, Posture::Standing, "droid_up_prone_stand"),
 ];
-/// Turning on the spot, if it has them: standing and crouched, an eighth, a quarter and a half of
-/// a turn, to the left and to the right - the droid stepping round, made on the spot with how far
-/// round each frame has it in [`MOTION`]. Played only where the droid is set to step round (see
-/// [`Avatar::set_steps_round`]).
-const TURNS: [[[&str; 2]; 3]; 2] = [
+/// Turning on the spot, if it has them: standing, crouched and lying flat, an eighth, a quarter
+/// and a half of a turn, to the left and to the right - the droid stepping round, or lying, shuffling
+/// round on its elbows and dragging its legs after, made on the spot with how far round each frame
+/// has it in [`MOTION`]. Played only where the droid is set to step round (see
+/// [`Avatar::set_steps_round`]); lying, only with its crawl, which they are made lying as.
+const TURNS: [[[&str; 2]; 3]; 3] = [
     [
         ["droid_turn45_L", "droid_turn45_R"],
         ["droid_turn90_L", "droid_turn90_R"],
@@ -310,7 +313,20 @@ const TURNS: [[[&str; 2]; 3]; 2] = [
         ["droid_crouch_turn90_L", "droid_crouch_turn90_R"],
         ["droid_crouch_turn180_L", "droid_crouch_turn180_R"],
     ],
+    [
+        ["droid_prone_turn45_L", "droid_prone_turn45_R"],
+        ["droid_prone_turn90_L", "droid_prone_turn90_R"],
+        ["droid_prone_turn180_L", "droid_prone_turn180_R"],
+    ],
 ];
+/// Which row of [`TURNS`] is for `posture`.
+fn turns_row(posture: Posture) -> usize {
+    match posture {
+        Posture::Standing => 0,
+        Posture::Crouching => 1,
+        Posture::Crawling => 2,
+    }
+}
 /// Standing still, how far off the way it is to face the droid lets itself be before it steps
 /// round, in radians: past the first, at once; past the second, once it has been that far off a
 /// while ([`STEP_ROUND_AFTER`], in seconds). Nearer than that it only looks: its head, and its
@@ -1671,7 +1687,7 @@ fn pivot_for(left: f32) -> (usize, usize) {
 /// A turn on the spot under way.
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Pivoting {
-    /// Which, like [`TURNS`]: crouched or not, its size and which way.
+    /// Which, like [`TURNS`]: its posture's row, its size and which way.
     which: (usize, usize, usize),
     posture: Posture,
     /// Which way the droid faced as it began, like [`Avatar::heading`].
@@ -1872,7 +1888,7 @@ pub struct Avatar {
     /// Its turns on the spot, as far as it has them, like [`TURNS`]; whether it steps round with
     /// them, standing still, rather than turning on its heels; the one under way; and how long it
     /// has been off the way it is to face by more than [`STEP_ROUND_LATER`], in seconds.
-    pivots: [[[Option<Pivot>; 2]; 3]; 2],
+    pivots: [[[Option<Pivot>; 2]; 3]; 3],
     steps_round: bool,
     pivoting: Option<Pivoting>,
     off_for: f32,
@@ -2648,7 +2664,7 @@ impl Avatar {
             })
         });
         if pivots.iter().flatten().flatten().any(Option::is_none) {
-            info("Droid: without all its droid_turn*/droid_crouch_turn* clips, it turns on its heels where it lacks them".to_string());
+            info("Droid: without all its droid_turn*/droid_crouch_turn*/droid_prone_turn* clips, it turns on its heels where it lacks them".to_string());
         }
         // Each gun with all that goes with it; and only the pistol has aims, which are after.
         let moving_with =
@@ -3366,7 +3382,9 @@ impl Avatar {
         let step = dt / ARMS_FADE;
         self.arms_weight += (out - self.arms_weight).clamp(-step, step);
         let carried = matches!(self.arms, Arms::Drawing | Arms::Ready | Arms::Lowering | Arms::Holstering);
-        let stow = if self.crawling && carried { 1.0 } else { 0.0 };
+        // Shuffling round lying flat, its arms are on the floor too.
+        let shuffling = self.pivoting.is_some_and(|pivoting| pivoting.posture == Posture::Crawling);
+        let stow = if (self.crawling && carried) || shuffling { 1.0 } else { 0.0 };
         self.crawl_stow += (stow - self.crawl_stow).clamp(-step, step);
         // Held in both hands, as the rifle is, the left arm keeps hold of it at the ready too.
         let free = if self.arms == Arms::Ready && !pistol.two_handed { 1.0 } else { 0.0 };
@@ -4559,20 +4577,21 @@ impl Avatar {
         }
     }
 
-    /// Whether, standing or crouched still on the ground, the droid stays where its feet are and
-    /// steps round to turn (see [`Avatar::set_steps_round`]), as it can in the posture it is in.
+    /// Whether, still on the ground - standing, crouched or lying flat - the droid stays where it
+    /// is on the floor and steps round, or shuffles round, to turn (see
+    /// [`Avatar::set_steps_round`]), as it can in the posture it is in. Lying, only in its own
+    /// crawl, which its turns lying are made in.
     fn planted(&self, going: Going) -> bool {
-        let crouched = usize::from(going.posture != Posture::Standing);
         self.steps_round
             && going.heading.is_some()
             && going.speed < STILL
             && going.grounded
-            && going.posture != Posture::Crawling
+            && (going.posture != Posture::Crawling || self.crawl.is_some())
             && going.cover.is_none()
             && self.leaping.is_none()
             && self.skidding.is_none()
             && self.changing.is_none()
-            && self.pivots[crouched].iter().flatten().all(Option::is_some)
+            && self.pivots[turns_row(going.posture)].iter().flatten().all(Option::is_some)
     }
 
     /// Starts a turn on the spot if the droid stands still well off the way it is to face - at
@@ -4588,12 +4607,17 @@ impl Avatar {
             return false;
         }
         self.off_for += dt;
-        if left.abs() < STEP_ROUND && self.off_for < STEP_ROUND_AFTER {
+        // Lying, its aim reaches round only a little way: past that it shuffles round at once.
+        let at_once = match going.posture {
+            Posture::Crawling => PRONE_AIM_YAW.to_radians(),
+            _ => STEP_ROUND,
+        };
+        if left.abs() < at_once && self.off_for < STEP_ROUND_AFTER {
             return false;
         }
-        let crouched = usize::from(going.posture != Posture::Standing);
+        let row = turns_row(going.posture);
         let (size, side) = pivot_for(left);
-        let Some(pivot) = &self.pivots[crouched][size][side] else {
+        let Some(pivot) = &self.pivots[row][size][side] else {
             return false;
         };
         let animation = pivot.animation;
@@ -4604,7 +4628,7 @@ impl Avatar {
         animation.set_speed(1.0);
         animation.rewind();
         self.pivoting = Some(Pivoting {
-            which: (crouched, size, side),
+            which: (row, size, side),
             posture: going.posture,
             from: self.heading,
         });
@@ -4624,8 +4648,8 @@ impl Avatar {
         if !self.planted(going) || going.posture != pivoting.posture || going.jumped {
             return false;
         }
-        let (crouched, size, side) = pivoting.which;
-        let Some(pivot) = self.pivots[crouched][size][side].clone() else {
+        let (row, size, side) = pivoting.which;
+        let Some(pivot) = self.pivots[row][size][side].clone() else {
             return false;
         };
         let wanted = self.facing_for(going);
@@ -4810,6 +4834,13 @@ mod tests {
         assert_eq!(pivot_for(-FRAC_PI_2), (1, 1));
         assert_eq!(pivot_for(PI - 0.1), (2, 0));
         assert_eq!(pivot_for(-(PI - 0.1)), (2, 1));
+    }
+
+    #[test]
+    fn each_posture_turns_on_the_spot_with_its_own() {
+        assert_eq!(TURNS[turns_row(Posture::Standing)][1][0], "droid_turn90_L");
+        assert_eq!(TURNS[turns_row(Posture::Crouching)][2][1], "droid_crouch_turn180_R");
+        assert_eq!(TURNS[turns_row(Posture::Crawling)][0][0], "droid_prone_turn45_L");
     }
 
     #[test]
