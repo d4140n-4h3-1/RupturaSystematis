@@ -135,6 +135,18 @@ fn echoed(samples: Vec<f32>, rate: u32, echo: Option<synth::Echo>) -> Vec<f32> {
 const TALK_HEARD: f32 = 25.0;
 const TALK_EVERY: (f32, f32) = (20.0, 45.0);
 const TALK_RETRY: f32 = 5.0;
+/// Security's helicopter, after the player (see [`helicopter::Pursuit`]): how many stars the player
+/// has to be wanted at for a sentry's radio call to bring one in; how far off it sees them from, in
+/// meters, through any fog as the droids do; how often, while it sees them, it tells security where
+/// they are, and how far round them those it tells are, in seconds and meters; and how long out of
+/// its sight before it gives up and flies off, in seconds.
+const HELICOPTER_STARS: u32 = 3;
+const HELICOPTER_SIGHT: f32 = 170.0;
+const HELICOPTER_TELLS_EVERY: f32 = 3.0;
+const HELICOPTER_TELLS_REACH: f32 = crate::inhabitants::RADIO_REACH;
+const HELICOPTER_GIVES_UP: f32 = 40.0;
+/// How high over the player it comes in, in meters, before it finds the roofs.
+const HELICOPTER_COMES_AT: f32 = 90.0;
 const TALK_PAUSE: f32 = 0.8;
 const TALK_PER_LETTER: f32 = 0.075;
 
@@ -765,6 +777,24 @@ pub struct MazeGame {
     #[visit(skip)]
     #[reflect(hidden)]
     helicopters: Vec<helicopter::Helicopter>,
+    /// Security's helicopter after the player, if one is out (see [`Game::chase_by_air`]); where a
+    /// radio call that could bring one in went through, until it is seen to; where it last saw the
+    /// player; how long since it did, in seconds; and how long until it next tells security.
+    #[visit(skip)]
+    #[reflect(hidden)]
+    pursuit: Option<helicopter::Pursuit>,
+    #[visit(skip)]
+    #[reflect(hidden)]
+    pursuit_called: Option<Vector3<f32>>,
+    #[visit(skip)]
+    #[reflect(hidden)]
+    pursuit_saw: Option<Vector3<f32>>,
+    #[visit(skip)]
+    #[reflect(hidden)]
+    pursuit_unseen: f32,
+    #[visit(skip)]
+    #[reflect(hidden)]
+    pursuit_tells_in: f32,
     #[visit(skip)]
     #[reflect(hidden)]
     helicopter_model: Option<ModelResource>,
@@ -1280,6 +1310,10 @@ impl MazeGame {
         for mut heli in std::mem::take(&mut self.helicopters) {
             heli.remove(&mut ctx.scenes[self.scene].graph);
         }
+        if let Some(mut pursuit) = self.pursuit.take() {
+            pursuit.remove(&mut ctx.scenes[self.scene].graph);
+        }
+        self.pursuit_called = None;
         self.player.set_riding(&mut ctx.scenes[self.scene].graph, false);
         self.ctf = None;
         self.royale = None;
@@ -1359,6 +1393,10 @@ impl MazeGame {
         for mut heli in std::mem::take(&mut self.helicopters) {
             heli.remove(&mut ctx.scenes[self.scene].graph);
         }
+        if let Some(mut pursuit) = self.pursuit.take() {
+            pursuit.remove(&mut ctx.scenes[self.scene].graph);
+        }
+        self.pursuit_called = None;
         self.player.set_riding(&mut ctx.scenes[self.scene].graph, false);
         if let Ok(exit) = ctx.scenes[self.scene].graph.try_get_mut(self.exit) {
             exit.set_visibility(true);
@@ -1638,6 +1676,96 @@ impl MazeGame {
             orbit.radius, orbit.centre[0], orbit.centre[1], orbit.height
         ));
         self.helicopters.push(helicopter::Helicopter::spawn(scene, &model, pilot.as_ref(), orbit, 0.0));
+    }
+
+    /// Security's helicopter after the player (see [`helicopter::Pursuit`]): brought in by a radio
+    /// call that went through with the player wanted at [`HELICOPTER_STARS`] or more, from
+    /// [`helicopter::CHASE_FROM`] off on the far side of the caller, under an open sky. It never
+    /// shoots: it circles the player, its searchlight on them, and every
+    /// [`HELICOPTER_TELLS_EVERY`] seconds it sees them it tells every sentry within
+    /// [`HELICOPTER_TELLS_REACH`] - and the drones - where they are, which brings them there. Out of
+    /// its sight it circles where it last saw them, its light sweeping about; wanted for nothing
+    /// any more, or unseen for [`HELICOPTER_GIVES_UP`] seconds, it flies off.
+    fn chase_by_air(&mut self, ctx: &mut PluginContext) {
+        let dt = ctx.dt;
+        let skip = self.player.collider();
+        if let Some(called) = self.pursuit_called.take() {
+            let model = self.helicopter_model.clone().filter(|model| model.is_ok());
+            if let (Some(model), true, None) = (model, self.open_sky(), self.pursuit.as_ref()) {
+                let pilot = self.sentry_model.clone().filter(|model| model.is_ok());
+                let scene = &mut ctx.scenes[self.scene];
+                let player = self.player.feet(&scene.graph);
+                // From the far side of the one that called it, high up.
+                let away = Vector3::new(called.x - player.x, 0.0, called.z - player.z)
+                    .try_normalize(1.0e-3)
+                    .unwrap_or_else(Vector3::x);
+                let at = player + away * helicopter::CHASE_FROM + Vector3::new(0.0, HELICOPTER_COMES_AT, 0.0);
+                self.pursuit = Some(helicopter::Pursuit::spawn(scene, &model, pilot.as_ref(), at, player));
+                self.pursuit_saw = Some(called);
+                self.pursuit_unseen = 0.0;
+                self.pursuit_tells_in = 0.0;
+                self.hud.show_note("Security has called in a helicopter".to_string());
+                Log::info(format!("Helicopter: called in from ({:.0}, {:.0}, {:.0})", at.x, at.y, at.z));
+            }
+        }
+        let Some(mut pursuit) = self.pursuit.take() else {
+            return;
+        };
+        let seeing = self.seeing(false);
+        let graph = &ctx.scenes[self.scene].graph;
+        let feet = self.player.feet(graph);
+        let chest = self.player.position(graph);
+        // Wanted for nothing any more - arrested, or their record wiped - it goes.
+        if self.stars() == 0 || self.phase != Phase::Playing {
+            pursuit.leave(feet);
+        }
+        // It sees the player from its searchlight, near enough, nothing in the way, through the fog.
+        let eye = pursuit.eye();
+        let to = chest - eye;
+        let sees = !pursuit.leaving()
+            && to.norm() < HELICOPTER_SIGHT
+            && seeing.clear(eye, chest) >= crate::AI.sight.faint
+            && crate::race::first_hit(graph, eye, to.normalize(), to.norm(), skip).is_none_or(|hit| hit.distance >= to.norm() - 0.3);
+        if sees {
+            if self.pursuit_unseen > 2.0 || self.pursuit_saw.is_none() {
+                self.hud.show_note("The helicopter has you in its searchlight".to_string());
+            }
+            self.pursuit_saw = Some(feet);
+            self.pursuit_unseen = 0.0;
+        } else {
+            self.pursuit_unseen += dt;
+            if self.pursuit_unseen > HELICOPTER_GIVES_UP && !pursuit.leaving() {
+                pursuit.leave(feet);
+                self.hud.show_note("The helicopter has lost you".to_string());
+            }
+        }
+        // The roofs under it and under where it is going, looked down on from far above.
+        let roof = |at: Vector3<f32>| {
+            const ABOVE: f32 = 600.0;
+            let from = Vector3::new(at.x, feet.y + ABOVE, at.z);
+            crate::race::first_hit(graph, from, -Vector3::y(), 2.0 * ABOVE, skip).map_or(feet.y, |hit| hit.point.y.max(feet.y))
+        };
+        let over = self.pursuit_saw.unwrap_or(feet);
+        pursuit.fly(over, sees.then_some(feet), roof, dt);
+        pursuit.show(&mut ctx.scenes[self.scene].graph);
+        // Telling security where the player is, now and then, while it sees them.
+        self.pursuit_tells_in -= dt;
+        if sees && self.pursuit_tells_in <= 0.0 {
+            self.pursuit_tells_in = HELICOPTER_TELLS_EVERY;
+            if let Some(script) = self.script.as_ref() {
+                let sent = self.inhabitants.expose(feet, HELICOPTER_TELLS_REACH, |character| is_sentry(script, character));
+                if !sent.is_empty() {
+                    Log::info(format!("Helicopter: told {} of security where the player is", sent.len()));
+                }
+            }
+            self.alert_drone(feet);
+        }
+        if pursuit.gone(feet) {
+            pursuit.remove(&mut ctx.scenes[self.scene].graph);
+            self.pursuit_saw = None;
+            return;
+        }
+        self.pursuit = Some(pursuit);
     }
 
     /// A map marking a start line and checkpoints is raced (see [`race`]): the player on the bike
@@ -3496,6 +3624,10 @@ impl MazeGame {
             };
             let answered = self.inhabitants.radio_call(n, at, |character| is_sentry(script, character));
             self.alert_drone(at);
+            // Wanted at enough stars, the call brings in the helicopter too.
+            if self.stars() >= HELICOPTER_STARS && self.pursuit.is_none() {
+                self.pursuit_called = Some(at);
+            }
             let name = self.name_of(n).unwrap_or_else(|| "A sentry".into());
             self.hud.show_note(match answered.len() {
                 0 => format!("{name} radioed for help, but no one is near enough to come"),
@@ -6005,6 +6137,7 @@ impl Plugin for MazeGame {
             for heli in &mut self.helicopters {
                 heli.fly(&mut ctx.scenes[self.scene].graph, ctx.dt);
             }
+            self.chase_by_air(ctx);
             if let Some(traffic) = self.traffic.as_mut() {
                 // Stopping for the player and every droid on their feet.
                 let graph = &mut ctx.scenes[self.scene].graph;

@@ -3666,6 +3666,45 @@ impl Inhabitants {
         answered
     }
 
+    /// Has every sentry - of a kind `answers` says - that hunts the player, within `reach` of
+    /// `at`, and not after them already, go and search there: where a helicopter overhead has just
+    /// seen them. Those already searching set off there afresh; the rest leave whatever they were
+    /// doing, as on a radio call (see [`Inhabitants::radio_call`]). Those newly sent, as indices.
+    pub fn expose(&mut self, at: Vector3<f32>, reach: f32, answers: impl Fn(usize) -> bool) -> Vec<usize> {
+        let mut sent = Vec::new();
+        for (m, droid) in self.droids.iter_mut().enumerate() {
+            let told = droid.hunts_player()
+                && droid.side.is_none()
+                && answers(droid.character)
+                && !droid.down
+                && droid.alert != Some(Alert::Alert)
+                && flat(droid.feet - at).norm() < reach;
+            if !told {
+                continue;
+            }
+            droid.lost_at = at;
+            droid.lost_going = Vector3::zeros();
+            if droid.alert == Some(Alert::Evasion) {
+                // Searching already: straight to where it was seen, before looking about.
+                droid.searched = 0;
+                droid.route.clear();
+                droid.trip = None;
+                droid.looking = None;
+                continue;
+            }
+            droid.talking = false;
+            droid.warned = 0;
+            droid.threat = 0.0;
+            droid.note(Incident::Alarm);
+            droid.alert = None;
+            droid.enter(m, Some(Alert::Evasion), &mut self.alerts);
+            self.alarmed.push(m);
+            sent.push(m);
+        }
+        self.search_from = Some(at);
+        sent
+    }
+
     /// Has each hostile droid look for the player, at `player` in `posture`, whom it can see
     /// wherever `in_sight` says nothing is in the way from the player to it, and [`Sight`] says
     /// they are in front of it and near enough - by what there is to see by (`seeing`: dark or light, and fog) - for another `dt`. On Alert
