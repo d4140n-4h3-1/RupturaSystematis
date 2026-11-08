@@ -26,6 +26,7 @@ use crate::{
     royale::{self, RingNews, RingPosts, Royale, Who},
     race::{self, Race, RaceNews, Track},
     chips,
+    helicopter,
     traffic::{self, Network, Traffic},
     firewall::{self, Firewalls},
     drone::{self, Drone, DroneLines, Kind, State, Target, DRONE_LINES, DRONE_MODEL, QUAD_MODEL, URBS_DRONE_LINES},
@@ -758,6 +759,17 @@ pub struct MazeGame {
     #[visit(skip)]
     #[reflect(hidden)]
     stop_light_model: Option<ModelResource>,
+    /// On the test level, a sentry's helicopter circling over the city (see [`helicopter`]); and
+    /// its model and its pilot's.
+    #[visit(skip)]
+    #[reflect(hidden)]
+    helicopters: Vec<helicopter::Helicopter>,
+    #[visit(skip)]
+    #[reflect(hidden)]
+    helicopter_model: Option<ModelResource>,
+    #[visit(skip)]
+    #[reflect(hidden)]
+    sentry_model: Option<ModelResource>,
     #[visit(skip)]
     #[reflect(hidden)]
     race_best: Option<f32>,
@@ -1073,6 +1085,8 @@ impl MazeGame {
         self.quad_model = Some(resources.request::<Model>(QUAD_MODEL));
         self.bike_model = Some(resources.request::<Model>(race::BIKE_MODEL));
         self.stop_light_model = Some(resources.request::<Model>(traffic::STOP_LIGHT_MODEL));
+        self.helicopter_model = Some(resources.request::<Model>(helicopter::MODEL));
+        self.sentry_model = Some(resources.request::<Model>(helicopter::PILOT_MODEL));
         self.rival_models = race::RIVALS.iter().map(|&(_, model, _, _)| resources.request::<Model>(model)).collect();
         self.shot_model = Some(resources.request::<Model>(SHOT_MODEL));
         self.heart_model = Some(resources.request::<Model>(HEART_MODEL));
@@ -1250,6 +1264,9 @@ impl MazeGame {
         if let Some(mut traffic) = self.traffic.take() {
             traffic.remove(&mut ctx.scenes[self.scene].graph);
         }
+        for mut heli in std::mem::take(&mut self.helicopters) {
+            heli.remove(&mut ctx.scenes[self.scene].graph);
+        }
         self.player.set_riding(&mut ctx.scenes[self.scene].graph, false);
         self.ctf = None;
         self.royale = None;
@@ -1325,6 +1342,9 @@ impl MazeGame {
         }
         if let Some(mut traffic) = self.traffic.take() {
             traffic.remove(&mut ctx.scenes[self.scene].graph);
+        }
+        for mut heli in std::mem::take(&mut self.helicopters) {
+            heli.remove(&mut ctx.scenes[self.scene].graph);
         }
         self.player.set_riding(&mut ctx.scenes[self.scene].graph, false);
         if let Ok(exit) = ctx.scenes[self.scene].graph.try_get_mut(self.exit) {
@@ -1487,6 +1507,7 @@ impl MazeGame {
         self.start_royale(ctx);
         self.start_heist(ctx);
         self.start_race(ctx);
+        self.start_helicopters(ctx);
         self.story = story.is_some();
         if self.story {
             self.start_traffic(ctx);
@@ -1570,6 +1591,35 @@ impl MazeGame {
         let signal = self.stop_light_model.as_ref().filter(|model| model.is_ok());
         traffic.spawn(scene, &bike, &riders, signal);
         self.traffic = Some(traffic);
+    }
+
+    /// On the test level, a sentry's helicopter put up over the city (see [`helicopter`]): circling
+    /// over its streets, clear of its roofs, from where the player starts.
+    fn start_helicopters(&mut self, ctx: &mut PluginContext) {
+        if self.model_path != ctf::DEMO_TOWN.path {
+            return;
+        }
+        let Some(plan) = self.road_plan.as_ref() else {
+            return;
+        };
+        let Some(model) = self.helicopter_model.clone().filter(|model| model.is_ok()) else {
+            Log::err(format!("Could not load {}; no helicopter", helicopter::MODEL));
+            return;
+        };
+        let pilot = self.sentry_model.clone().filter(|model| model.is_ok());
+        if pilot.is_none() {
+            Log::err(format!("Could not load {}; the helicopter flies itself", helicopter::PILOT_MODEL));
+        }
+        let scene = &mut ctx.scenes[self.scene];
+        let floor = self.player.feet(&scene.graph).y;
+        let Some(orbit) = helicopter::orbit_over(&scene.graph, plan.roads(), floor, self.player.collider()) else {
+            return;
+        };
+        Log::info(format!(
+            "Helicopter: circling {:.0} m round ({:.0}, {:.0}) at {:.0} m",
+            orbit.radius, orbit.centre[0], orbit.centre[1], orbit.height
+        ));
+        self.helicopters.push(helicopter::Helicopter::spawn(scene, &model, pilot.as_ref(), orbit, 0.0));
     }
 
     /// A map marking a start line and checkpoints is raced (see [`race`]): the player on the bike
@@ -5917,6 +5967,9 @@ impl Plugin for MazeGame {
             self.set_up_train(ctx);
             for train in &mut self.trains {
                 train.update(&mut ctx.scenes[self.scene].graph, ctx.dt);
+            }
+            for heli in &mut self.helicopters {
+                heli.fly(&mut ctx.scenes[self.scene].graph, ctx.dt);
             }
             if let Some(traffic) = self.traffic.as_mut() {
                 // Stopping for the player and every droid on their feet.

@@ -1877,7 +1877,7 @@ pub(crate) fn first_hit(graph: &Graph, from: Vector3<f32>, way: Vector3<f32>, re
 }
 
 /// Holds the droid under `root` in its pose `name`, every other animation off: whether it has it.
-fn hold_pose(graph: &mut Graph, root: Handle<Node>, name: &str) -> bool {
+pub(crate) fn hold_pose(graph: &mut Graph, root: Handle<Node>, name: &str) -> bool {
     let nodes: Vec<Handle<Node>> = graph.traverse_handle_iter(root).collect();
     let Some(player) = nodes.into_iter().find(|&node| graph[node].cast::<AnimationPlayer>().is_some()) else {
         return false;

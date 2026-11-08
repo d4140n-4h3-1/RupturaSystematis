@@ -44,6 +44,7 @@ mod escape;
 mod health;
 mod hearts;
 mod heist;
+mod helicopter;
 mod shield;
 mod firewall;
 mod ferry;
