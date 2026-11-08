@@ -897,6 +897,8 @@ pub struct Inhabitants {
     last_sight: Option<(Vector3<f32>, Vector3<f32>)>,
     /// Where a noise or an alarm has sent droids to search, to search from.
     search_from: Option<Vector3<f32>>,
+    /// How many stars the player is wanted at, as of the last [`Inhabitants::set_wanted`].
+    wanted: u32,
     /// How each role chooses what to do (see [`hydroxus_ai::tactics::conduct`]).
     reasoners: Reasoners,
     /// The last radio call for help that went out: how long ago, in seconds, and where the player
@@ -3613,8 +3615,13 @@ impl Inhabitants {
 
     /// Has the `n`th droid, if it wears a radio and has not called since it was last calm, start
     /// calling for help with it: seen the player at `at`. In [`RADIO_CALL`] seconds the call goes
-    /// out, unless it goes down first (see [`News::radioed`]). Whether it did start.
+    /// out, unless it goes down first (see [`News::radioed`]). Only with the player wanted at
+    /// [`RADIO_STARS`] or more: short of that, those after them have them in hand (see
+    /// [`most_after`]). Whether it did start.
     pub fn start_radio_call(&mut self, n: usize, at: Vector3<f32>) -> bool {
+        if self.wanted < RADIO_STARS {
+            return false;
+        }
         // Called in already, or being: it does not call again.
         let (quiet, near) = RADIO_QUIET;
         let called = self.droids.iter().any(|droid| droid.calling.is_some())
@@ -3626,6 +3633,21 @@ impl Inhabitants {
         droid.radioed = true;
         Log::info(format!("Radio: droid {n} calls for help"));
         true
+    }
+
+    /// The player just wanted at [`RADIO_STARS`]: the nearest sentry with a radio that is after them
+    /// and sees them, at `at`, if any, starts calling for help (see
+    /// [`Inhabitants::start_radio_call`]). Which one.
+    pub fn radio_now(&mut self, at: Vector3<f32>) -> Option<usize> {
+        let caller = self
+            .droids
+            .iter()
+            .enumerate()
+            .filter(|(_, droid)| droid.radio && !droid.down && !droid.radioed)
+            .filter(|(_, droid)| droid.alert == Some(Alert::Alert) && droid.sees_player)
+            .min_by(|(_, a), (_, b)| flat(a.feet - at).norm().total_cmp(&flat(b.feet - at).norm()))
+            .map(|(n, _)| n)?;
+        self.start_radio_call(caller, at).then_some(caller)
     }
 
     /// The `n`th droid's radio call for help, the player seen at `at`, goes out: every droid of a
@@ -3666,6 +3688,21 @@ impl Inhabitants {
         answered
     }
 
+    /// How many sentries - of a kind `answers` says - are after the player, chasing or searching.
+    fn after_player(&self, answers: &impl Fn(usize) -> bool) -> usize {
+        self.droids
+            .iter()
+            .filter(|droid| droid.hunts_player() && droid.side.is_none() && answers(droid.character) && !droid.down)
+            .filter(|droid| matches!(droid.alert, Some(Alert::Alert | Alert::Evasion)))
+            .count()
+    }
+
+    /// How many more sentries join in after the player, of those already after them (`after`), at
+    /// the stars they are wanted at (see [`most_after`]).
+    fn room_to_join(&self, after: usize) -> usize {
+        most_after(self.wanted).saturating_sub(after)
+    }
+
     /// Sees that at least `least` sentries - of a kind `answers` says - are after the player, the
     /// player at `at` having just been wanted at another star: those after them or searching for
     /// them already count, and as many more as that leaves wanting, the nearest within `reach`
@@ -3677,11 +3714,7 @@ impl Inhabitants {
         let sentry = |droid: &Inhabitant| {
             droid.hunts_player() && droid.side.is_none() && answers(droid.character) && !droid.down
         };
-        let after = self
-            .droids
-            .iter()
-            .filter(|droid| sentry(droid) && matches!(droid.alert, Some(Alert::Alert | Alert::Evasion)))
-            .count();
+        let after = self.after_player(&answers);
         let mut free: Vec<(f32, usize)> = self
             .droids
             .iter()
@@ -3691,7 +3724,8 @@ impl Inhabitants {
             .filter(|&(away, _)| away < reach)
             .collect();
         free.sort_by(|a, b| a.0.total_cmp(&b.0));
-        let sent: Vec<usize> = free.into_iter().take(least.saturating_sub(after)).map(|(_, m)| m).collect();
+        let wanting = least.saturating_sub(after).min(self.room_to_join(after));
+        let sent: Vec<usize> = free.into_iter().take(wanting).map(|(_, m)| m).collect();
         for &m in &sent {
             let droid = &mut self.droids[m];
             droid.talking = false;
@@ -3869,7 +3903,10 @@ impl Inhabitants {
         let joining = joiners(&watches, seeing, |m, n| {
             in_sight_of(graph, &droids[m], &droids[n])
         });
-        for m in joining {
+        // No more than the stars the player is wanted at call for: at one star the rest take it the
+        // one or two after them have it in hand (see [`most_after`]).
+        let room = self.room_to_join(self.after_player(&sentry));
+        for m in joining.into_iter().take(room) {
             let droid = &mut self.droids[m];
             if droid.alert.is_none() {
                 droid.windup = WINDUP;
@@ -4810,6 +4847,7 @@ impl Inhabitants {
 
     /// The player wanted at `stars` stars (see [`relentless`]): each sentry told, for this frame.
     pub fn set_wanted(&mut self, stars: u32) {
+        self.wanted = stars;
         for droid in &mut self.droids {
             droid.stars = if droid.sentry { stars } else { 0 };
         }
@@ -5140,6 +5178,25 @@ fn keener(stars: u32) -> f32 {
     1.0 + KEENER_PER_STAR * beyond_the_first(stars)
 }
 
+/// How many sentries, at most, go after a player wanted at `stars` stars of their own accord - not
+/// counting any that see them for themselves: joining in on a chase they see. At one star a
+/// sentry or two is enough, and the rest leave it to them; two stars call for more; from three,
+/// every one that can - and those with radios call in more still, and the helicopter (see
+/// [`RADIO_STARS`]). Wanted for nothing, as many as ever.
+pub(crate) fn most_after(stars: u32) -> usize {
+    if stars >= RADIO_STARS {
+        return usize::MAX;
+    }
+    match stars {
+        1 => 2,
+        2 => 4,
+        _ => usize::MAX,
+    }
+}
+
+/// How many stars the player has to be wanted at for a sentry with a radio to call for help on it.
+pub const RADIO_STARS: u32 = 3;
+
 /// How many stars past the first the player is wanted at.
 fn beyond_the_first(stars: u32) -> f32 {
     stars.saturating_sub(1) as f32
@@ -5178,6 +5235,9 @@ mod tests {
         let lengths: Vec<f32> = (1..=5).map(relentless).collect();
         assert!(lengths.windows(2).all(|w| w[1] > w[0]), "every star after it searches longer: {lengths:?}");
         assert_eq!(relentless(5), 3.5);
+        assert_eq!((most_after(1), most_after(2)), (2, 4), "a sentry or two at one star, more at two");
+        assert_eq!(most_after(3), usize::MAX);
+        assert_eq!(most_after(0), usize::MAX, "wanted for nothing, as ever");
         assert!((keener(5) - 1.75).abs() < 1e-6 && keener(2) > 1.0);
     }
 

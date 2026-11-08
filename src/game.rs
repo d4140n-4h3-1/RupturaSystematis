@@ -140,7 +140,7 @@ const TALK_RETRY: f32 = 5.0;
 /// meters, through any fog as the droids do; how often, while it sees them, it tells security where
 /// they are, and how far round them those it tells are, in seconds and meters; and how long out of
 /// its sight before it gives up and flies off, in seconds.
-const HELICOPTER_STARS: u32 = 3;
+const HELICOPTER_STARS: u32 = crate::inhabitants::RADIO_STARS;
 /// How many sentries, at least, go after the player each time they are wanted at another star -
 /// the first too - and from how far off, in meters.
 const SENT_AFTER_A_STAR: usize = 2;
@@ -1701,6 +1701,14 @@ impl MazeGame {
         };
         let at = self.player.feet(&ctx.scenes[self.scene].graph);
         let sent = self.inhabitants.send_after(at, SENT_AFTER_A_STAR, SENT_FROM, |character| is_sentry(script, character));
+        // Wanted at the third star, one after them with a radio calls for more - and the
+        // helicopter (see [`Game::radio_calls`]).
+        if stars >= crate::inhabitants::RADIO_STARS {
+            if let Some(n) = self.inhabitants.radio_now(at) {
+                let name = self.name_of(n).unwrap_or_else(|| "A sentry".into());
+                self.hud.show_note(format!("{name} is radioing for help"));
+            }
+        }
         if !sent.is_empty() {
             Log::info(format!("Wanted at {stars}: {} of security sent after the player", sent.len()));
             self.hud.show_note(match sent.len() {
