@@ -31,6 +31,7 @@ use fyrox::{
         canvas::CanvasBuilder,
         font::{Font, FontResource, FontStyles},
         grid::{Column, GridBuilder, Row},
+        image::ImageBuilder,
         screen::ScreenBuilder,
         stack_panel::StackPanelBuilder,
         text::{Text, TextBuilder, TextMessage},
@@ -38,6 +39,7 @@ use fyrox::{
         HorizontalAlignment, Orientation, Thickness, UiNode, UserInterface, VerticalAlignment,
     },
     plugin::PluginContext,
+    resource::texture::Texture,
 };
 
 /// How long a note stays on screen, in seconds.
@@ -74,11 +76,13 @@ const STAMINA_FROZEN: Color = Color::opaque(150, 235, 255);
 const HEALTH_RED: Color = Color::opaque(230, 50, 70);
 /// The colour the player's credits are written in.
 const CREDITS_GOLD: Color = Color::opaque(255, 205, 80);
-/// The wanted level under the credits: its colour, and the most stars there are - wanted for more
-/// counts than that, it is still that many (see [`crate::inhabitants`]'s `relentless`: how hard
-/// security comes after them, the more stars).
-const WANTED_RED: Color = Color::opaque(255, 85, 65);
+/// The wanted level under the credits: a red star - [`WANTED_STAR`], drawn from
+/// `data/hud/wanted_star.svg` - with the number of stars on it, and the most stars there are -
+/// wanted for more counts than that, it is still that many (see [`crate::inhabitants`]'s
+/// `relentless`: how hard security comes after them, the more stars). Its size on the screen.
+pub const WANTED_STAR: &str = "data/hud/wanted_star.png";
 pub const WANTED_MOST: u32 = 5;
+const WANTED_SIZE: f32 = 40.0;
 const HEALTH_LOW: f32 = 0.34;
 const HURT_RED: u8 = 90;
 /// The sneaking meter's colours: unseen, noticed, and spotted - as Fallout's. In view of someone
@@ -168,8 +172,9 @@ pub struct Hud {
     /// The player's credits in the top right, and what it last said.
     credits: Handle<Text>,
     shown_credits: Option<Credits>,
-    /// The wanted level under them, and what it last said.
-    wanted: Handle<Text>,
+    /// The wanted level under them - the star, and the number on it - and what it last said.
+    wanted: Handle<UiNode>,
+    wanted_number: Handle<Text>,
     shown_wanted: Option<String>,
     /// How long it has been blinking, in seconds, and what was last put on screen, so that each
     /// is only sent when it changes.
@@ -199,6 +204,7 @@ impl Hud {
     pub fn build(ctx: &mut PluginContext) -> Self {
         // The engine starts with no user interface; this one becomes the first, and the engine
         // keeps it the size of the window.
+        let star = ctx.resource_manager.request::<Texture>(WANTED_STAR);
         ctx.user_interfaces
             .add(UserInterface::new(Vector2::new(1280.0, 720.0)));
         let ui = ctx.user_interfaces.first_mut();
@@ -466,18 +472,36 @@ impl Hud {
         .with_font_size(22.0.into())
         .with_horizontal_text_alignment(HorizontalAlignment::Right)
         .build(ctx);
-        // The wanted level, just under the credits: a star and how many.
-        let wanted = TextBuilder::new(
+        // The wanted level, just under the credits: the star, how many in white in its middle,
+        // outlined dark to stand out on it.
+        let wanted_number = TextBuilder::new(
             WidgetBuilder::new()
+                .with_horizontal_alignment(HorizontalAlignment::Center)
+                .with_vertical_alignment(VerticalAlignment::Center)
+                .with_margin(Thickness { left: 0.0, top: 3.0, right: 0.0, bottom: 0.0 })
+                .with_foreground(Brush::Solid(Color::WHITE).into()),
+        )
+        .with_font_size(17.0.into())
+        .with_horizontal_text_alignment(HorizontalAlignment::Center)
+        .with_vertical_text_alignment(VerticalAlignment::Center)
+        .with_shadow(true)
+        .with_shadow_brush(Brush::Solid(Color::opaque(40, 8, 5)))
+        .with_shadow_dilation(1.5)
+        .with_shadow_offset(Vector2::new(0.0, 0.0))
+        .build(ctx);
+        let wanted = ImageBuilder::new(
+            WidgetBuilder::new()
+                .with_width(WANTED_SIZE)
+                .with_height(WANTED_SIZE)
                 .with_horizontal_alignment(HorizontalAlignment::Right)
                 .with_vertical_alignment(VerticalAlignment::Top)
-                .with_margin(Thickness { left: 12.0, top: 42.0, right: 12.0, bottom: 12.0 })
+                .with_margin(Thickness { left: 12.0, top: 40.0, right: 12.0, bottom: 12.0 })
                 .with_visibility(false)
-                .with_foreground(Brush::Solid(WANTED_RED).into()),
+                .with_child(wanted_number),
         )
-        .with_font_size(22.0.into())
-        .with_horizontal_text_alignment(HorizontalAlignment::Right)
-        .build(ctx);
+        .with_texture(star)
+        .build(ctx)
+        .to_base();
         let screen = ScreenBuilder::new(
             WidgetBuilder::new()
                 .with_child(credits)
@@ -515,6 +539,7 @@ impl Hud {
             rounds: endless,
             credits,
             wanted,
+            wanted_number,
             screen,
             ..Default::default()
         }
@@ -720,7 +745,7 @@ impl Hud {
         if wanted != self.shown_wanted {
             ui.send(self.wanted, WidgetMessage::Visibility(wanted.is_some()));
             if let Some(wanted) = &wanted {
-                ui.send(self.wanted, TextMessage::Text(wanted.clone()));
+                ui.send(self.wanted_number, TextMessage::Text(wanted.clone()));
             }
             self.shown_wanted = wanted;
         }
@@ -872,10 +897,10 @@ fn alert_shown(alert: Alert, left: f32, blinking_on: bool) -> Option<(String, Co
     }
 }
 
-/// The wanted level at `stars` stars: a star and how many, no more than [`WANTED_MOST`]; nothing
-/// while the player is wanted for nothing.
+/// The number on the wanted level's star at `stars` stars, no more than [`WANTED_MOST`]; nothing -
+/// no star - while the player is wanted for nothing.
 fn wanted_shown(stars: u32) -> Option<String> {
-    (stars > 0).then(|| format!("\u{2605} {}", stars.min(WANTED_MOST)))
+    (stars > 0).then(|| stars.min(WANTED_MOST).to_string())
 }
 
 /// What the sneaking meter says, in what colour, and how full its bar is, for the most aware
@@ -958,10 +983,12 @@ mod tests {
 
     #[test]
     fn the_sneaking_meter_says_hidden_caution_or_danger_and_fills() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        assert!(dir.join(WANTED_STAR).is_file(), "no star for the wanted level at {WANTED_STAR}");
         assert_eq!(wanted_shown(0), None, "wanted for nothing: nothing shown");
-        assert_eq!(wanted_shown(1), Some("\u{2605} 1".to_string()));
-        assert_eq!(wanted_shown(5), Some("\u{2605} 5".to_string()));
-        assert_eq!(wanted_shown(9), Some("\u{2605} 5".to_string()), "no more than five");
+        assert_eq!(wanted_shown(1), Some("1".to_string()));
+        assert_eq!(wanted_shown(5), Some("5".to_string()));
+        assert_eq!(wanted_shown(9), Some("5".to_string()), "no more than five");
         assert_eq!(detection_shown(Stage::Hidden, 0.0, false), ("[ HIDDEN ]".to_string(), HIDDEN_GREY, 0.0));
         assert_eq!(detection_shown(Stage::Caution, 0.513, false), ("[ CAUTION ]".to_string(), CAUTION_YELLOW, 0.52));
         assert_eq!(detection_shown(Stage::Danger, 1.4, false), ("[ DANGER ]".to_string(), DANGER_RED, 1.0));

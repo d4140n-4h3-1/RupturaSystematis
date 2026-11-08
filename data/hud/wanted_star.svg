@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <!-- The wanted level's star (src/hud.rs): the number of stars goes over its middle, as text. -->
+  <defs>
+    <linearGradient id="face" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ff7a5c"/>
+      <stop offset="0.55" stop-color="#ff5541"/>
+      <stop offset="1" stop-color="#c8281c"/>
+    </linearGradient>
+  </defs>
+  <polygon points="64.00,8.00 81.05,42.54 119.16,48.08 91.58,74.96 98.09,112.92 64.00,95.00 29.91,112.92 36.42,74.96 8.84,48.08 46.95,42.54" fill="url(#face)" stroke="#2a0805" stroke-width="5" stroke-linejoin="round"/>
+</svg>
