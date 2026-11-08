@@ -5082,20 +5082,28 @@ impl Inhabitants {
 }
 
 /// How relentless security is after a player wanted at `stars` stars: how many times as long as
-/// otherwise each sentry searches - and stays wary - before it calms down, [`RELENTLESS_PER_STAR`]
-/// more for each star; five stars, three and a half times as long.
+/// otherwise each sentry searches - and stays wary - before it calms down. The first star is no
+/// more than being wanted for nothing - a first offence, which the player can still shake off as
+/// ever - and each star after it [`RELENTLESS_PER_STAR`] more; five stars, three and a half times
+/// as long.
 pub(crate) fn relentless(stars: u32) -> f32 {
-    1.0 + RELENTLESS_PER_STAR * stars as f32
+    1.0 + RELENTLESS_PER_STAR * beyond_the_first(stars)
 }
 
-/// And how many times as keenly it looks and listens for them, [`KEENER_PER_STAR`] more a star.
+/// And how many times as keenly it looks and listens for them: as ever at the first star, and
+/// [`KEENER_PER_STAR`] more for each after it.
 fn keener(stars: u32) -> f32 {
-    1.0 + KEENER_PER_STAR * stars as f32
+    1.0 + KEENER_PER_STAR * beyond_the_first(stars)
 }
 
-/// See [`relentless`] and [`keener`].
-const RELENTLESS_PER_STAR: f32 = 0.5;
-const KEENER_PER_STAR: f32 = 0.15;
+/// How many stars past the first the player is wanted at.
+fn beyond_the_first(stars: u32) -> f32 {
+    stars.saturating_sub(1) as f32
+}
+
+/// See [`relentless`] and [`keener`]: so that five stars are as relentless as ever.
+const RELENTLESS_PER_STAR: f32 = 0.625;
+const KEENER_PER_STAR: f32 = 0.1875;
 
 /// How visible the player at `player` in `posture` is to a droid at `feet` facing `heading`, in
 /// `alert` - or calm, with none - by what there is to see by (`seeing`: dark or light, and fog): as
@@ -5122,10 +5130,11 @@ mod tests {
     fn the_more_stars_the_more_relentless_security_is() {
         assert_eq!(relentless(0), 1.0, "wanted for nothing: as ever");
         assert_eq!(keener(0), 1.0);
-        let lengths: Vec<f32> = (0..=5).map(relentless).collect();
-        assert!(lengths.windows(2).all(|w| w[1] > w[0]), "every star searches longer: {lengths:?}");
+        assert_eq!((relentless(1), keener(1)), (1.0, 1.0), "the first star: no more than that");
+        let lengths: Vec<f32> = (1..=5).map(relentless).collect();
+        assert!(lengths.windows(2).all(|w| w[1] > w[0]), "every star after it searches longer: {lengths:?}");
         assert_eq!(relentless(5), 3.5);
-        assert!(keener(5) > keener(1) && keener(1) > 1.0);
+        assert!((keener(5) - 1.75).abs() < 1e-6 && keener(2) > 1.0);
     }
 
     #[test]
