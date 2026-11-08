@@ -10,8 +10,14 @@
 //! (see `maze::player::pistol`), green from a pistol and blue from a rifle, which does its harm
 //! when it gets there - and holstered once the fighting is over. Shot
 //! down, a droid falls limp, knocked back by the shot, and may lose what it was hit in; it comes
-//! back as a new droid. They cross the arena along the walk grid, see only in front
-//! of them (hydroxus-ai's sight), and fight from cover: a crouched droid behind a low block is out
+//! back as a new droid. They cross the arena along the walk grid and fight from cover, and take in
+//! what is about them with hydroxus-ai's perception, as the game's sentries do: they see in a
+//! cone in front of them and only near out of the corner of their eye, and become aware of an
+//! enemy gradually - at once close in front, slowly far off, crouched or to the side, quicker
+//! once in the fight - fighting only those they have spotted; a shot carries along the floor,
+//! round corners and not through walls, to those that make for about where it was; and a droid
+//! shot at by someone it cannot see, after a few bolts, fires blind back where they came from.
+//! In cover, a crouched droid behind a low block is out
 //! of the line of fire, and stands up to shoot over it; behind a wall or a pillar too tall to shoot
 //! over, it stands with its back to it, as the player does in cover, and leans out round the side
 //! of it to shoot. Hurt, a droid
@@ -30,14 +36,15 @@
 //! round the side, leaves cover only while a teammate is firing, and fires at where an enemy
 //! was just seen to keep their head down; a droid shot at like that stays down a moment.
 //! `BATTLE_OLD=red` (or `cyan`, or `both`) has that side fight as they did before all that, one
-//! droid at a time, to see the difference: each match ends by saying which side won.
+//! droid at a time, to see the difference - seeing, hearing and firing blind as the other side
+//! does: each match ends by saying which side won.
 //!
 //! Run with `cargo run --example team_battle`. `BATTLE_MAP=<path>` fights in another arena, such
 //! as the capture-the-flag map, `data/arena/ctf_map.glb`: the teams start at its two ends along x.
 //!
 //! The camera is free: WASD to fly, Q and E down and up, Shift to go faster, the right mouse
-//! button held to look round. Tab follows the next droid, F lets it go, Space pauses, R starts a
-//! new match, Escape quits.
+//! button held to look round. Tab follows the next droid, V sees through its eyes or from behind
+//! it again, F lets it go, Space pauses, R starts a new match, Escape quits.
 
 use fyrox::{
     core::{
@@ -70,7 +77,7 @@ use fyrox::{
         camera::CameraBuilder,
         collider::{Collider, ColliderBuilder, ColliderShape, GeometrySource},
         graph::{physics::RayCastOptions, Graph},
-        light::{point::PointLightBuilder, BaseLightBuilder},
+        light::{directional::DirectionalLightBuilder, point::PointLightBuilder, BaseLightBuilder},
         mesh::Mesh,
         node::Node,
         pivot::PivotBuilder,
@@ -82,8 +89,12 @@ use fyrox::{
 };
 use hydroxus_ai::{
     navigation::{navmesh::NavMesh, walk},
+    perception::{bolts, detection::Detection},
     prelude::*,
-    tactics::team::{self, Exposure, Intel, Stuck},
+    tactics::{
+        blind::{self, BlindFire},
+        team::{self, Exposure, Intel, Stuck},
+    },
 };
 use maze::{
     AI,
@@ -92,15 +103,66 @@ use maze::{
         avatar::{Avatar, Going, Wall},
         pistol::{self, Bolts, FireMode, BOLT_SPEED},
         posture::{Gait, Posture},
+        SHOT_NOISE,
     },
     ragdoll::{self, Ragdoll},
 };
 
-const MAP: &str = "data/arena/combat_map.glb";
-
-fn map_path() -> String {
-    std::env::var("BATTLE_MAP").unwrap_or_else(|_| MAP.to_string())
+/// Where a battle is fought, and how it looks and how far the droids see there.
+#[derive(Debug, Clone, Copy)]
+pub struct Arena {
+    /// The window's title.
+    pub title: &'static str,
+    pub map: &'static str,
+    /// The light from all round, the fog over it if any, and a sun - its strength - if it is out
+    /// under the sky.
+    pub ambient: Color,
+    pub fog: Option<fyrox::scene::Fog>,
+    pub sun: Option<f32>,
+    /// How far a droid sees, in meters, at most.
+    pub sight: f32,
+    /// Where the spectator camera starts, and how far down it looks, in degrees.
+    pub camera: [f32; 3],
+    pub pitch: f32,
 }
+
+/// The combat arena, under its roof, lit by its strips.
+pub const COMBAT: Arena = Arena {
+    title: "Team battle",
+    map: "data/arena/combat_map.glb",
+    ambient: Color::opaque(70, 72, 80),
+    fog: None,
+    sun: None,
+    sight: 45.0,
+    // Inside the arena, under its ceiling - the roof hides everything from above - in the middle
+    // of one long side, looking across it with a team to either side.
+    camera: [0.0, 4.6, -29.0],
+    pitch: 22.0,
+};
+
+/// The forest: abandoned buildings among the trees, in the Foggy Forest's fog
+/// (`data/arena/tb_forest.py`). The droids see less far in it: 30 m, where the fog has taken
+/// more than half of what is there.
+pub const FOREST: Arena = Arena {
+    title: "Team battle - forest",
+    map: "data/arena/tb_forest.glb",
+    // The game's on a foggy map: an overcast day, lit from all round by the grey sky.
+    ambient: Color::opaque(118, 124, 120),
+    fog: Some(maze::FOG),
+    sun: Some(0.6),
+    sight: 30.0,
+    // Over one long side, looking across with a team to either side.
+    camera: [0.0, 14.0, -40.0],
+    pitch: 28.0,
+};
+
+impl Default for Arena {
+    fn default() -> Self {
+        COMBAT
+    }
+}
+/// What a map's leaves are named, starting: they are not solid (see `place_level`).
+const FOLIAGE: &str = "Foliage";
 /// How often a droid breaking for cover jumps as it goes, out of 1; how fast it leaves the
 /// ground, in meters per second, for a short and a high jump; and how fast it falls.
 const JUMP_CHANCE: f32 = 0.25;
@@ -114,6 +176,9 @@ const AIM_SNAP: f32 = 0.1;
 const AIM_LEARNING: f32 = 0.5;
 const AIM_BIAS_MOST: f32 = 0.6;
 const HIT_RADIUS: f32 = 0.4;
+/// How near its gun the arena may be in the way of a shot, in meters, for a droid not to fire it:
+/// it would only be shooting into its own cover, seeing over or round what its gun cannot.
+const OWN_COVER: f32 = 2.0;
 /// How long, in seconds, a droid keeps its pistol out after it last had a target.
 const HOLSTER_AFTER: f32 = 6.0;
 /// The droids each team is made from: the same droid, in red and in cyan.
@@ -139,6 +204,16 @@ const EYES_STANDING: f32 = 1.55;
 const EYES_CROUCHED: f32 = 0.8;
 const CHEST_STANDING: f32 = 1.2;
 const CHEST_CROUCHED: f32 = 0.65;
+/// Lying prone, on its elbows: the game's prone crawl has its eyes about here (see
+/// `maze::player::posture`). Behind cover too low to crouch behind - a fallen trunk - it lies down.
+const EYES_PRONE: f32 = 0.3;
+const CHEST_PRONE: f32 = 0.25;
+/// How many of the droids caught in the open with no cover to be had lie down to fight, out of
+/// 1, rather than stand; how much less likely a shot at one lying down is to hit; and how fast one
+/// crawls, if its model has no crawl to go by.
+const PRONE_CHANCE: f32 = 0.6;
+const PRONE_HARDER: f32 = 0.6;
+const CRAWL_SPEED: f32 = 0.6;
 
 const HEALTH: f32 = 100.0;
 const DAMAGE: (f32, f32) = (9.0, 16.0);
@@ -161,6 +236,18 @@ const RESPAWN_TIME: f32 = 5.0;
 const RETREAT_HEALTH: f32 = 35.0;
 /// How far a droid will go to reach cover, in meters of walking.
 const COVER_REACH: f32 = 15.0;
+/// How often, in seconds, a droid looks about it, and how it sees: in a cone in front of it, and
+/// out of the corner of its eye near by (hydroxus-ai's [`Sight`]), as far as its arena says.
+const LOOK_EVERY: f32 = 0.15;
+fn sight(range: f32) -> Sight {
+    Sight { range, cone: 70f32.to_radians(), ..Sight::DEFAULT }
+}
+/// How long a droid heads for shooting it heard, in seconds, and how near it has to get to it to
+/// have got there, in meters; and how far off where it was it can be wrong, heard from as far as
+/// the shot carries.
+const HEARD_FOR: f32 = 15.0;
+const HEARD_REACHED: f32 = 3.0;
+const HEARD_WRONG: f32 = 6.0;
 /// How the teams fight as teams - what they know of the enemy, which ground it sees, flanking,
 /// cover and covering fire - is hydroxus-ai's (`hydroxus_ai::tactics::team`).
 
@@ -274,6 +361,10 @@ struct Droid {
     going_to: Option<Vector3<f32>>,
     task: Task,
     crouched: bool,
+    /// Whether it lies prone: fighting in the open, or behind cover too low to crouch behind
+    /// (`cover_prone`, as the cover it went for is).
+    prone: bool,
+    cover_prone: bool,
     /// The enemy it is fighting, while it can see them.
     target: Option<usize>,
     /// Where it heads when there is nothing better to do.
@@ -292,6 +383,15 @@ struct Droid {
     flank: Option<f32>,
     /// Where it was, and how long ago, to tell if it is stuck.
     stuck_from: Stuck,
+    /// How aware it is of each droid, by its index: it fights only those it has spotted (see
+    /// hydroxus-ai's [`Detection`]).
+    aware: Vec<Detection>,
+    /// Where it last heard shooting it could not see, and how long ago.
+    heard: Option<(Vector3<f32>, f32)>,
+    /// Bolts from someone it cannot see, and its firing blind back where they came from; and
+    /// whose they were.
+    blind: BlindFire,
+    blind_at: Option<usize>,
 }
 
 impl Droid {
@@ -300,11 +400,37 @@ impl Droid {
     }
 
     fn eyes(&self) -> Vector3<f32> {
-        self.position + Vector3::y() * if self.crouched { EYES_CROUCHED } else { EYES_STANDING }
+        self.position + Vector3::y() * self.eye_height()
     }
 
     fn chest(&self) -> Vector3<f32> {
-        self.position + Vector3::y() * if self.crouched { CHEST_CROUCHED } else { CHEST_STANDING }
+        self.position + Vector3::y() * if self.prone {
+            CHEST_PRONE
+        } else if self.crouched {
+            CHEST_CROUCHED
+        } else {
+            CHEST_STANDING
+        }
+    }
+
+    fn eye_height(&self) -> f32 {
+        if self.prone {
+            EYES_PRONE
+        } else if self.crouched {
+            EYES_CROUCHED
+        } else {
+            EYES_STANDING
+        }
+    }
+
+    fn posture(&self) -> Posture {
+        if self.prone {
+            Posture::Crawling
+        } else if self.crouched {
+            Posture::Crouching
+        } else {
+            Posture::Standing
+        }
     }
 
     /// Behind tall cover - a wall or a pillar, which it shoots round rather than over - which side
@@ -373,6 +499,7 @@ enum Phase {
 
 #[derive(Debug, Default)]
 struct Battle {
+    arena: Arena,
     scene: Handle<Scene>,
     map: Option<ModelResource>,
     /// The droids' models, red's and cyan's.
@@ -408,6 +535,8 @@ struct Battle {
     looking: bool,
     keys: Vec<KeyCode>,
     following: Option<usize>,
+    /// Whether the droid followed is seen through its own eyes, or from behind.
+    first_person: bool,
     // The interface.
     scoreboard: Handle<Text>,
     banner: Handle<Text>,
@@ -429,14 +558,20 @@ struct TeamBattle {
     battle: Battle,
 }
 
+#[allow(dead_code)]
 fn main() {
+    run(COMBAT);
+}
+
+/// Fights battles in `arena` until the window is closed.
+pub fn run(arena: Arena) {
     // Assets are looked up next to this crate, wherever it is started from.
     let _ = std::env::set_current_dir(env!("CARGO_MANIFEST_DIR"));
     let mut executor = Executor::from_params(
         Some(EventLoop::new().unwrap()),
         GraphicsContextParams {
             window_attributes: WindowAttributes::default()
-                .with_title("Team battle")
+                .with_title(arena.title)
                 .with_resizable(true),
             vsync: true,
             msaa_sample_count: None,
@@ -444,7 +579,9 @@ fn main() {
             named_objects: false,
         },
     );
-    executor.add_plugin(TeamBattle::default());
+    let mut battle = TeamBattle::default();
+    battle.battle.arena = arena;
+    executor.add_plugin(battle);
     executor.run()
 }
 
@@ -468,16 +605,31 @@ impl Plugin for TeamBattle {
 impl Battle {
     fn init(&mut self, ctx: &mut PluginContext) {
         let mut scene = Scene::new();
-        scene.rendering_options.ambient_lighting_color = Color::opaque(70, 72, 80);
+        scene.rendering_options.ambient_lighting_color = self.arena.ambient;
         scene.rendering_options.environment_lighting_source = EnvironmentLightingSource::AmbientColor;
-
-        // Inside the arena, under its ceiling - the roof hides everything from above - in the
-        // middle of one long side, looking across it with a team to either side.
-        self.camera_position = Vector3::new(0.0, 4.6, -29.0);
-        self.pitch = 22f32.to_radians();
+        scene.rendering_options.fog = self.arena.fog;
+        if let Some(strength) = self.arena.sun {
+            // Behind the cloud, high up: soft light from above, a little from one side.
+            DirectionalLightBuilder::new(
+                BaseLightBuilder::new(
+                    BaseBuilder::new().with_local_transform(
+                        TransformBuilder::new()
+                            .with_local_rotation(
+                                UnitQuaternion::from_axis_angle(&Vector3::y_axis(), 35f32.to_radians())
+                                    * UnitQuaternion::from_axis_angle(&Vector3::x_axis(), 60f32.to_radians()),
+                            )
+                            .build(),
+                    ),
+                )
+                .with_intensity(strength),
+            )
+            .build(&mut scene.graph);
+        }
+        self.camera_position = Vector3::from(self.arena.camera);
+        self.pitch = self.arena.pitch.to_radians();
         self.camera = CameraBuilder::new(BaseBuilder::new()).build(&mut scene.graph).to_base();
         self.scene = ctx.scenes.add(scene);
-        self.map = Some(ctx.resource_manager.request::<Model>(map_path()));
+        self.map = Some(ctx.resource_manager.request::<Model>(self.map_path()));
         let old = std::env::var("BATTLE_OLD").unwrap_or_default();
         self.smart = [
             !matches!(old.as_str(), "red" | "both"),
@@ -517,7 +669,7 @@ impl Battle {
         .with_vertical_text_alignment(fyrox::gui::VerticalAlignment::Bottom)
         .with_text(
             "WASD fly   Q/E down/up   Shift faster   Right mouse look\n\
-             Tab follow a droid   F free camera   Space pause   R new match   Esc quit",
+             Tab follow a droid   V first/third person   F free camera   Space pause   R new match   Esc quit",
         )
         .build(&mut ui.build_ctx());
         // The UI's root gives its children only the size they ask for, in its corner; a screen is
@@ -526,6 +678,11 @@ impl Battle {
         let children = [self.scoreboard, self.banner, self.help].map(|text| text.to_base());
         let ctx = &mut ui.build_ctx();
         ScreenBuilder::new(WidgetBuilder::new().with_children(children)).build(ctx);
+    }
+
+    /// The arena's map, or `BATTLE_MAP`'s.
+    fn map_path(&self) -> String {
+        std::env::var("BATTLE_MAP").unwrap_or_else(|_| self.arena.map.to_string())
     }
 
     fn rng(&mut self) -> &mut Rng {
@@ -548,7 +705,7 @@ impl Battle {
                 let Some(map) = self.map.clone() else { return };
                 let models = self.models.clone().map(|model| model.filter(|m| !m.is_failed_to_load()));
                 if map.is_failed_to_load() {
-                    self.set_text(ctx, self.scoreboard, format!("Could not load {}", map_path()));
+                    self.set_text(ctx, self.scoreboard, format!("Could not load {}", self.map_path()));
                     self.map = None;
                 } else if models.iter().any(Option::is_none) {
                     self.set_text(ctx, self.scoreboard, format!("Could not load {MODELS:?}"));
@@ -656,8 +813,15 @@ impl Battle {
             .build(&mut scene.graph);
         }
 
+        // Leaves - canopies and bushes - hide what is in them, but stop nothing: they are left out,
+        // as the game leaves them out of its levels.
+        let solid = meshes
+            .into_iter()
+            .filter(|&h| !scene.graph[h].name().starts_with(FOLIAGE))
+            .map(GeometrySource)
+            .collect();
         let collider = ColliderBuilder::new(BaseBuilder::new())
-            .with_shape(ColliderShape::trimesh(meshes.into_iter().map(GeometrySource).collect()))
+            .with_shape(ColliderShape::trimesh(solid))
             .build(&mut scene.graph);
         RigidBodyBuilder::new(BaseBuilder::new().with_child(collider))
             .with_body_type(RigidBodyType::Static)
@@ -835,11 +999,13 @@ impl Battle {
         // Every other cell is plenty, and keeps droids from crowding onto neighbouring spots.
         for (x, z) in grid.walkable_cells().filter(|&(x, z)| x % 2 == 0 && z % 2 == 0) {
             let position = grid.on_floor(*origin, (x, z));
+            // What hides it crouched, or - lower, a fallen trunk - lying down.
             let eyes = position + Vector3::y() * EYES_CROUCHED;
+            let low = position + Vector3::y() * EYES_PRONE;
             let shields: Vec<_> = directions
                 .iter()
                 .copied()
-                .filter(|dir| !Self::clear(graph, eyes, eyes + dir * 1.2))
+                .filter(|dir| !Self::clear(graph, eyes, eyes + dir * 1.2) || !Self::clear(graph, low, low + dir * 1.2))
                 .collect();
             if !shields.is_empty() {
                 covers.push(CoverSpot { position, shields });
@@ -919,6 +1085,8 @@ impl Battle {
             going_to: None,
             task: Task::Advance,
             crouched: false,
+            prone: false,
+            cover_prone: false,
             target: None,
             objective: None,
             reload: 0.0,
@@ -930,6 +1098,10 @@ impl Battle {
             suppress_at: None,
             flank: None,
             stuck_from: Stuck::default(),
+            aware: Vec::new(),
+            heard: None,
+            blind: BlindFire::default(),
+            blind_at: None,
         })
     }
 
@@ -941,6 +1113,7 @@ impl Battle {
         let count = self.spawns[team].len();
         let pick = self.rng().below(count);
         let cell = self.spawns[team][pick];
+        let count_all = self.droids.len();
         let Some((grid, origin)) = &self.grid else { return };
         let position = grid.on_floor(*origin, cell);
         let droid = &mut self.droids[i];
@@ -953,11 +1126,18 @@ impl Battle {
         droid.going_to = None;
         droid.task = Task::Advance;
         droid.crouched = false;
+        droid.prone = false;
+        droid.cover_prone = false;
         droid.target = None;
         droid.objective = None;
         droid.suppressed = 0.0;
         droid.suppress_at = None;
         droid.stuck_from = Stuck::at(droid.position);
+        // A new droid: unaware of anyone, and hearing nothing.
+        droid.aware = vec![Detection::default(); count_all];
+        droid.heard = None;
+        droid.blind.reset();
+        droid.blind_at = None;
         // Two of each team's five go round the side, one each way.
         droid.flank = match i % PER_TEAM {
             1 => Some(1.0),
@@ -990,15 +1170,38 @@ impl Battle {
         (0..self.droids.len()).filter(move |&j| self.droids[j].team != team && self.droids[j].alive())
     }
 
-    /// Whether droid `i` sees droid `j`: in front of it, near enough, and nothing in the way.
-    fn sees(&self, graph: &Graph, i: usize, j: usize) -> bool {
+    /// How visible droid `j` is to droid `i`, from 0 to 1 (see [`Sight::visibility`]): in
+    /// front of it, nearer and standing the more so, and nothing in the way. Fighting, it sees as
+    /// far whether they crouch or not.
+    fn visibility(&self, graph: &Graph, i: usize, j: usize) -> f32 {
         let (me, them) = (&self.droids[i], &self.droids[j]);
-        let stance = if them.crouched { Stance::Crouching } else { Stance::Standing };
-        // In a fight, everything nearby is noticed; calm, only what is in front.
-        let sight = Sight { range: 45.0, cone: 70f32.to_radians(), ..Default::default() };
-        let alert = me.target.map(|_| Alert::Alert);
-        sight.could_see(alert, me.position, me.heading, them.position, stance, false)
-            && (Self::clear(graph, me.eyes(), them.eyes()) || Self::clear(graph, me.eyes(), them.chest()))
+        let stance = match them.posture() {
+            Posture::Crawling => Stance::Crawling,
+            Posture::Crouching => Stance::Crouching,
+            Posture::Standing => Stance::Standing,
+        };
+        let seen = sight(self.arena.sight).visibility(self.alert(i), me.position, me.heading, them.position, stance, false);
+        if seen > 0.0 && (Self::clear(graph, me.eyes(), them.eyes()) || Self::clear(graph, me.eyes(), them.chest())) {
+            seen
+        } else {
+            0.0
+        }
+    }
+
+    /// Whether droid `i` is in the fight - with a target, an enemy its team knows of, shooting
+    /// heard or firing blind - which is Alert to hydroxus-ai, or calm.
+    fn alert(&self, i: usize) -> Option<Alert> {
+        let me = &self.droids[i];
+        let fighting = me.target.is_some()
+            || me.heard.is_some()
+            || me.blind.at().is_some()
+            || self.nearest_known_enemy(i).is_some();
+        fighting.then_some(Alert::Alert)
+    }
+
+    /// How keenly droid `i` looks and listens: in the fight, as one searching does.
+    fn eagerness(&self, i: usize) -> f32 {
+        if self.alert(i).is_some() { AI.detection.searching } else { 1.0 }
     }
 
     fn think(&mut self, graph: &mut Graph, dt: f32) {
@@ -1012,6 +1215,17 @@ impl Battle {
         }
         for droid in &mut self.droids {
             droid.suppressed = (droid.suppressed - dt).max(0.0);
+            // Shooting heard is gone to a while, and given up once there.
+            if let Some((at, age)) = droid.heard {
+                let there = flat(at - droid.position).norm() < HEARD_REACHED;
+                droid.heard = (age + dt < HEARD_FOR && !there && droid.target.is_none()).then_some((at, age + dt));
+            }
+            // Firing blind until it sees whoever it was, or it is done.
+            let sees_them = droid.target.is_some() && droid.target == droid.blind_at;
+            droid.blind.step(dt, sees_them, !droid.alive());
+            if droid.blind.at().is_none() {
+                droid.blind_at = None;
+            }
         }
         for i in 0..self.droids.len() {
             if let Some(left) = self.droids[i].dead_for {
@@ -1025,7 +1239,7 @@ impl Battle {
             self.droids[i].reload -= dt;
             self.droids[i].look_timer -= dt;
             if self.droids[i].look_timer <= 0.0 {
-                self.droids[i].look_timer = 0.15;
+                self.droids[i].look_timer = LOOK_EVERY;
                 self.look(graph, i);
             }
             self.decide(graph, i, dt);
@@ -1033,9 +1247,20 @@ impl Battle {
         }
     }
 
-    /// Picks the nearest enemy droid `i` can see, and tells its team where they are.
+    /// Droid `i` looks about it: becomes the more aware of each enemy it can see, the quicker the
+    /// more visible they are, and less of those it cannot (see [`Detection`]); picks a target
+    /// among those it has spotted, and tells its team where they are.
     fn look(&mut self, graph: &Graph, i: usize) {
-        let visible: Vec<usize> = self.enemies_of(i).filter(|&j| self.sees(graph, i, j)).collect();
+        let eagerness = self.eagerness(i);
+        let seen: Vec<(usize, f32)> = self.enemies_of(i).map(|j| (j, self.visibility(graph, i, j))).collect();
+        let mut visible = Vec::new();
+        for (j, seen) in seen {
+            let aware = &mut self.droids[i].aware[j];
+            aware.step(&AI.detection, seen, eagerness, LOOK_EVERY);
+            if seen > 0.0 && aware.spotted() {
+                visible.push(j);
+            }
+        }
         let team = self.droids[i].team.index();
         for &j in &visible {
             self.intel[team].saw(j, self.droids[j].position);
@@ -1052,7 +1277,7 @@ impl Battle {
         // to the one it has unless another is clearly better.
         let worth = |j: usize| {
             let them = &self.droids[j];
-            let in_the_open = !them.crouched && them.cover_spot().is_none();
+            let in_the_open = !them.crouched && !them.prone && them.cover_spot().is_none();
             team::target_worth((them.position - me).norm(), them.health / HEALTH, them.target == Some(i), in_the_open)
         };
         self.droids[i].target = team::target(&visible, self.droids[i].target, worth);
@@ -1092,14 +1317,38 @@ impl Battle {
             .map(|j| self.droids[j].position)
             .or_else(|| self.nearest_known_enemy(i));
         let task = self.droids[i].task.clone();
+        // Lying down only to hide behind low cover, or to fight where it is.
+        if !matches!(task, Task::Hidden { .. } | Task::Standing { .. }) {
+            self.droids[i].prone = false;
+        }
         match task {
             Task::Advance => {
+                // Pinned by fire it cannot answer, out in the open: to cover, or flat on the floor.
+                let pinned = self.droids[i].suppressed > 0.0 && self.droids[i].target.is_none() && self.droids[i].air.is_none();
+                if let (true, Some(threat)) = (pinned, threat) {
+                    if !self.take_cover(graph, i, threat, false) {
+                        let left = self.random((1.5, 3.0));
+                        let droid = &mut self.droids[i];
+                        droid.task = Task::Standing { left };
+                        droid.prone = true;
+                        droid.route.clear();
+                        droid.going_to = None;
+                    }
+                    return;
+                }
                 if let (Some(_), Some(threat)) = (self.droids[i].target, threat) {
                     self.droids[i].crouched = false;
                     if !self.take_cover(graph, i, threat, false) {
-                        let left = self.random((1.0, 2.0));
+                        // No cover to be had: most lie down to fight where they are - harder to
+                        // see from far off, and to hit - and the rest stand, stepping aside.
+                        let prone = self.random((0.0, 1.0)) < PRONE_CHANCE;
+                        let left = self.random(if prone { (2.0, 4.0) } else { (1.0, 2.0) });
                         self.droids[i].task = Task::Standing { left };
-                        if self.smart(i) {
+                        self.droids[i].prone = prone;
+                        if prone {
+                            self.droids[i].route.clear();
+                            self.droids[i].going_to = None;
+                        } else if self.smart(i) {
                             self.sidestep(i, threat);
                         }
                     }
@@ -1112,7 +1361,11 @@ impl Battle {
                         self.flank_point(i, threat).unwrap_or(threat)
                     }
                     Some(threat) => threat,
-                    None => self.objective(i),
+                    // Shooting heard, or shot at by someone unseen: that way.
+                    None => match self.droids[i].blind.at().or(self.droids[i].heard.map(|(at, _)| at)) {
+                        Some(at) => at,
+                        None => self.objective(i),
+                    },
                 };
                 self.walk_to(i, goal);
                 if self.droids[i].route.is_empty() {
@@ -1132,7 +1385,10 @@ impl Battle {
                 let position = self.covers[spot].position;
                 self.walk_to(i, position);
                 if (self.droids[i].position - position).norm() < 0.3 {
-                    self.droids[i].crouched = true;
+                    // Behind cover too low to crouch behind, it lies down.
+                    let prone = self.droids[i].cover_prone;
+                    self.droids[i].crouched = !prone;
+                    self.droids[i].prone = prone;
                     let left = self.random((0.6, 1.4));
                     self.droids[i].task = Task::Hidden { spot, peek, left };
                 }
@@ -1140,7 +1396,9 @@ impl Battle {
             Task::Hidden { spot, peek, left } => {
                 // Behind tall cover it stands with its back to it rather than crouching.
                 let tall = Droid::tall_cover(spot, peek, &self.covers).is_some();
-                self.droids[i].crouched = !tall;
+                let prone = !tall && self.droids[i].cover_prone;
+                self.droids[i].crouched = !tall && !prone;
+                self.droids[i].prone = prone;
                 let position = self.covers[spot].position;
                 if tall && (self.droids[i].position - position).norm() < 1.5 {
                     // Back in from leaning out round it.
@@ -1154,7 +1412,7 @@ impl Battle {
                 // Flanked: an enemy can see it where it crouches. Find better cover.
                 let exposed = self.enemies_of(i).any(|j| {
                     (self.droids[j].position - position).norm() < 40.0
-                        && self.sees_spot(graph, j, position)
+                        && self.sees_spot(graph, j, position, self.droids[i].eye_height())
                 });
                 if exposed {
                     if let Some(threat) = threat {
@@ -1233,7 +1491,9 @@ impl Battle {
             Task::Standing { left } => {
                 self.droids[i].route.clear();
                 self.droids[i].going_to = None;
-                if left - dt > 0.0 && self.droids[i].target.is_some() {
+                // Lying flat, it stays down while it is being shot at.
+                let pinned = self.droids[i].prone && self.droids[i].suppressed > 0.0;
+                if left - dt > 0.0 && (self.droids[i].target.is_some() || pinned) {
                     self.droids[i].task = Task::Standing { left: left - dt };
                 } else {
                     self.droids[i].task = Task::Advance;
@@ -1295,10 +1555,10 @@ impl Battle {
         team::covered(&AI.team, self.droids[i].position, mates, roll)
     }
 
-    /// Whether droid `j`, from where it stands, could see a crouched droid at `spot`.
-    fn sees_spot(&self, graph: &Graph, j: usize, spot: Vector3<f32>) -> bool {
+    /// Whether droid `j`, from where it stands, could see eyes `height` over `spot`.
+    fn sees_spot(&self, graph: &Graph, j: usize, spot: Vector3<f32>, height: f32) -> bool {
         let eyes = self.droids[j].eyes();
-        Self::clear(graph, eyes, spot + Vector3::y() * EYES_CROUCHED)
+        Self::clear(graph, eyes, spot + Vector3::y() * height)
     }
 
     /// Somewhere to head for in the enemy's half, kept until it is reached.
@@ -1389,17 +1649,23 @@ impl Battle {
         } else {
             Vec::new()
         };
-        let mut best: Option<(f32, usize, Vector3<f32>)> = None;
+        let mut best: Option<(f32, usize, Vector3<f32>, bool)> = None;
         for &(rank, s) in candidates.iter().take(24) {
             let spot = self.covers[s].position;
-            if !Self::blocked(graph, spot + Vector3::y() * EYES_CROUCHED, threat_eyes).is_some() {
+            // Hidden crouched behind it - or, too low for that, lying down.
+            let hides = |height: f32| Self::blocked(graph, spot + Vector3::y() * height, threat_eyes).is_some();
+            let prone = if hides(EYES_CROUCHED) {
+                false
+            } else if hides(EYES_PRONE) {
+                true
+            } else {
                 continue;
-            }
-            let crouched = spot + Vector3::y() * EYES_CROUCHED;
+            };
+            let crouched = spot + Vector3::y() * if prone { EYES_PRONE } else { EYES_CROUCHED };
             let seen = others.iter().filter(|eyes| Self::clear(graph, **eyes, crouched)).count();
             let crowded = mates.iter().any(|m| flat(m - spot).norm() < team::CROWDED);
             let worth = team::cover_worth(&AI.team, rank, seen, crowded);
-            if best.is_some_and(|(b, _, _)| b <= worth) {
+            if best.is_some_and(|(b, _, _, _)| b <= worth) {
                 continue;
             }
             // Low cover: shoot over it, standing.
@@ -1419,14 +1685,15 @@ impl Battle {
                 })
             };
             let Some(peek) = peek else { continue };
-            best = Some((worth, s, peek));
+            best = Some((worth, s, peek, prone));
             // As it used to, the first that will do.
             if !smart {
                 break;
             }
         }
-        if let Some((_, s, peek)) = best {
+        if let Some((_, s, peek, prone)) = best {
             self.droids[i].task = Task::ToCover { spot: s, peek };
+            self.droids[i].cover_prone = prone;
             self.droids[i].retreating = retreat;
             // Now and then it jumps as it breaks for cover: a short hop or a high one.
             if self.droids[i].air.is_none() && self.random((0.0, 1.0)) < JUMP_CHANCE {
@@ -1470,9 +1737,15 @@ impl Battle {
     fn shoot(&mut self, graph: &mut Graph, i: usize) {
         // At its target, or with none in sight, at where an enemy was just seen, to keep them
         // down: that goes into their cover, or wide.
+        let blind = self.droids[i].blind_at.zip(self.droids[i].blind.at());
         let (j, keeping_down) = match (self.droids[i].target, self.droids[i].suppress_at) {
             (Some(j), _) => (j, None),
             (None, Some((j, at))) => (j, Some(at)),
+            // Shot at by someone it cannot see: blind, back where the bolts came from.
+            (None, None) if blind.is_some() => {
+                let (j, at) = blind.unwrap();
+                (j, Some(blind::aim(&AI.blind, at, self.rng())))
+            }
             (None, None) => {
                 // Nothing to fire at: a burst under way stops.
                 self.droids[i].burst_left = 0;
@@ -1480,7 +1753,14 @@ impl Battle {
             }
         };
         // Not while its last shot has yet to leave the gun: each bolt goes as the gun fires.
-        if self.droids[i].reload > 0.0 || self.droids[i].crouched || !self.droids[j].alive() || self.droids[i].pending.is_some() {
+        let hidden = matches!(self.droids[i].task, Task::Hidden { .. });
+        if self.droids[i].reload > 0.0
+            || self.droids[i].crouched
+            || hidden
+            || self.droids[i].avatar.changing_posture()
+            || !self.droids[j].alive()
+            || self.droids[i].pending.is_some()
+        {
             return;
         }
         let (from, to) = (
@@ -1490,6 +1770,11 @@ impl Battle {
         // Only while facing them.
         let facing = heading_of(to - from).is_some_and(|h| angle_between(h, self.droids[i].heading) < 0.35);
         if !facing {
+            return;
+        }
+        // Its gun up against what it is behind - seeing over or round what its gun cannot: not a
+        // shot to take.
+        if Self::blocked(graph, from, to).is_some_and(|along| along < OWN_COVER) {
             return;
         }
         // The pistol, a shot at a time; the rifle, a burst at a time, as fast as it fires, out of
@@ -1527,6 +1812,9 @@ impl Battle {
         if !self.droids[j].route.is_empty() {
             chance *= 0.75;
         }
+        if self.droids[j].prone {
+            chance *= PRONE_HARDER;
+        }
         let hit_cover = Self::blocked(graph, from, to);
         let hit = keeping_down.is_none() && hit_cover.is_none() && self.random((0.0, 1.0)) < chance;
         // A miss goes a little wide.
@@ -1543,6 +1831,51 @@ impl Battle {
         let damage = self.random(DAMAGE) * if rifle { RIFLE_HARM } else { 1.0 };
         self.droids[i].fired = true;
         self.droids[i].pending = Some(Shot { target: j, end, hits: hit, damage, waited: 0.0 });
+    }
+
+    /// Droid `i` fires from `from`: every enemy the shot carries to along the floor (see
+    /// [`Heard`]) hears it - the more aware of `i` for it, the nearer - and, fighting no one it
+    /// can see, heads for about where it was.
+    fn shot_heard(&mut self, i: usize, from: Vector3<f32>) {
+        let team = self.droids[i].team;
+        let near = |d: &Droid| d.team != team && d.alive() && (d.position - from).norm() < SHOT_NOISE;
+        if !self.droids.iter().any(near) {
+            return;
+        }
+        let Some(noise) = self.mesh.as_ref().and_then(|mesh| Heard::at(mesh, from, SHOT_NOISE)) else { return };
+        for m in 0..self.droids.len() {
+            if !near(&self.droids[m]) {
+                continue;
+            }
+            let Some(nearness) = self.mesh.as_ref().and_then(|mesh| noise.nearness(mesh, self.droids[m].position)) else {
+                continue;
+            };
+            let eagerness = self.eagerness(m);
+            let wrong = HEARD_WRONG * (1.0 - nearness);
+            self.rng();
+            let at = match (self.mesh.as_ref(), self.rng.as_mut()) {
+                (Some(mesh), Some(rng)) if wrong > 0.1 => walk::spot_near(mesh, from, wrong, rng).unwrap_or(from),
+                _ => from,
+            };
+            let them = &mut self.droids[m];
+            them.aware[i].hear(&AI.detection, nearness, eagerness);
+            if them.target.is_none() {
+                them.heard = Some((at, 0.0));
+            }
+        }
+    }
+
+    /// `them` notices a bolt from droid `i`, fired from `from`: the more aware of `i`, as of a
+    /// noise right beside it; and if it cannot see `i`, a bolt from someone unseen (see
+    /// [`BlindFire`]).
+    fn shot_at_by(them: &mut Droid, i: usize, from: Vector3<f32>, eagerness: f32) {
+        them.aware[i].hear(&AI.detection, 1.0, eagerness);
+        if them.target != Some(i) {
+            them.blind.unseen_bolt(&AI.blind, from);
+            if them.blind.at().is_some() {
+                them.blind_at = Some(i);
+            }
+        }
     }
 
     /// Lets go the bolt of each droid whose pistol fired this frame, from its muzzle, and flies
@@ -1569,10 +1902,19 @@ impl Battle {
             if !self.droids[i].alive() {
                 continue;
             }
+            self.shot_heard(i, from);
             // The bolt goes the way the pistol points. Pointed near enough at the droid it was to
             // hit, it goes onto them; pointed further off, it hits them only if that way passes
             // them, and nothing of the arena is in between.
             let Some(pointing) = pointing.try_normalize(1.0e-3) else { continue };
+            // Its muzzle behind what it leans out round, or into what it shoots over: the bolt
+            // leaves from where its shot was found clear (see `shoot`), about where the gun is held.
+            let held = self.droids[i].eyes() - Vector3::y() * 0.35;
+            let from = if Self::blocked(graph, from, from + pointing * OWN_COVER).is_some() || !Self::clear(graph, held, from) {
+                held + pointing * 0.4
+            } else {
+                from
+            };
             let chest = self.droids[shot.target].chest();
             let Some(aimed) = (chest - from).try_normalize(1.0e-3) else { continue };
             // How far over the barrel was, for it to ask that much less next time.
@@ -1629,14 +1971,28 @@ impl Battle {
                     } else {
                         bolts.fire(graph, from, way);
                     }
-                    // Anyone it passes or lands near keeps their head down a moment.
+                    // Anyone it passes or lands near keeps their head down a moment; and anyone that
+                    // notices it go by - felt close, or seen in front - knows someone is shooting
+                    // at them, and not seeing who, after a few fires blind back where it came from.
                     let reach = Self::blocked(graph, from, from + way * 100.0).unwrap_or(100.0);
                     let team = self.droids[i].team;
-                    for them in self.droids.iter_mut().filter(|d| d.team != team && d.alive()) {
+                    let sight = sight(self.arena.sight);
+                    for m in 0..self.droids.len() {
+                        let alert = self.alert(m);
+                        let eagerness = self.eagerness(m);
+                        let them = &mut self.droids[m];
+                        if them.team == team || !them.alive() {
+                            continue;
+                        }
                         let chest = them.chest();
                         let along = (chest - from).dot(&way).clamp(0.0, reach);
-                        if (from + way * along - chest).norm() < AI.team.suppress_near {
+                        let nearest = from + way * along;
+                        let near = (nearest - chest).norm();
+                        if near < AI.team.suppress_near {
                             them.suppressed = AI.team.suppressed_for;
+                        }
+                        if bolts::notices(&AI.bolts, &sight, alert, them.position, them.heading, near, nearest) {
+                            Self::shot_at_by(them, i, from, eagerness);
                         }
                     }
                 }
@@ -1672,7 +2028,9 @@ impl Battle {
     /// Droid `i`'s bolt, fired from `from`, gets to droid `j` at `to`, for `damage`.
     fn hit(&mut self, graph: &mut Graph, i: usize, j: usize, damage: f32, from: Vector3<f32>, to: Vector3<f32>) {
         let distance = (to - from).norm();
+        let eagerness = self.eagerness(j);
         let target = &mut self.droids[j];
+        Self::shot_at_by(target, i, from, eagerness);
         target.health -= damage;
         target.hurt_flash = 0.12;
         if target.health <= 0.0 {
@@ -1745,8 +2103,10 @@ impl Battle {
             // Walking with no enemy known of, jogging to one, running for cover, sprinting when
             // falling back hurt.
             let running = matches!(self.droids[i].task, Task::ToCover { .. });
-            let knows = self.nearest_known_enemy(i).is_some() || self.droids[i].target.is_some();
-            let (posture, gait, fallback) = if self.droids[i].crouched {
+            let knows = self.alert(i).is_some();
+            let (posture, gait, fallback) = if self.droids[i].prone {
+                (Posture::Crawling, Gait::Walking, CRAWL_SPEED)
+            } else if self.droids[i].crouched {
                 (Posture::Crouching, Gait::Walking, WALK_SPEED * 0.5)
             } else if running && self.droids[i].retreating {
                 (Posture::Standing, Gait::Sprinting, RUN_SPEED * 1.4)
@@ -1761,7 +2121,8 @@ impl Battle {
             droid.gait = gait;
             let speed = droid.avatar.pace(posture, gait).unwrap_or(fallback);
             let mut way = Vector3::zeros();
-            let mut step = speed * dt;
+            // Getting down or up off the floor, it stops: its feet would slide.
+            let mut step = if droid.avatar.changing_posture() { 0.0 } else { speed * dt };
             while let Some(&next) = droid.route.last() {
                 let to = flat(next - droid.position);
                 let distance = to.norm();
@@ -1790,7 +2151,10 @@ impl Battle {
                 _ if along.is_some() => along,
                 (Some(j), _) => heading_of(self.droids[j].position - self.droids[i].position),
                 (None, Some((_, at))) => heading_of(at - self.droids[i].position),
-                (None, None) => heading_of(way),
+                (None, None) => match droid.blind.at() {
+                    Some(at) => heading_of(at - self.droids[i].position),
+                    None => heading_of(way),
+                },
             };
             let droid = &mut self.droids[i];
             if let Some(face) = face {
@@ -1881,7 +2245,7 @@ impl Battle {
             let raised = target.is_some();
             // Up, and to the left of ahead, to the target.
             let look = target.map_or((0.0, 0.0), |at| {
-                let to = at - (droid.position + Vector3::y() * if droid.crouched { EYES_CROUCHED } else { EYES_STANDING });
+                let to = at - droid.eyes();
                 let up = (to.y / to.norm().max(1.0e-3)).clamp(-1.0, 1.0).asin();
                 let left = heading_of(to).map_or(0.0, |h| wrap(h - droid.heading));
                 // Less what its barrel has been pointing over by.
@@ -1894,7 +2258,7 @@ impl Battle {
             let going = Going {
                 heading: Some(if strafing || speed > 0.1 { way } else { 0.0 }),
                 speed,
-                posture: if droid.crouched { Posture::Crouching } else { Posture::Standing },
+                posture: droid.posture(),
                 gait: droid.gait,
                 grounded: droid.air.is_none(),
                 jumped: std::mem::take(&mut droid.jumped),
@@ -1923,11 +2287,23 @@ impl Battle {
         let rotation = UnitQuaternion::from_axis_angle(&Vector3::y_axis(), self.yaw)
             * UnitQuaternion::from_axis_angle(&Vector3::x_axis(), self.pitch);
         if let Some(i) = self.following.filter(|&i| i < self.droids.len()) {
-            // Behind and above the droid being followed, looking the way it faces.
             let droid = &self.droids[i];
             self.yaw = droid.heading;
-            self.pitch = 20f32.to_radians();
-            self.camera_position = droid.position + Vector3::y() * 3.0 - forward(droid.heading) * 5.0;
+            if self.first_person && droid.alive() {
+                // Through its eyes - its face, its own body out of the way, as the player's is -
+                // looking the way it faces, and up or down at whatever it is aiming at.
+                let eyes = droid.avatar.face_at(graph).unwrap_or_else(|| droid.eyes()) + forward(droid.heading) * 0.1;
+                let up = droid.target_at.map_or(0.0, |at| {
+                    let to = at - eyes;
+                    (-to.y).atan2(flat(to).norm())
+                });
+                self.pitch = up;
+                self.camera_position = eyes;
+            } else {
+                // Behind and above the droid being followed, looking the way it faces.
+                self.pitch = 20f32.to_radians();
+                self.camera_position = droid.position + Vector3::y() * 3.0 - forward(droid.heading) * 5.0;
+            }
         } else {
             let pressed = |key| self.keys.contains(&key);
             let speed = if pressed(KeyCode::ShiftLeft) || pressed(KeyCode::ShiftRight) { 30.0 } else { 12.0 };
@@ -1950,6 +2326,10 @@ impl Battle {
             if way.norm() > 0.0 {
                 self.camera_position += way.normalize() * speed * dt;
             }
+        }
+        for (i, droid) in self.droids.iter().enumerate() {
+            let seen_through = self.first_person && self.following == Some(i) && droid.alive();
+            droid.avatar.set_visible(graph, !seen_through);
         }
         graph[self.camera]
             .local_transform_mut()
@@ -1989,7 +2369,15 @@ impl Battle {
                     d.health.max(0.0),
                     d.kills,
                     d.deaths,
-                    if d.alive() { d.task.label() } else { "down" }
+                    if !d.alive() {
+                        "down"
+                    } else if d.target.is_none() && d.blind.at().is_some() {
+                        "firing blind"
+                    } else if d.target.is_none() && d.heard.is_some() && d.task == Task::Advance {
+                        "going to shooting heard"
+                    } else {
+                        d.task.label()
+                    }
                 ),
                 None => String::new(),
             },
@@ -2026,6 +2414,8 @@ impl Battle {
                         KeyCode::Escape => ctx.loop_controller.exit(),
                         KeyCode::Space => self.paused = !self.paused,
                         KeyCode::KeyF => self.following = None,
+                        // Following a droid: through its eyes, or from behind it.
+                        KeyCode::KeyV => self.first_person = !self.first_person,
                         KeyCode::Tab if !self.droids.is_empty() => {
                             self.following = Some(self.following.map_or(0, |i| (i + 1) % self.droids.len()));
                         }

@@ -298,11 +298,25 @@ MAZE_MODEL=data/arena/combat_map.glb cargo run
 
 `examples/team_battle.rs` plays the same arena as a battle between two teams of droids, red and
 cyan, five a side, all of them AI: they fight from cover, fall back when hurt and come back at
-their own end when downed, and the first team to 30 kills wins. The camera is free to fly about
-the arena or follow one droid (Tab).
+their own end when downed, and the first team to 30 kills wins. They see, hear and notice the
+enemy as the game's sentries do, with hydroxus-ai: awareness builds gradually, shots are heard
+along the floor, and a droid shot at by someone it cannot see fires blind back. They lie prone
+behind cover too low to crouch behind, and to fight in the open. The camera is free to fly about
+the arena or follow one droid (Tab), from behind or through its eyes (V).
 
 ```sh
 cargo run --release --example team_battle
+```
+
+`examples/team_battle_forest.rs` is the same battle in a foggy forest of abandoned buildings,
+`data/arena/tb_forest.glb`, 112 by 64 m. At the middle is a hangar with its roof fallen in. Each
+side has a barracks, a roofless ruin and a watchtower, with wrecks, containers, sandbags and fallen
+trunks among the trees, and the droids see no further than 30 m. `data/arena/tb_forest.py` builds
+it in Blender from the Foggy Forest's pieces
+(`blender -b --python data/arena/tb_forest.py -- --seed 3 --glb data/arena/tb_forest.glb`).
+
+```sh
+cargo run --release --example team_battle_forest
 ```
 
 `data/arena/ctf_map.glb` is an arena for capture the flag, 84 by 52 m. Red's base is at the -x

@@ -28,6 +28,9 @@
 /// [`hydroxus_ai::Tuning`]) - hydroxus-ai's own numbers, which are Maze's.
 pub const AI: hydroxus_ai::Tuning = hydroxus_ai::Tuning::DEFAULT;
 
+/// The fog over the foggy maps (see `ctf::Map::foggy`), for the examples that fight in them.
+pub use ctf::FOG;
+
 mod alarm;
 mod chips;
 mod computer;
