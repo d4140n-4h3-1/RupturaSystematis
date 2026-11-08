@@ -1,5 +1,6 @@
 //! The game itself: loading a level, playing rounds in it, and the player's input.
 
+use hydroxus_ai::perception::sight::Seeing;
 use hydroxus_ai::perception::detection::{bearing, most_aware, stage_at, Stage as Awareness};
 use hydroxus_ai::social::{
     chat::Topic,
@@ -1183,6 +1184,13 @@ impl MazeGame {
     /// Whether fog lies over the level (see [`ctf::Map::foggy`]).
     fn foggy(&self) -> bool {
         ctf::map_at(&self.model_path).is_some_and(|map| map.foggy)
+    }
+
+    /// What the droids see the player - or one another - by: in the dark or not, as `dark`
+    /// says, and through the level's fog, if any, which they see only so far into, and less well
+    /// the further, as the player does (see [`ctf::sight_fog`]). Hearing goes through it.
+    fn seeing(&self, dark: bool) -> Seeing {
+        Seeing { dark, fog: self.foggy().then(|| ctf::sight_fog(&ctf::FOG)) }
     }
 
     /// Whether it is night in the level (see [`ctf::Map::night`]).
@@ -2378,6 +2386,12 @@ impl MazeGame {
         // The navmesh caught up with any door opened or shut, firewall put down, since last time.
         let changed = self.level.sync_navmesh();
         let populating = liveries.is_some();
+        // With the lights off, the player is hard to see, unless their flashlight gives them
+        // away; a sentry's eyes are no flashlight. Fog takes from both.
+        let (seeing, sentries_seen) = (
+            self.seeing(self.lights_off && !self.player.flashlight_on()),
+            self.seeing(self.lights_off),
+        );
         let (Some(mesh), Some(rng)) = (&self.level.navmesh, self.rng.as_mut()) else {
             return News::default();
         };
@@ -2478,18 +2492,15 @@ impl MazeGame {
             }
         }
         let graph = &scene.graph;
-        // With the lights off, the player is hard to see, unless their flashlight gives them
-        // away.
-        let in_the_dark = self.lights_off && !self.player.flashlight_on();
         let posture = self.player.posture();
         // The more stars the player is wanted at, the more relentless security is after them.
         self.inhabitants.set_wanted(self.wanted.min(hud::WANTED_MOST));
         self.inhabitants
-            .look_for_player(player, posture, in_the_dark, self.player.armed(), |there| self.player.can_see(graph, there), ctx.dt);
+            .look_for_player(player, posture, seeing, self.player.armed(), |there| self.player.can_see(graph, there), ctx.dt);
         // A sentry's eyes are no flashlight: with the lights off, the others see it only near.
         let script = self.script.as_ref();
         self.inhabitants
-            .join_chases(graph, self.lights_off, |character| {
+            .join_chases(graph, sentries_seen, |character| {
                 script.is_some_and(|script| is_sentry(script, character))
             });
         // In capture the flag, the drones on a side, for the other side's droids to fight.
@@ -2705,12 +2716,12 @@ impl MazeGame {
         };
         let graph = &ctx.scenes[self.scene].graph;
         let player = self.player.feet(graph);
-        let in_the_dark = self.lights_off && !self.player.flashlight_on();
+        let seeing = self.seeing(self.lights_off && !self.player.flashlight_on());
         let witnesses = self.inhabitants.witnesses(
             graph,
             n,
             (player, self.player.collider()),
-            in_the_dark,
+            seeing,
             |seer, shot| minds(script, seer, shot),
         );
         // Where it was done, as each saw it: where the player stood, if it saw them, or else
@@ -2822,10 +2833,10 @@ impl MazeGame {
         let sentries: Vec<bool> = (0..script.characters.len()).map(|c| is_sentry(script, c)).collect();
         let sentry = |c: usize| sentries.get(c).copied().unwrap_or(false);
         let graph = &ctx.scenes[self.scene].graph;
-        let in_the_dark = self.lights_off && !self.player.flashlight_on();
+        let seeing = self.seeing(self.lights_off && !self.player.flashlight_on());
         let found = self
             .inhabitants
-            .find_bodies(graph, in_the_dark, ctx.dt, |seer, body| minds(script, seer, body));
+            .find_bodies(graph, seeing, ctx.dt, |seer, body| minds(script, seer, body));
         let reports = self.inhabitants.report(ctx.dt, sentry);
         for (m, at) in found {
             match self.threatened(m).map(|threatened| threatened.then) {
@@ -3292,8 +3303,8 @@ impl MazeGame {
     /// what they think of them moves, and they talk of it (see [`Inhabitants::saw`]).
     fn seen_doing(&mut self, graph: &Graph, deed: Deed) {
         let player = self.player.feet(graph);
-        let in_the_dark = self.lights_off && !self.player.flashlight_on();
-        let saw = self.inhabitants.onlookers(graph, (player, self.player.collider()), in_the_dark, ONLOOK_REACH);
+        let seeing = self.seeing(self.lights_off && !self.player.flashlight_on());
+        let saw = self.inhabitants.onlookers(graph, (player, self.player.collider()), seeing, ONLOOK_REACH);
         let changed = self.inhabitants.saw(&saw, deed, player, None);
         self.factions_changed(changed);
     }
@@ -3585,8 +3596,8 @@ impl MazeGame {
         };
         let graph = &ctx.scenes[self.scene].graph;
         let player = self.player.feet(graph);
-        let in_the_dark = self.lights_off && !self.player.flashlight_on();
-        let onlookers = self.inhabitants.onlookers(graph, (player, self.player.collider()), in_the_dark, tuning.near);
+        let seeing = self.seeing(self.lights_off && !self.player.flashlight_on());
+        let onlookers = self.inhabitants.onlookers(graph, (player, self.player.collider()), seeing, tuning.near);
         let Some(n) = onlookers
             .into_iter()
             .filter(|&n| self.inhabitants.free_to_pass_remark(n))
@@ -4907,7 +4918,7 @@ impl MazeGame {
         // What the guards see: one escaped, in the precinct, they go after; one at something, they
         // stop, and add to their sentence.
         let graph = &ctx.scenes[self.scene].graph;
-        let in_the_dark = self.lights_off && !self.player.flashlight_on();
+        let seeing = self.seeing(self.lights_off && !self.player.flashlight_on());
         let glass = self.level.precincts.glass(p);
         let seen = self.script.as_ref().and_then(|script| {
             let sentries: Vec<bool> = (0..script.characters.len()).map(|c| is_sentry(script, c)).collect();
@@ -4916,7 +4927,7 @@ impl MazeGame {
                 feet,
                 self.player.collider(),
                 self.player.posture(),
-                in_the_dark,
+                seeing,
                 &glass,
                 |c| sentries.get(c).copied().unwrap_or(false),
             )
@@ -5401,6 +5412,9 @@ impl MazeGame {
             self.call_drone(&mut ctx.scenes[self.scene].graph, at, why);
         }
         let sided = self.sided();
+        // The drones see through the level's fog, if any, as the droids do; the player, with the
+        // lights off, only near, unless their flashlight gives them away.
+        let (seeing, lit) = (self.seeing(self.lights_off && !self.player.flashlight_on()), self.seeing(false));
         let (Some(mesh), Some(rng)) = (self.level.navmesh.as_ref(), self.rng.as_mut()) else {
             return;
         };
@@ -5410,7 +5424,7 @@ impl MazeGame {
             middle: self.player.position(graph),
             collider: self.player.collider(),
             posture: self.player.posture(),
-            in_the_dark: self.lights_off && !self.player.flashlight_on(),
+            seeing,
             armed: self.player.armed(),
         };
         self.drones_see_player = self.drones.iter().any(|drone| {
@@ -5430,7 +5444,7 @@ impl MazeGame {
                     middle,
                     collider,
                     posture: Posture::Standing,
-                    in_the_dark: false,
+                    seeing: lit,
                     armed: true,
                 });
                 let drones = self.drones.iter().filter(|d| d.side() == Some(side.other())).filter_map(Drone::as_target);
@@ -6472,7 +6486,7 @@ const NOBODY: Target = Target {
     middle: Vector3::new(0.0, -1000.0, 0.0),
     collider: Handle::NONE,
     posture: Posture::Standing,
-    in_the_dark: true,
+    seeing: Seeing { dark: true, fog: None },
     armed: false,
 };
 

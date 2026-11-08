@@ -115,7 +115,7 @@ use hydroxus_ai::{
         bolts,
         detection::{most_aware, Change, Detection, Stage},
         hearing::Heard,
-        sight::Sight,
+        sight::{Seeing, Sight},
         witness::knows_who,
     },
     tactics::{
@@ -3668,7 +3668,7 @@ impl Inhabitants {
 
     /// Has each hostile droid look for the player, at `player` in `posture`, whom it can see
     /// wherever `in_sight` says nothing is in the way from the player to it, and [`Sight`] says
-    /// they are in front of it and near enough - `in_the_dark` or not - for another `dt`. On Alert
+    /// they are in front of it and near enough - by what there is to see by (`seeing`: dark or light, and fog) - for another `dt`. On Alert
     /// it sees them at once; otherwise it becomes aware of them gradually, the more quickly the
     /// more visible they are, and the more so searching (see
     /// [`hydroxus_ai::perception::detection`]), and sees them once it has.
@@ -3676,7 +3676,7 @@ impl Inhabitants {
         &mut self,
         player: Vector3<f32>,
         posture: Posture,
-        in_the_dark: bool,
+        seeing: Seeing,
         armed: bool,
         in_sight: impl Fn(Vector3<f32>) -> bool,
         dt: f32,
@@ -3688,7 +3688,7 @@ impl Inhabitants {
             // it: only one hostile and watching becomes aware of them for it.
             let looking = !droid.down && droid.hunts_player();
             let seen = match looking {
-                true => seen_by(droid.alert, droid.feet, droid.heading, player, posture, in_the_dark, &in_sight),
+                true => seen_by(droid.alert, droid.feet, droid.heading, player, posture, seeing, &in_sight),
                 false => 0.0,
             };
             droid.in_view = seen > 0.0;
@@ -3759,14 +3759,14 @@ impl Inhabitants {
 
     /// Has each sentry - each droid whose kind, as an index into the conversations' characters,
     /// `sentry` says is one - that sees another sentry after the player go after them too, as if
-    /// it saw them itself. It sees the other as [`could_see_other`] has it, `in_the_dark` or not,
+    /// it saw them itself. It sees the other as [`could_see_other`] has it, by what there is to see by (`seeing`: dark or light, and fog),
     /// and as long as nothing is in the way. Calm, it stands a moment first, as one does that has
     /// just turned hostile. Call it after [`Self::look_for_player`]: those after the player are the
     /// ones that can see them, or see another that can.
     pub fn join_chases(
         &mut self,
         graph: &Graph,
-        in_the_dark: bool,
+        seeing: Seeing,
         sentry: impl Fn(usize) -> bool,
     ) {
         let watches: Vec<Watch> = self
@@ -3783,7 +3783,7 @@ impl Inhabitants {
             })
             .collect();
         let droids = &self.droids;
-        let joining = joiners(&watches, in_the_dark, |m, n| {
+        let joining = joiners(&watches, seeing, |m, n| {
             in_sight_of(graph, &droids[m], &droids[n])
         });
         for m in joining {
@@ -3814,7 +3814,7 @@ impl Inhabitants {
         minds: impl Fn(usize) -> bool,
         dt: f32,
     ) -> Vec<(usize, Uneasy)> {
-        let (player, posture, in_the_dark) = watched;
+        let (player, posture, seeing) = watched;
         let mut stages = Vec::new();
         for (n, droid) in self.droids.iter_mut().enumerate() {
             let minding = droid.alert.is_none()
@@ -3838,7 +3838,7 @@ impl Inhabitants {
             let distance = flat(player - droid.feet).norm();
             let sees = armed
                 && distance <= AI.threat.unease_range
-                && Sight::default().could_see(None, droid.feet, droid.heading, player, posture.into(), in_the_dark)
+                && Sight::default().could_see(None, droid.feet, droid.heading, player, posture.into(), seeing)
                 && in_sight(droid.feet);
             if let Some(stage) = droid.unease.step(&AI.threat, sees, distance, dt) {
                 if stage == Uneasy::Settled {
@@ -3869,7 +3869,7 @@ impl Inhabitants {
         crowded: impl Fn(usize) -> Option<f32>,
         dt: f32,
     ) -> Vec<(usize, Threat)> {
-        let (player, posture, in_the_dark) = watched;
+        let (player, posture, seeing) = watched;
         // A pair or group takes the player standing over any of it as one, through the one that
         // speaks for it: none of the rest warn them as well.
         let mut crowding = vec![false; self.droids.len()];
@@ -3896,7 +3896,7 @@ impl Inhabitants {
             let chest = droid.feet + Vector3::new(0.0, CHEST, 0.0);
             let aimed = minding
                 && aim.is_some_and(|(eye, ahead)| pointed_at(&AI.threat, eye, ahead, chest))
-                && Sight::default().could_see(None, droid.feet, droid.heading, player, posture.into(), in_the_dark)
+                && Sight::default().could_see(None, droid.feet, droid.heading, player, posture.into(), seeing)
                 && in_sight(droid.feet);
             let aimed = aimed || (minding && crowding[n]);
             if !minding {
@@ -3984,7 +3984,7 @@ impl Inhabitants {
     }
 
     /// The player at `player`, their body `them`, has shot the `n`th droid. Those about it that
-    /// could see it done - the one shot, or the player - within [`WITNESS_REACH`], `in_the_dark`
+    /// could see it done - the one shot, or the player - within [`WITNESS_REACH`], `seeing`
     /// or not, are witnesses to it: going about their business, or searching, but not after the
     /// player already, nor busy with a shootout or a chase, and of a kind that `minds`, by its
     /// kind and the one shot's. Them, as indices, each with whether it knows who did it: whether
@@ -3996,7 +3996,7 @@ impl Inhabitants {
         graph: &Graph,
         n: usize,
         (player, them): (Vector3<f32>, Handle<Collider>),
-        in_the_dark: bool,
+        seeing: Seeing,
         minds: impl Fn(usize, usize) -> bool,
     ) -> Vec<(usize, bool)> {
         let Some(shot) = self.droids.get(n) else {
@@ -4029,7 +4029,7 @@ impl Inhabitants {
             .filter_map(|(m, droid)| {
                 let eyes = droid.feet + Vector3::new(0.0, FACE_HEIGHT, 0.0);
                 let sees = |feet: Vector3<f32>, chest: f32| {
-                    could_see_other(droid.alert, droid.feet, droid.heading, feet, in_the_dark)
+                    could_see_other(droid.alert, droid.feet, droid.heading, feet, seeing)
                         && clear_between(graph, eyes, feet + Vector3::new(0.0, chest, 0.0), |c| passes(droid, c))
                 };
                 let sees_player = sees(player, PLAYER_CHEST);
@@ -4050,13 +4050,13 @@ impl Inhabitants {
 
     /// Every [`BODY_LOOK_EVERY`] seconds of `dt`, those going about their business look for
     /// anyone the player has shot down that no one has come across yet: each that one of them
-    /// can see lying within [`BODY_SIGHT`], `in_the_dark` or not, of a kind that `minds` by its
+    /// can see lying within [`BODY_SIGHT`], by what there is to see by (`seeing`: dark or light, and fog), of a kind that `minds` by its
     /// own kind and the one lying there's, has been found, by the first to see it. Who found
     /// one, and where it lies.
     pub fn find_bodies(
         &mut self,
         graph: &Graph,
-        in_the_dark: bool,
+        seeing: Seeing,
         dt: f32,
         minds: impl Fn(usize, usize) -> bool,
     ) -> Vec<(usize, Vector3<f32>)> {
@@ -4088,7 +4088,7 @@ impl Inhabitants {
                     && droid.hunts_player()
                     && flat(droid.feet - lies).norm() < BODY_SIGHT
                     && minds(droid.character, body.character)
-                    && could_see_other(droid.alert, droid.feet, droid.heading, body.feet, in_the_dark)
+                    && could_see_other(droid.alert, droid.feet, droid.heading, body.feet, seeing)
                     && clear_between(graph, droid.feet + Vector3::new(0.0, FACE_HEIGHT, 0.0), lies, |collider| {
                         collider == droid.collider
                             || collider == body.collider
@@ -4108,13 +4108,13 @@ impl Inhabitants {
     }
 
     /// Those standing within `reach` of the `player`'s feet, their body `them`, that can see them -
-    /// `in_the_dark` or not - as they would see them standing, and nothing in the way: to see
+    /// by what there is to see by (`seeing`: dark or light, and fog) - as they would see them standing, and nothing in the way: to see
     /// what they do.
     pub fn onlookers(
         &self,
         graph: &Graph,
         (player, them): (Vector3<f32>, Handle<Collider>),
-        in_the_dark: bool,
+        seeing: Seeing,
         reach: f32,
     ) -> Vec<usize> {
         (0..self.droids.len())
@@ -4122,7 +4122,7 @@ impl Inhabitants {
                 let droid = &self.droids[n];
                 !droid.down
                     && flat(droid.feet - player).norm() < reach
-                    && could_see_other(droid.alert, droid.feet, droid.heading, player, in_the_dark)
+                    && could_see_other(droid.alert, droid.feet, droid.heading, player, seeing)
                     && clear_between(
                         graph,
                         droid.feet + Vector3::new(0.0, FACE_HEIGHT, 0.0),
@@ -4495,7 +4495,7 @@ impl Inhabitants {
     }
 
     /// The first standing droid of a kind that `sentry` says is one, calm or not, that sees the
-    /// player at `at` - their body `them` - standing or as `posture` says, `in_the_dark` or not,
+    /// player at `at` - their body `them` - standing or as `posture` says, by what there is to see by (`seeing`: dark or light, and fog),
     /// with nothing in the way but what is `see_through`, such as a firewall: as it would see them
     /// at all.
     #[allow(clippy::too_many_arguments)]
@@ -4505,7 +4505,7 @@ impl Inhabitants {
         at: Vector3<f32>,
         them: Handle<Collider>,
         posture: Posture,
-        in_the_dark: bool,
+        seeing: Seeing,
         see_through: &[Handle<Collider>],
         sentry: impl Fn(usize) -> bool,
     ) -> Option<usize> {
@@ -4513,7 +4513,7 @@ impl Inhabitants {
             !droid.down
                 && droid.side.is_none()
                 && sentry(droid.character)
-                && Sight::default().could_see(droid.alert, droid.feet, droid.heading, at, posture.into(), in_the_dark)
+                && Sight::default().could_see(droid.alert, droid.feet, droid.heading, at, posture.into(), seeing)
                 && clear_between(
                     graph,
                     droid.feet + Vector3::new(0.0, FACE_HEIGHT, 0.0),
@@ -5059,7 +5059,7 @@ const RELENTLESS_PER_STAR: f32 = 0.5;
 const KEENER_PER_STAR: f32 = 0.15;
 
 /// How visible the player at `player` in `posture` is to a droid at `feet` facing `heading`, in
-/// `alert` - or calm, with none - `in_the_dark` or not: as
+/// `alert` - or calm, with none - by what there is to see by (`seeing`: dark or light, and fog): as
 /// [`Sight::visibility`](hydroxus_ai::perception::sight::Sight::visibility) has it, and 0 wherever
 /// `in_sight` says something is in the way.
 fn seen_by(
@@ -5068,10 +5068,10 @@ fn seen_by(
     heading: f32,
     player: Vector3<f32>,
     posture: Posture,
-    in_the_dark: bool,
+    seeing: Seeing,
     in_sight: &dyn Fn(Vector3<f32>) -> bool,
 ) -> f32 {
-    let visible = AI.sight.visibility(alert, feet, heading, player, posture.into(), in_the_dark);
+    let visible = AI.sight.visibility(alert, feet, heading, player, posture.into(), seeing);
     if visible > 0.0 && in_sight(feet) { visible } else { 0.0 }
 }
 
@@ -5095,10 +5095,22 @@ mod tests {
         let (feet, ahead, behind) = (Vector3::zeros(), Vector3::new(0.0, 0.0, 4.0), Vector3::new(0.0, 0.0, -4.0));
         let clear = |_: Vector3<f32>| true;
         let walled = |_: Vector3<f32>| false;
-        assert!(seen_by(None, feet, 0.0, ahead, Posture::Standing, false, &clear) > 0.0, "calm, it sees them all the same");
-        assert_eq!(seen_by(None, feet, 0.0, behind, Posture::Standing, false, &clear), 0.0, "not behind it");
-        assert_eq!(seen_by(None, feet, 0.0, ahead, Posture::Standing, false, &walled), 0.0, "not through a wall");
-        assert!(seen_by(Some(Alert::Caution), feet, 0.0, ahead, Posture::Standing, false, &clear) > 0.0);
+        assert!(seen_by(None, feet, 0.0, ahead, Posture::Standing, false.into(), &clear) > 0.0, "calm, it sees them all the same");
+        assert_eq!(seen_by(None, feet, 0.0, behind, Posture::Standing, false.into(), &clear), 0.0, "not behind it");
+        assert_eq!(seen_by(None, feet, 0.0, ahead, Posture::Standing, false.into(), &walled), 0.0, "not through a wall");
+        assert!(seen_by(Some(Alert::Caution), feet, 0.0, ahead, Posture::Standing, false.into(), &clear) > 0.0);
+    }
+
+    #[test]
+    fn in_the_foggy_maps_fog_the_player_is_harder_to_see_far_off() {
+        let feet = Vector3::zeros();
+        let clear = |_: Vector3<f32>| true;
+        let fog = Seeing { dark: false, fog: Some(crate::ctf::sight_fog(&crate::ctf::FOG)) };
+        let (near, far) = (Vector3::new(0.0, 0.0, 2.5), Vector3::new(0.0, 0.0, 20.0));
+        let seen = |at, seeing| seen_by(Some(Alert::Alert), feet, 0.0, at, Posture::Standing, seeing, &clear);
+        assert_eq!(seen(near, fog), seen(near, false.into()), "right in front of it, the fog has yet to start");
+        assert!(seen(far, fog) < 0.65 * seen(far, false.into()), "far off, much less");
+        assert!(seen(far, fog) > 0.0, "but seen");
     }
 
     #[test]

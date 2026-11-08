@@ -99,7 +99,7 @@ use hydroxus_ai::{
     },
 };
 use maze::{
-    AI,
+    sight_fog, AI,
     dismember,
     player::{
         avatar::{Avatar, Going, Wall},
@@ -143,8 +143,9 @@ pub const COMBAT: Arena = Arena {
 };
 
 /// The forest: abandoned buildings among the trees, in the Foggy Forest's fog
-/// (`data/arena/tb_forest.py`). The droids see less far in it: 30 m, where the fog has taken
-/// more than half of what is there.
+/// (`data/arena/tb_forest.py`). The droids see as far as in the combat arena, but the fog takes
+/// that down: they make out a droid only as well as it shows through it, half as well 20 m off,
+/// and none past about 45 m (see [`Battle::seeing`]). They hear as well as ever.
 pub const FOREST: Arena = Arena {
     title: "Team battle - forest",
     map: "data/arena/tb_forest.glb",
@@ -152,7 +153,7 @@ pub const FOREST: Arena = Arena {
     ambient: Color::opaque(118, 124, 120),
     fog: Some(maze::FOG),
     sun: Some(0.6),
-    sight: 30.0,
+    sight: 45.0,
     // Over one long side, looking across with a team to either side.
     camera: [0.0, 14.0, -40.0],
     pitch: 28.0,
@@ -1184,6 +1185,12 @@ impl Battle {
         (0..self.droids.len()).filter(move |&j| self.droids[j].team != team && self.droids[j].alive())
     }
 
+    /// What there is to see by in the arena: light, and its fog, if any - which droids see
+    /// through only so far, and less well the further, as the player does; hearing goes through.
+    fn seeing(&self) -> Seeing {
+        Seeing { dark: false, fog: self.arena.fog.as_ref().map(sight_fog) }
+    }
+
     /// How visible droid `j` is to droid `i`, from 0 to 1 (see [`Sight::visibility`]): in
     /// front of it, nearer and standing the more so, and nothing in the way. Fighting, it sees as
     /// far whether they crouch or not.
@@ -1194,7 +1201,7 @@ impl Battle {
             Posture::Crouching => Stance::Crouching,
             Posture::Standing => Stance::Standing,
         };
-        let seen = sight(self.arena.sight).visibility(self.alert(i), me.position, me.heading, them.position, stance, false);
+        let seen = sight(self.arena.sight).visibility(self.alert(i), me.position, me.heading, them.position, stance, self.seeing());
         if seen > 0.0 && (Self::clear(graph, me.eyes(), them.eyes()) || Self::clear(graph, me.eyes(), them.chest())) {
             seen
         } else {

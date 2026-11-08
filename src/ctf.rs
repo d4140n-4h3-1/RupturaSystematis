@@ -46,6 +46,17 @@ pub const FOG: fyrox::scene::Fog = fyrox::scene::Fog {
     sky_opacity: 1.0,
 };
 
+/// The fog `fog` is drawn as, for the droids to see through: they see about as far in it as the
+/// player does (see [`hydroxus_ai::perception::sight::Fog`]).
+pub fn sight_fog(fog: &fyrox::scene::Fog) -> hydroxus_ai::perception::sight::Fog {
+    hydroxus_ai::perception::sight::Fog {
+        density: fog.density,
+        start: fog.start,
+        base_height: fog.base_height,
+        height_falloff: fog.height_falloff,
+    }
+}
+
 /// The Grid: a city traced in light on a platform in the void.
 pub const GRID: Map = Map {
     name: "Grid",

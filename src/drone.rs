@@ -406,7 +406,8 @@ pub struct Target {
     pub middle: Vector3<f32>,
     pub collider: Handle<Collider>,
     pub posture: Posture,
-    pub in_the_dark: bool,
+    /// What there is to see them by: dark or light, and fog.
+    pub seeing: hydroxus_ai::perception::sight::Seeing,
     pub armed: bool,
 }
 
@@ -648,7 +649,7 @@ impl Drone {
             middle: self.mind.at,
             collider: self.collider,
             posture: Posture::Standing,
-            in_the_dark: false,
+            seeing: hydroxus_ai::perception::sight::Seeing::default(),
             armed: true,
         })
     }
@@ -960,7 +961,7 @@ impl Drone {
         };
         let under = self.mind.at - Vector3::new(0.0, HOVER, 0.0);
         let stance = player.posture.into();
-        let visible = crate::AI.sight.visibility(Some(alert), under, self.mind.heading, player.feet, stance, player.in_the_dark);
+        let visible = crate::AI.sight.visibility(Some(alert), under, self.mind.heading, player.feet, stance, player.seeing);
         if visible <= 0.0 {
             return 0.0;
         }
