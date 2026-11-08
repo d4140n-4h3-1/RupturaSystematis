@@ -4,8 +4,9 @@
 //! `maze::player::avatar`): red in the hostile droid's colours, `data/droid_hostile.glb`, and cyan
 //! in the full deform droid's, `data/droid_full_deform.glb`, with every one of the game's droid's
 //! animations: walking with no enemy about, jogging to one, running for cover and sprinting when
-//! falling back hurt - skidding as they stop and turn - strafing and crouch-strafing while they
-//! face a target, a jump now and then as they break for cover, the gun drawn, raised, aimed up,
+//! falling back hurt - skidding as they stop and turn, and standing, stepping round to face
+//! another way rather than turning on their heels, their body following where they look -
+//! strafing and crouch-strafing while they face a target, a jump now and then as they break for cover, the gun drawn, raised, aimed up,
 //! down and to the side at the target and fired - a glowing bolt from its muzzle, the game's own
 //! (see `maze::player::pistol`), green from a pistol and blue from a rifle, which does its harm
 //! when it gets there - and holstered once the fighting is over. Shot
@@ -197,6 +198,9 @@ const HEADROOM: f32 = 2.0;
 const WALK_SPEED: f32 = 1.8;
 const RUN_SPEED: f32 = 3.0;
 const TURN_SPEED: f32 = 8.0;
+/// How far off a target a droid's body can be turned, in radians, for it to fire at them: as far
+/// as its aim reaches round. Further, it steps round first.
+const BODY_AIM: f32 = 0.9;
 
 /// Eye and chest heights, standing and crouched. Low cover is about 1.1 m tall, so a crouched
 /// droid behind it is hidden and a standing one can shoot over it.
@@ -353,6 +357,9 @@ struct Droid {
     ragdoll: Option<Ragdoll>,
     fallen: bool,
     heading: f32,
+    /// The way its root was last turned, which its body steps round after; none for a body just
+    /// made.
+    shown: Option<f32>,
     health: f32,
     /// Seconds until it comes back, while dead.
     dead_for: Option<f32>,
@@ -1054,6 +1061,9 @@ impl Battle {
             return None;
         };
         avatar.set_eyes(Some(team.color()));
+        // Standing still, it steps round to turn rather than turning on its heels.
+        let mut avatar = avatar;
+        avatar.set_steps_round(true);
         let likes_rifle = self.random((0.0, 1.0));
         Some(Droid {
             team,
@@ -1079,6 +1089,7 @@ impl Battle {
             ragdoll: None,
             fallen: false,
             heading: 0.0,
+            shown: None,
             health: HEALTH,
             dead_for: None,
             route: Vec::new(),
@@ -1767,8 +1778,14 @@ impl Battle {
             self.droids[i].eyes() - Vector3::y() * 0.35,
             keeping_down.unwrap_or_else(|| self.droids[j].chest()),
         );
-        // Only while facing them.
-        let facing = heading_of(to - from).is_some_and(|h| angle_between(h, self.droids[i].heading) < 0.35);
+        // Only while facing them - and, but for leaning out round tall cover, with its body turned
+        // near enough to them for its aim to reach, not still stepping round to them.
+        let droid = &self.droids[i];
+        let body = droid.heading + droid.avatar.facing();
+        let peeking = matches!(droid.task, Task::Peeking { .. });
+        let facing = heading_of(to - from).is_some_and(|h| {
+            angle_between(h, droid.heading) < 0.35 && (peeking || angle_between(h, body) < BODY_AIM)
+        });
         if !facing {
             return;
         }
@@ -2187,6 +2204,7 @@ impl Battle {
             Self::clear_body(&mut scene.graph, droid);
             droid.root = new.root;
             droid.avatar = new.avatar;
+            droid.shown = None;
             droid.fallen = false;
             droid.was_at = droid.position;
         }
@@ -2228,6 +2246,11 @@ impl Battle {
             // the droid takes which way it goes, and faces, from there.
             // Leaning out round tall cover, it stands behind it: its eyes are out at `position`.
             let stands = tall.map_or(droid.position, |(_, behind, _)| behind);
+            // The body goes on facing as it did across the world, and turns after the root.
+            if let Some(shown) = droid.shown {
+                droid.avatar.parent_turned(wrap(droid.heading - shown));
+            }
+            droid.shown = Some(droid.heading);
             graph[droid.root]
                 .local_transform_mut()
                 .set_position(stands + Vector3::y() * lift)

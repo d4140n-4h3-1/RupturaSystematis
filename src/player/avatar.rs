@@ -37,6 +37,13 @@
 //! the pose as far as it has gone over. Strafing any way but straight ahead, or crouched, it
 //! takes stairs in its own cycles, each foot put down on its step all the same.
 //!
+//! Where the game has it step round (see [`Avatar::set_steps_round`]), standing or crouched still
+//! it does not turn on its heels: its feet stay where they are, and once it is well off the way
+//! it is to face - far off at once, a little after a moment - it steps round, an eighth, a quarter
+//! or a half turn, head first and hips last, each foot lifted and put down turned the new way.
+//! Nearer than that its head and its aim make up the difference. Turned by what it hangs from
+//! (see [`Avatar::parent_turned`]), it goes on facing as it did across the world, and turns after.
+//!
 //! Sprinting or running flat out, and only then, the droid skids, with the skids for that gait;
 //! jogging, it just turns and slows down.
 //! Turning round - from going forward to going back, say - it digs its feet in, slides, swings
@@ -288,6 +295,35 @@ const TRANSITIONS: [(Posture, Posture, &str); 4] = [
     (Posture::Crawling, Posture::Crouching, "droid_up_prone_crouch"),
     (Posture::Crawling, Posture::Standing, "droid_up_prone_stand"),
 ];
+/// Turning on the spot, if it has them: standing and crouched, an eighth, a quarter and a half of
+/// a turn, to the left and to the right - the droid stepping round, made on the spot with how far
+/// round each frame has it in [`MOTION`]. Played only where the droid is set to step round (see
+/// [`Avatar::set_steps_round`]).
+const TURNS: [[[&str; 2]; 3]; 2] = [
+    [
+        ["droid_turn45_L", "droid_turn45_R"],
+        ["droid_turn90_L", "droid_turn90_R"],
+        ["droid_turn180_L", "droid_turn180_R"],
+    ],
+    [
+        ["droid_crouch_turn45_L", "droid_crouch_turn45_R"],
+        ["droid_crouch_turn90_L", "droid_crouch_turn90_R"],
+        ["droid_crouch_turn180_L", "droid_crouch_turn180_R"],
+    ],
+];
+/// Standing still, how far off the way it is to face the droid lets itself be before it steps
+/// round, in radians: past the first, at once; past the second, once it has been that far off a
+/// while ([`STEP_ROUND_AFTER`], in seconds). Nearer than that it only looks: its head, and its
+/// gun's aim, take up the difference.
+const STEP_ROUND: f32 = 0.8;
+const STEP_ROUND_LATER: f32 = 0.3;
+const STEP_ROUND_AFTER: f32 = 0.5;
+/// Past these, in radians, it steps round a quarter, then a half, turn rather than an eighth.
+const QUARTER_TURN: f32 = 1.18;
+const HALF_TURN: f32 = 2.36;
+/// How far a turn on the spot is stretched or shrunk to come round just as far as it is to go: its
+/// planted feet turn on the floor by as much as it is, so not far.
+const TURN_STRETCH: (f32, f32) = (0.45, 1.4);
 /// How fast the crawl is played for each gait, like [`CROUCHING_RATES`].
 const CRAWL_RATES: [f32; 4] = [1.0, 1.3, 1.45, 1.6];
 /// Its idle, walk and jog in cover, leaning back against a wall, if it has them: for the wall on
@@ -1583,6 +1619,65 @@ impl Skid {
     }
 }
 
+/// A turn on the spot: an animation played once through, and how far round it takes the droid.
+#[derive(Debug, Clone, PartialEq)]
+struct Pivot {
+    animation: Handle<Animation>,
+    /// How far round each frame has the droid from the first, in radians, left positive.
+    path: Vec<f32>,
+    fps: f32,
+}
+
+impl Pivot {
+    fn new(animation: Handle<Animation>, clip: &Clip) -> Option<Self> {
+        let path: Vec<f32> = clip.turn_left_deg.iter().map(|turn| turn.to_radians()).collect();
+        (path.last().is_some_and(|turn| turn.abs() > 1.0e-3) && clip.fps > 0.0).then_some(Self {
+            animation,
+            path,
+            fps: clip.fps,
+        })
+    }
+
+    /// How far round it has come `time` seconds in: between frames, part of the way from one to
+    /// the next; after the last, all the way.
+    fn at(&self, time: f32) -> f32 {
+        let frame = (time * self.fps).max(0.0);
+        let last = self.path.len().saturating_sub(1);
+        let before = (frame.floor() as usize).min(last);
+        let after = (before + 1).min(last);
+        let part = (frame - before as f32).min(1.0);
+        self.path[before] + (self.path[after] - self.path[before]) * part
+    }
+
+    /// How far round it goes all told.
+    fn total(&self) -> f32 {
+        self.path.last().copied().unwrap_or(0.0)
+    }
+}
+
+/// Which turn on the spot it should step round to come round by `left`, in radians, left
+/// positive, as `TURNS` indexes them for a posture: an eighth, a quarter or a half, and which way.
+fn pivot_for(left: f32) -> (usize, usize) {
+    let size = if left.abs() >= HALF_TURN {
+        2
+    } else if left.abs() >= QUARTER_TURN {
+        1
+    } else {
+        0
+    };
+    (size, usize::from(left < 0.0))
+}
+
+/// A turn on the spot under way.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Pivoting {
+    /// Which, like [`TURNS`]: crouched or not, its size and which way.
+    which: (usize, usize, usize),
+    posture: Posture,
+    /// Which way the droid faced as it began, like [`Avatar::heading`].
+    from: f32,
+}
+
 /// Which way a skid goes: round, cut across, or to a stop.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SkidKind {
@@ -1774,6 +1869,13 @@ pub struct Avatar {
     /// Its skids by name, as far as it has them.
     skids: FxHashMap<&'static str, Skid>,
     skidding: Option<Skidding>,
+    /// Its turns on the spot, as far as it has them, like [`TURNS`]; whether it steps round with
+    /// them, standing still, rather than turning on its heels; the one under way; and how long it
+    /// has been off the way it is to face by more than [`STEP_ROUND_LATER`], in seconds.
+    pivots: [[[Option<Pivot>; 2]; 3]; 2],
+    steps_round: bool,
+    pivoting: Option<Pivoting>,
+    off_for: f32,
     /// Its jumps standing still, jogging and running, each low and high, as far as it has them:
     /// like [`LEAPS`].
     leaps: [[Option<Leap>; 2]; 3],
@@ -2535,6 +2637,19 @@ impl Avatar {
             ));
             skids.insert(name, skid);
         }
+        let pivots = TURNS.map(|sizes| {
+            sizes.map(|sides| {
+                sides.map(|name| {
+                    let (handle, animation) = container.find_by_name_mut(name)?;
+                    animation.set_loop(false);
+                    let clip = motions.and_then(|motions| motions.clips.get(name))?;
+                    Pivot::new(handle, clip)
+                })
+            })
+        });
+        if pivots.iter().flatten().flatten().any(Option::is_none) {
+            info("Droid: without all its droid_turn*/droid_crouch_turn* clips, it turns on its heels where it lacks them".to_string());
+        }
         // Each gun with all that goes with it; and only the pistol has aims, which are after.
         let moving_with =
             MOVING_WITH.map(|name| container.find_by_name_ref(name).map(|(handle, _)| handle));
@@ -2744,6 +2859,10 @@ impl Avatar {
             prone_aims: Aims::by_the_back_within(PRONE_AIM_PITCH, PRONE_AIM_YAW),
             skids,
             skidding: None,
+            pivots,
+            steps_round: false,
+            pivoting: None,
+            off_for: 0.0,
             leaps,
             leaping: None,
             airborne: 0.0,
@@ -2971,12 +3090,34 @@ impl Avatar {
     /// Turns the droid's head `turn` radians from the way it faces, left positive, no further
     /// than [`HEAD_TURN_MOST`] either way - or back to the front, with none. It comes round over a
     /// moment, as it is posed.
+    /// Has the droid stand still and step round to turn, standing or crouched, with its turns on
+    /// the spot, rather than turning on its heels, as far as it has them; and carry on facing
+    /// the way it did across the world when what it hangs from is turned (see
+    /// [`Avatar::parent_turned`]).
+    pub fn set_steps_round(&mut self, on: bool) {
+        self.steps_round = on;
+    }
+
+    /// What the droid hangs from was turned by `angle`, in radians, left positive, about the up:
+    /// the body stays facing the way it did across the world, and turns from there as it turns -
+    /// stepping round, turning as it goes, or in a skid - to face the way it is to. The heading
+    /// it is given, like [`Going::heading`], is from the new way.
+    pub fn parent_turned(&mut self, angle: f32) {
+        self.heading = wrap(self.heading - angle);
+        if let Some(pivoting) = self.pivoting.as_mut() {
+            pivoting.from = wrap(pivoting.from - angle);
+        }
+        if let Some(skidding) = self.skidding.as_mut() {
+            skidding.heading = wrap(skidding.heading - angle);
+        }
+    }
+
     pub fn turn_head(&mut self, turn: Option<f32>) {
         self.head_wanted = turn.map_or(0.0, |turn| wrap(turn).clamp(-HEAD_TURN_MOST, HEAD_TURN_MOST));
     }
 
     /// Which way the droid faces from the way the body faces, in radians, left positive.
-    pub(crate) fn facing(&self) -> f32 {
+    pub fn facing(&self) -> f32 {
         self.heading
     }
 
@@ -3760,6 +3901,12 @@ impl Avatar {
             }
             self.end_skid(graph);
         }
+        if self.pivoting.is_some() || self.start_pivot(graph, going, dt) {
+            if self.pivot(graph, going, dt) {
+                return;
+            }
+            self.end_pivot(graph);
+        }
         let facing = self.facing_for(going);
         // In cover the clips turn the droid a quarter turn on its heading, its back to the wall,
         // one way for the wall on its left and the other for its right. Going the other way along
@@ -3770,7 +3917,12 @@ impl Avatar {
         if turned_round {
             self.heading = facing;
         }
-        self.turn(graph, facing, dt);
+        // Stepping round, standing still, its feet stay where they are: it turns only by its steps.
+        if self.planted(going) {
+            self.face(graph);
+        } else {
+            self.turn(graph, facing, dt);
+        }
         if going.grounded {
             self.airborne = 0.0;
         } else {
@@ -4407,6 +4559,111 @@ impl Avatar {
         }
     }
 
+    /// Whether, standing or crouched still on the ground, the droid stays where its feet are and
+    /// steps round to turn (see [`Avatar::set_steps_round`]), as it can in the posture it is in.
+    fn planted(&self, going: Going) -> bool {
+        let crouched = usize::from(going.posture != Posture::Standing);
+        self.steps_round
+            && going.heading.is_some()
+            && going.speed < STILL
+            && going.grounded
+            && going.posture != Posture::Crawling
+            && going.cover.is_none()
+            && self.leaping.is_none()
+            && self.skidding.is_none()
+            && self.changing.is_none()
+            && self.pivots[crouched].iter().flatten().all(Option::is_some)
+    }
+
+    /// Starts a turn on the spot if the droid stands still well off the way it is to face - at
+    /// once far off, and after a moment nearer. Whether it did.
+    fn start_pivot(&mut self, graph: &mut Graph, going: Going, dt: f32) -> bool {
+        if !self.planted(going) {
+            self.off_for = 0.0;
+            return false;
+        }
+        let left = wrap(self.facing_for(going) - self.heading);
+        if left.abs() < STEP_ROUND_LATER {
+            self.off_for = 0.0;
+            return false;
+        }
+        self.off_for += dt;
+        if left.abs() < STEP_ROUND && self.off_for < STEP_ROUND_AFTER {
+            return false;
+        }
+        let crouched = usize::from(going.posture != Posture::Standing);
+        let (size, side) = pivot_for(left);
+        let Some(pivot) = &self.pivots[crouched][size][side] else {
+            return false;
+        };
+        let animation = pivot.animation;
+        let Some(container) = self.container(graph) else {
+            return false;
+        };
+        let animation = &mut container[animation];
+        animation.set_speed(1.0);
+        animation.rewind();
+        self.pivoting = Some(Pivoting {
+            which: (crouched, size, side),
+            posture: going.posture,
+            from: self.heading,
+        });
+        self.off_for = 0.0;
+        self.playing = None;
+        self.fade_from_here(graph);
+        true
+    }
+
+    /// Plays the turn on the spot under way for another `dt`, swinging the droid round with it -
+    /// as far round as it is to go, the turn stretched or shrunk a little to it. False once it is
+    /// over, or cut short by setting off, leaving the ground or changing posture.
+    fn pivot(&mut self, graph: &mut Graph, going: Going, dt: f32) -> bool {
+        let Some(pivoting) = self.pivoting else {
+            return false;
+        };
+        if !self.planted(going) || going.posture != pivoting.posture || going.jumped {
+            return false;
+        }
+        let (crouched, size, side) = pivoting.which;
+        let Some(pivot) = self.pivots[crouched][size][side].clone() else {
+            return false;
+        };
+        let wanted = self.facing_for(going);
+        let Some(container) = self.container(graph) else {
+            return false;
+        };
+        let animation = &mut container[pivot.animation];
+        if animation.has_ended() {
+            return false;
+        }
+        animation.tick(dt);
+        // Made on the spot, so there is no travel to take out.
+        let mut target = self.rest.clone();
+        take_pose(animation, &mut target);
+        let time = animation.time_position() - animation.time_slice().start;
+        let total = pivot.total();
+        let left = wrap(wanted - pivoting.from);
+        let stretch = if left * total > 0.0 {
+            (left / total).clamp(TURN_STRETCH.0, TURN_STRETCH.1)
+        } else {
+            TURN_STRETCH.0
+        };
+        self.heading = wrap(pivoting.from + pivot.at(time) * stretch);
+        self.face(graph);
+        self.put(graph, target, dt);
+        true
+    }
+
+    /// Hands back from the turn on the spot under way, if any, to the idle, which it ends on.
+    fn end_pivot(&mut self, graph: &mut Graph) {
+        if self.pivoting.take().is_none() {
+            return;
+        }
+        self.playing = None;
+        self.rewind_idle(graph);
+        self.fade_from_here(graph);
+    }
+
     /// Hands back from the skid under way, if any: from a stop to the idle, which it ends on, and
     /// from a turn to the cycles, as it runs out - whichever goes with how fast the body is
     /// going now.
@@ -4542,6 +4799,36 @@ mod tests {
             sprinting(3.0 * FRAC_PI_4, -FRAC_PI_4 + 0.1),
             round(SPRINT_SKIDS.turns[1])
         );
+    }
+
+    #[test]
+    fn standing_it_steps_round_an_eighth_a_quarter_or_a_half_the_short_way() {
+        use std::f32::consts::{FRAC_PI_2, FRAC_PI_4, PI};
+        assert_eq!(pivot_for(FRAC_PI_4), (0, 0));
+        assert_eq!(pivot_for(-FRAC_PI_4), (0, 1));
+        assert_eq!(pivot_for(FRAC_PI_2), (1, 0));
+        assert_eq!(pivot_for(-FRAC_PI_2), (1, 1));
+        assert_eq!(pivot_for(PI - 0.1), (2, 0));
+        assert_eq!(pivot_for(-(PI - 0.1)), (2, 1));
+    }
+
+    #[test]
+    fn a_turn_on_the_spot_goes_round_between_frames_and_stays_at_the_end() {
+        let clip = Clip {
+            fps: 10.0,
+            forward_m: vec![0.0; 3],
+            left_m: vec![0.0; 3],
+            turn_left_deg: vec![0.0, 30.0, 90.0],
+            ground_m: None,
+            tread_at_m: None,
+            stairs: None,
+        };
+        let pivot = Pivot::new(Handle::NONE, &clip).unwrap();
+        assert!((pivot.at(0.05) - 15f32.to_radians()).abs() < 1e-5);
+        assert!((pivot.at(5.0) - 90f32.to_radians()).abs() < 1e-5);
+        assert!((pivot.total() - 90f32.to_radians()).abs() < 1e-5);
+        let still = Clip { turn_left_deg: vec![0.0; 3], ..clip };
+        assert!(Pivot::new(Handle::NONE, &still).is_none(), "one that turns nowhere is no turn");
     }
 
     #[test]
