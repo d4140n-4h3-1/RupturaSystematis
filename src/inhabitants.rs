@@ -3666,6 +3666,50 @@ impl Inhabitants {
         answered
     }
 
+    /// Sees that at least `least` sentries - of a kind `answers` says - are after the player, the
+    /// player at `at` having just been wanted at another star: those after them or searching for
+    /// them already count, and as many more as that leaves wanting, the nearest within `reach`
+    /// that are not, set off for where they are, as on a radio call (see
+    /// [`Inhabitants::radio_call`]), to search there and chase them once they see them. They are
+    /// only told where the player was then: one that gets well away is lost to them. Those sent,
+    /// as indices.
+    pub fn send_after(&mut self, at: Vector3<f32>, least: usize, reach: f32, answers: impl Fn(usize) -> bool) -> Vec<usize> {
+        let sentry = |droid: &Inhabitant| {
+            droid.hunts_player() && droid.side.is_none() && answers(droid.character) && !droid.down
+        };
+        let after = self
+            .droids
+            .iter()
+            .filter(|droid| sentry(droid) && matches!(droid.alert, Some(Alert::Alert | Alert::Evasion)))
+            .count();
+        let mut free: Vec<(f32, usize)> = self
+            .droids
+            .iter()
+            .enumerate()
+            .filter(|(_, droid)| sentry(droid) && !matches!(droid.alert, Some(Alert::Alert | Alert::Evasion)))
+            .map(|(m, droid)| (flat(droid.feet - at).norm(), m))
+            .filter(|&(away, _)| away < reach)
+            .collect();
+        free.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let sent: Vec<usize> = free.into_iter().take(least.saturating_sub(after)).map(|(_, m)| m).collect();
+        for &m in &sent {
+            let droid = &mut self.droids[m];
+            droid.talking = false;
+            droid.warned = 0;
+            droid.threat = 0.0;
+            droid.lost_at = at;
+            droid.lost_going = Vector3::zeros();
+            droid.note(Incident::Alarm);
+            droid.alert = None;
+            droid.enter(m, Some(Alert::Evasion), &mut self.alerts);
+            self.alarmed.push(m);
+        }
+        if !sent.is_empty() {
+            self.search_from = Some(at);
+        }
+        sent
+    }
+
     /// Has every sentry - of a kind `answers` says - that hunts the player, within `reach` of
     /// `at`, and not after them already, go and search there: where a helicopter overhead has just
     /// seen them. Those already searching set off there afresh; the rest leave whatever they were

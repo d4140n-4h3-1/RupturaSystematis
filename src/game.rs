@@ -141,6 +141,10 @@ const TALK_RETRY: f32 = 5.0;
 /// they are, and how far round them those it tells are, in seconds and meters; and how long out of
 /// its sight before it gives up and flies off, in seconds.
 const HELICOPTER_STARS: u32 = 3;
+/// How many sentries, at least, go after the player each time they are wanted at another star -
+/// the first too - and from how far off, in meters.
+const SENT_AFTER_A_STAR: usize = 2;
+const SENT_FROM: f32 = crate::inhabitants::RADIO_REACH;
 const HELICOPTER_SIGHT: f32 = 170.0;
 const HELICOPTER_TELLS_EVERY: f32 = 3.0;
 const HELICOPTER_TELLS_REACH: f32 = crate::inhabitants::RADIO_REACH;
@@ -795,6 +799,10 @@ pub struct MazeGame {
     #[visit(skip)]
     #[reflect(hidden)]
     pursuit_tells_in: f32,
+    /// How many stars the player was wanted at last time it was looked, to see when they gain one.
+    #[visit(skip)]
+    #[reflect(hidden)]
+    stars_were: u32,
     #[visit(skip)]
     #[reflect(hidden)]
     helicopter_model: Option<ModelResource>,
@@ -1676,6 +1684,30 @@ impl MazeGame {
             orbit.radius, orbit.centre[0], orbit.centre[1], orbit.height
         ));
         self.helicopters.push(helicopter::Helicopter::spawn(scene, &model, pilot.as_ref(), orbit, 0.0));
+    }
+
+    /// Each time the player is wanted at another star - the first too - sees that at least
+    /// [`SENT_AFTER_A_STAR`] sentries are after them, sending the nearest of those that are not to
+    /// where they are (see [`Inhabitants::send_after`]).
+    fn send_after_new_star(&mut self, ctx: &mut PluginContext) {
+        let stars = self.stars();
+        let gained = stars > self.stars_were;
+        self.stars_were = stars;
+        if !gained || self.phase != Phase::Playing {
+            return;
+        }
+        let Some(script) = self.script.as_ref() else {
+            return;
+        };
+        let at = self.player.feet(&ctx.scenes[self.scene].graph);
+        let sent = self.inhabitants.send_after(at, SENT_AFTER_A_STAR, SENT_FROM, |character| is_sentry(script, character));
+        if !sent.is_empty() {
+            Log::info(format!("Wanted at {stars}: {} of security sent after the player", sent.len()));
+            self.hud.show_note(match sent.len() {
+                1 => "Security is after you".to_string(),
+                k => format!("Security is after you: {k} sentries are coming"),
+            });
+        }
     }
 
     /// Security's helicopter after the player (see [`helicopter::Pursuit`]): brought in by a radio
@@ -3524,6 +3556,7 @@ impl MazeGame {
             cut_off,
         } = self.update_inhabitants(ctx);
         self.radio_calls(radioed, cut_off);
+        self.send_after_new_star(ctx);
         // A foot chase, or a shootout, is called out by whichever of those in it says so.
         for (n, name, mood) in std::mem::take(&mut self.chase_barks) {
             self.bark_anyway(n, name, mood);
