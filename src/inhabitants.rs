@@ -129,6 +129,7 @@ use hydroxus_ai::{
         search::SearchMap,
         threat::{pointed_at, stage_after},
     },
+    think::{habit::Habits, haunt::Haunts},
     social::{
         crowd::{self, Crowd, CROWD_AT_ONCE, CROWD_BACK, CROWD_EVERY, CROWD_GONE, CROWD_REST},
         group::{self, about_leader, Groups, ABOUT_LEADER, BESIDE},
@@ -901,6 +902,13 @@ pub struct Inhabitants {
     wanted: u32,
     /// How each role chooses what to do (see [`hydroxus_ai::tactics::conduct`]).
     reasoners: Reasoners,
+    /// Where security has lost the player and found them hiding, this round's maze, for its
+    /// searches to look there first (see [`hydroxus_ai::think::haunt`]).
+    haunts: Haunts,
+    /// How the player has answered a droid's warnings - backing down or pushing it - lately, as
+    /// word gets round: the more they push it, the less patience the droids have (see
+    /// [`PUSHED_PATIENCE`] and [`hydroxus_ai::think::habit`]). Kept from one round to the next.
+    answers: Habits<Answer>,
     /// The last radio call for help that went out: how long ago, in seconds, and where the player
     /// was seen (see [`RADIO_QUIET`]).
     last_call: Option<(f32, Vector3<f32>)>,
@@ -928,6 +936,18 @@ pub struct Inhabitants {
     /// way round before it gave up, a tenth of a second or more. Empty, anywhere.
     reachable: Reach,
 }
+
+/// How the player answered a droid's warnings: putting the weapon away in time, or holding it on
+/// the droid till it was provoked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Answer {
+    BackedDown,
+    PushedIt,
+}
+
+/// How much of a droid's patience with a weapon pointed at it goes, at most, once the player is
+/// known to push it every time: a half. Warned once and found out, they get less warning after.
+pub const PUSHED_PATIENCE: f32 = 0.5;
 
 /// A foot chase in a city: one of its security after one of a gang, which runs for it - and if
 /// it is caught, stands for being held at pistol point a while.
@@ -1231,6 +1251,8 @@ impl Inhabitants {
         self.last_sight = None;
         self.search_from = None;
         self.last_call = None;
+        // Where the player hid was in this maze; how they answer a warning goes with them.
+        self.haunts = Haunts::new();
     }
 
     /// Puts the maze's inhabitants into `scene` on the floor of `grid` whose corner is at
@@ -2454,8 +2476,10 @@ impl Inhabitants {
         dt: f32,
         sentry: impl Fn(usize) -> bool,
     ) -> News {
-        // What they think and know of the player fades a little.
+        // What they think and know of the player fades a little, and what they learned of them.
         self.minds.step(dt);
+        self.haunts.step(&AI.haunt, dt);
+        self.answers.step(&AI.habit, dt);
         let mut caught = None;
         let (mut radioed, mut cut_off) = (Vec::new(), Vec::new());
         if let Some((ago, _)) = self.last_call.as_mut() {
@@ -2577,9 +2601,14 @@ impl Inhabitants {
             self.search_from = None;
         } else if let Some((at, going)) = self.last_sight.take() {
             search.lose(mesh, at, (going.norm() > 1.0e-3).then_some(going));
+            // Where they got away is where they may again; and where they hid before, nearby, is
+            // where to look first.
+            self.haunts.seen_at(&AI.haunt, mesh, at);
+            self.haunts.lean(&AI.haunt, mesh, &mut search);
         } else if let Some(at) = self.search_from.take() {
             // Something new about where they are: search from there.
             search.lose(mesh, at, None);
+            self.haunts.lean(&AI.haunt, mesh, &mut search);
         }
         let searching = self.droids.iter().any(|d| d.alert == Some(Alert::Evasion) && !d.down);
         if searching && !search.is_empty() {
@@ -2645,6 +2674,8 @@ impl Inhabitants {
         // Where each keeps away from, for the trouble it knows of, going about its business.
         let shunned: Vec<Vec<(Vector3<f32>, f32)>> = (0..self.droids.len()).map(|n| self.minds.shunned(n)).collect();
         let mut mourned = Vec::new();
+        // Where a searcher found the player again, to remember as somewhere they hide.
+        let mut found = Vec::new();
         for (me, droid) in self.droids.iter_mut().enumerate() {
             droid.avatar.fly_voxels(graph, dt);
             droid.passing.step(dt);
@@ -2795,6 +2826,9 @@ impl Inhabitants {
                 };
                 if alert == Alert::Alert && next == Some(Alert::Evasion) {
                     droid.note(Incident::Lost);
+                }
+                if alert == Alert::Evasion && next == Some(Alert::Alert) && droid.side.is_none() {
+                    found.push(droid.lost_at);
                 }
                 droid.enter(me, next, &mut alerts);
             }
@@ -3597,6 +3631,10 @@ impl Inhabitants {
             }
         }
         self.search = Some(search);
+        // Found again by a search: somewhere they hide - once, however many found them at once.
+        if let Some(&at) = found.first() {
+            self.haunts.found_at(&AI.haunt, mesh, at);
+        }
         // Done kneeling by one of its own, a witness to it goes to tell a sentry.
         for (n, at, knows) in mourned {
             self.witness(n, at, knows);
@@ -4008,8 +4046,9 @@ impl Inhabitants {
             }
         }
         let mut stages = Vec::new();
+        let wariness = self.patience_share();
         for (n, droid) in self.droids.iter_mut().enumerate() {
-            let Some(patience) = patience(droid.character).filter(|_| droid.hunts_player()) else {
+            let Some(patience) = patience(droid.character).filter(|_| droid.hunts_player()).map(|p| p * wariness) else {
                 continue;
             };
             let minding = droid.alert.is_none() && !droid.down && !droid.talking;
@@ -4052,7 +4091,22 @@ impl Inhabitants {
                 }
             }
         }
+        // How the player answered each warning, for the next.
+        for &(_, stage) in &stages {
+            match stage {
+                Threat::Provoked => self.answers.saw(Answer::PushedIt),
+                Threat::Calmed => self.answers.saw(Answer::BackedDown),
+                _ => (),
+            }
+        }
         stages
+    }
+
+    /// How much of their patience the droids have with a weapon pointed at them, for how the
+    /// player has answered their warnings: all of it, at first; known to push it, the player is
+    /// given less time, as much less as they are expected to - down to [`PUSHED_PATIENCE`] less.
+    fn patience_share(&self) -> f32 {
+        1.0 - PUSHED_PATIENCE * self.answers.expect(&AI.habit, Answer::PushedIt)
     }
 
     /// Provokes the `n`th droid at once, as if it had stood for the pistol as long as it will:
@@ -5226,6 +5280,27 @@ fn seen_by(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_player_that_keeps_pushing_it_is_given_less_warning() {
+        let mut inhabitants = Inhabitants::default();
+        assert_eq!(inhabitants.patience_share(), 1.0);
+        inhabitants.answers.saw(Answer::PushedIt);
+        let once = inhabitants.patience_share();
+        assert!(once > 0.85, "once is not a habit: {once}");
+        for _ in 0..7 {
+            inhabitants.answers.saw(Answer::PushedIt);
+        }
+        let known = inhabitants.patience_share();
+        assert!(known < 0.7 && known >= 1.0 - PUSHED_PATIENCE, "{known}");
+        // Backing down every time after wins some of it back; and in time it is all forgotten.
+        for _ in 0..8 {
+            inhabitants.answers.saw(Answer::BackedDown);
+        }
+        assert!(inhabitants.patience_share() > known);
+        inhabitants.answers.step(&AI.habit, AI.habit.half_life * 30.0);
+        assert_eq!(inhabitants.patience_share(), 1.0);
+    }
 
     #[test]
     fn the_more_stars_the_more_relentless_security_is() {
