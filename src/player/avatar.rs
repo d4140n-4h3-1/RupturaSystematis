@@ -674,6 +674,10 @@ const PISTOL_STEADY: f32 = 0.75;
 /// hips drop below where they ride on average - landing each stride, the muzzle dips - in
 /// radians.
 const PISTOL_BOB: f32 = 1.75;
+/// How far behind the hips the pistol's dip follows them, in seconds: the gun's weight trails the
+/// body, dipping just after each landing rather than with it, as the rifle's walk, jog and run
+/// have it (MOVE_LAG in build_rifle.py, a frame at 24 a second).
+const PISTOL_BOB_LAG: f32 = 0.04;
 /// How long the average the twist and the bob go by takes to follow what the legs are doing, in
 /// seconds: long next to a stride, so that only the swing of each stride is left over it.
 const STRIDE_MEAN: f32 = 1.0;
@@ -1222,10 +1226,15 @@ struct MovingClips {
     walk: String,
     jog: String,
     run: String,
+    /// Flat out, if it has one: without it, sprinting holds the ready still over the legs.
+    #[serde(default)]
+    sprint: Option<String>,
 }
 
-/// The cycles a gun's own walk, jog and run go with: [`CYCLES`]' walk, jog and run.
-const MOVING_WITH: [&str; 3] = ["droid_walk_cycle", "droid_run_cycle", "droid_running_cycle"];
+/// The cycles a gun's own walk, jog, run and sprint go with: [`CYCLES`]' walk, jog, run and
+/// sprint.
+const MOVING_WITH: [&str; 4] =
+    ["droid_walk_cycle", "droid_run_cycle", "droid_running_cycle", "droid_sprint_cycle"];
 /// How long the upper body takes to go over to a gun's own walk, jog or run at the ready, or
 /// back to the ready held still, in seconds.
 const MOVING_FADE: f32 = 0.25;
@@ -1854,6 +1863,8 @@ pub struct Avatar {
     /// and bob swing about.
     right_forearm: Vec<Handle<Node>>,
     stride_mean: (f32, f32),
+    /// The hips' drop below their mean as the pistol's dip has caught up with it ([`PISTOL_BOB_LAG`]).
+    bob_drop: f32,
     /// Which way the barrel pointed, across the world, as the trigger was last pulled.
     barrel: Vector3<f32>,
     /// Where the muzzle was as a shot left it this frame, and which way it went, if one did.
@@ -2577,10 +2588,10 @@ impl Avatar {
                         .moving
                         .as_ref()
                         .map(|clips| {
-                            [&clips.walk, &clips.jog, &clips.run]
+                            [Some(&clips.walk), Some(&clips.jog), Some(&clips.run), clips.sprint.as_ref()]
                                 .into_iter()
                                 .zip(moving_with)
-                                .filter_map(|(clip, with)| Some((with?, find(clip, true)?)))
+                                .filter_map(|(clip, with)| Some((with?, find(clip?, true)?)))
                                 .collect()
                         })
                         .unwrap_or_default();
@@ -2775,6 +2786,7 @@ impl Avatar {
             left_free: 0.0,
             right_forearm,
             stride_mean: (0.0, 0.0),
+            bob_drop: 0.0,
             barrel: Vector3::z(),
             shot: None,
             eyes,
@@ -3407,7 +3419,9 @@ impl Avatar {
             let (mean_twist, mean_height) = &mut self.stride_mean;
             *mean_twist += wrap(twist - *mean_twist) * follow;
             *mean_height += (height - *mean_height) * follow;
-            (wrap(twist - *mean_twist), height - *mean_height)
+            let drop = height - *mean_height;
+            self.bob_drop += (drop - self.bob_drop) * (1.0 - (-dt / PISTOL_BOB_LAG).exp());
+            (wrap(twist - *mean_twist), self.bob_drop)
         });
         let arm_weight = |bone: &Handle<Node>, w: f32| {
             if self.left_arm.contains(bone) {
@@ -4409,6 +4423,18 @@ impl Avatar {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_guns_sprint_on_the_move_is_optional() {
+        let without: MovingClips =
+            serde_json::from_str(r#"{"walk": "w", "jog": "j", "run": "r"}"#).unwrap();
+        assert_eq!(without.sprint, None);
+        let with: MovingClips =
+            serde_json::from_str(r#"{"walk": "w", "jog": "j", "run": "r", "sprint": "s"}"#).unwrap();
+        assert_eq!(with.sprint.as_deref(), Some("s"));
+        assert_eq!(MOVING_WITH[3], "droid_sprint_cycle");
+        assert!(CYCLES.iter().any(|&(name, gait)| name == MOVING_WITH[3] && gait == Some(Gait::Sprinting)));
+    }
 
     const ALL: [Option<Gait>; 5] = [
         Some(Gait::Walking),

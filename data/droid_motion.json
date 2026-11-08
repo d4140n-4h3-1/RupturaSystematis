@@ -11559,7 +11559,8 @@
   "moving": {
    "walk": "droid_rifle_walk",
    "jog": "droid_rifle_jog",
-   "run": "droid_rifle_run"
+   "run": "droid_rifle_run",
+   "sprint": "droid_rifle_sprint"
   },
   "show_frame": 6,
   "hide_after_frame": 9,
