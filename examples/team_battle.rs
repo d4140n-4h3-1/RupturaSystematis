@@ -41,6 +41,11 @@
 //! droid at a time, to see the difference - seeing, hearing and firing blind as the other side
 //! does: each match ends by saying which side won.
 //!
+//! `BATTLE_BENCH=<seconds>` benchmarks it: with vsync off, it times each part of every frame of
+//! play - the droids thinking, moving, shown, and their bolts - and the frame as a whole, for that
+//! many seconds of play, then says how long each took and quits. `BATTLE_SEED=<n>` fights the same
+//! battle each time, to compare one run with another.
+//!
 //! Run with `cargo run --example team_battle`. `BATTLE_MAP=<path>` fights in another arena, such
 //! as the capture-the-flag map, `data/arena/ctf_map.glb`: the teams start at its two ends along x.
 //!
@@ -508,8 +513,71 @@ enum Phase {
     Won(Team, f32),
 }
 
+/// A benchmark of the battle (see `BATTLE_BENCH` at the top): each frame of play, how long its
+/// parts took, in milliseconds - thinking, moving, showing, bolts - and the whole frame.
+#[derive(Debug, Default)]
+struct Bench {
+    /// How long to play for, in seconds of play, and how long it has played.
+    length: f32,
+    played: f32,
+    parts: Vec<[f32; 4]>,
+    frames: Vec<f32>,
+    /// When the last frame of play started, and when play started.
+    last: Option<std::time::Instant>,
+    started: Option<std::time::Instant>,
+    /// The score as it started; how far the droids walked between them, in meters;
+    /// how many frames any had a target; and how many bolts were fired.
+    score: [u32; 2],
+    walked: f32,
+    targeting: usize,
+    fired: usize,
+}
+
+impl Bench {
+    const PARTS: [&'static str; 4] = ["think", "move", "show", "bolts"];
+
+    /// The benchmark `BATTLE_BENCH` asks for, if it asks for one.
+    fn wanted() -> Option<Self> {
+        let length: f32 = std::env::var("BATTLE_BENCH").ok()?.parse().ok()?;
+        Some(Self { length: length.max(1.0), ..Self::default() })
+    }
+
+    /// How long `part` took, from `since`, in milliseconds.
+    fn ms(since: std::time::Instant) -> f32 {
+        since.elapsed().as_secs_f32() * 1000.0
+    }
+
+    /// What it found: for each part and the whole frame, its mean, middle, 95th and 99th
+    /// percentile and worst, in milliseconds.
+    fn report(&self, title: &str, droids: usize, score: [u32; 2]) -> String {
+        let stats = |mut v: Vec<f32>| {
+            v.sort_by(f32::total_cmp);
+            let at = |q: f32| v[((v.len() - 1) as f32 * q).round() as usize];
+            let mean = v.iter().sum::<f32>() / v.len() as f32;
+            format!("{mean:8.3} {:8.3} {:8.3} {:8.3} {:8.3}", at(0.5), at(0.95), at(0.99), at(1.0))
+        };
+        let wall = self.started.map_or(0.0, |s| s.elapsed().as_secs_f32());
+        let mut out = format!(
+            "Team battle benchmark: {title}, {droids} droids, {:.0} s of play, {} frames ({:.0} fps), RED {} : {} CYAN\n  \
+             {} shot down, {} bolts fired, {:.0} m walked, a target in {:.0}% of frames\n",
+            self.played, self.frames.len(), self.frames.len() as f32 / wall.max(1.0e-3), score[0], score[1],
+            score[0] + score[1] - self.score[0] - self.score[1], self.fired, self.walked, 100.0 * self.targeting as f32 / self.parts.len().max(1) as f32
+        );
+        out += "  ms per frame     mean      p50      p95      p99      max\n";
+        for (k, name) in Self::PARTS.iter().enumerate() {
+            out += &format!("  {name:<12} {}\n", stats(self.parts.iter().map(|p| p[k]).collect()));
+        }
+        let ai: Vec<f32> = self.parts.iter().map(|p| p[0] + p[1]).collect();
+        out += &format!("  {:<12} {}\n", "think+move", stats(ai));
+        out += &format!("  {:<12} {}", "whole frame", stats(self.frames.clone()));
+        out
+    }
+}
+
 #[derive(Debug, Default)]
 struct Battle {
+    /// The benchmark being run, if one is (see `BATTLE_BENCH`).
+    bench: Option<Bench>,
     arena: Arena,
     scene: Handle<Scene>,
     map: Option<ModelResource>,
@@ -584,7 +652,8 @@ pub fn run(arena: Arena) {
             window_attributes: WindowAttributes::default()
                 .with_title(arena.title)
                 .with_resizable(true),
-            vsync: true,
+            // A benchmark times the frames as fast as they come.
+            vsync: std::env::var("BATTLE_BENCH").is_err(),
             msaa_sample_count: None,
             graphics_server_constructor: Default::default(),
             named_objects: false,
@@ -592,6 +661,7 @@ pub fn run(arena: Arena) {
     );
     let mut battle = TeamBattle::default();
     battle.battle.arena = arena;
+    battle.battle.bench = Bench::wanted();
     executor.add_plugin(battle);
     executor.run()
 }
@@ -698,6 +768,9 @@ impl Battle {
 
     fn rng(&mut self) -> &mut Rng {
         self.rng.get_or_insert_with(|| {
+            if let Some(seed) = std::env::var("BATTLE_SEED").ok().and_then(|s| s.parse().ok()) {
+                return Rng::new(seed);
+            }
             let seed = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_or(1, |t| t.as_nanos() as u64);
@@ -737,8 +810,28 @@ impl Battle {
             }
             Phase::Playing if !self.paused => {
                 let graph = &mut ctx.scenes[self.scene].graph;
+                let were: Vec<Vector3<f32>> = self.droids.iter().map(|d| d.position).collect();
+                let t = std::time::Instant::now();
                 self.think(graph, dt);
+                let thought = Bench::ms(t);
+                let t = std::time::Instant::now();
                 self.move_droids(dt);
+                let moved = Bench::ms(t);
+                if let Some(bench) = self.bench.as_mut() {
+                    let now = std::time::Instant::now();
+                    if let Some(last) = bench.last {
+                        bench.frames.push((now - last).as_secs_f32() * 1000.0);
+                    }
+                    if bench.started.is_none() {
+                        bench.started = Some(now);
+                        bench.score = self.score;
+                    }
+                    bench.last = Some(now);
+                    bench.played += dt;
+                    bench.parts.push([thought, moved, 0.0, 0.0]);
+                    bench.walked += self.droids.iter().zip(&were).filter(|(d, _)| d.alive()).map(|(d, w)| flat(d.position - w).norm().min(1.0)).sum::<f32>();
+                    bench.targeting += usize::from(self.droids.iter().any(|d| d.alive() && d.target.is_some()));
+                }
                 if let Some(team) = [Team::Red, Team::Cyan]
                     .into_iter()
                     .find(|team| self.score[team.index()] >= KILL_LIMIT)
@@ -772,11 +865,28 @@ impl Battle {
         }
         let graph = &mut ctx.scenes[self.scene].graph;
         let dt = if self.paused { 0.0 } else { dt };
+        let t = std::time::Instant::now();
         self.show_droids(graph, dt);
+        let shown = Bench::ms(t);
+        let t = std::time::Instant::now();
         self.fire_bolts(graph, dt);
         self.bolts_arrive(graph, dt);
+        let bolts = Bench::ms(t);
         self.move_camera(graph, dt);
         self.update_text(ctx);
+        let playing = self.phase == Phase::Playing && !self.paused;
+        if let Some(bench) = self.bench.as_mut().filter(|_| playing) {
+            if let Some(part) = bench.parts.last_mut() {
+                part[2] = shown;
+                part[3] = bolts;
+            }
+            if bench.played >= bench.length && bench.frames.len() > 1 {
+                let report = bench.report(self.arena.title, self.droids.len(), self.score);
+                println!("{report}");
+                Log::info(report);
+                ctx.loop_controller.exit();
+            }
+        }
     }
 
     // ------------------------------------------------------------------ the level
@@ -1929,6 +2039,9 @@ impl Battle {
             self.droids[i].pending = None;
             if !self.droids[i].alive() {
                 continue;
+            }
+            if let Some(bench) = self.bench.as_mut() {
+                bench.fired += 1;
             }
             self.shot_heard(i, from);
             // The bolt goes the way the pistol points. Pointed near enough at the droid it was to
