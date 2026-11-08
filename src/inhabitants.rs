@@ -244,6 +244,9 @@ const NEAR_REST: f32 = 20.0;
 const TRIP: (f32, f32) = (15.0, 80.0);
 /// How long it stands still between trips, in seconds, from least to most.
 const REST: (f32, f32) = (2.0, 10.0);
+/// Spoken to, or speaking up, how long a droid only looks round at whoever it is, its head turned
+/// to them, before it turns round to face them too, in seconds.
+const HEED_TURN_AFTER: f32 = 0.6;
 /// How near the next point on its route it has to get, in meters, before making for the one
 /// after: that much of every corner is cut.
 const REACHED: f32 = 0.6;
@@ -433,6 +436,11 @@ struct Inhabitant {
     /// is talking to.
     talking: bool,
     with: Option<usize>,
+    /// Talking, or warning the player off: how long it has been, in seconds, and where whoever it
+    /// heeds stands, as of this frame. It looks round at them first, and turns to them after
+    /// ([`HEED_TURN_AFTER`]).
+    heeding: f32,
+    heeds: Option<Vector3<f32>>,
     /// How it is going about the player, once it has turned on them.
     alert: Option<Alert>,
     /// Whether, being hostile, it can see the player, as of this frame: once its awareness of them
@@ -2145,6 +2153,8 @@ impl Inhabitants {
             shot_from: None,
             blind: BlindFire::default(),
             speaking: 0.0,
+            heeding: 0.0,
+            heeds: None,
             reload: 0.0,
             armed_left: 0.0,
             aimed_at: None,
@@ -2962,8 +2972,11 @@ impl Inhabitants {
                 droid.waiting = 0.0;
                 droid.resting = droid.resting.max(REST.0);
                 let them = droid.with.and_then(|k| everyone.get(k)).map_or(player, |&(feet, _)| feet);
+                // It looks round at them first - its head - and then turns round to them.
+                droid.heeds = Some(them);
+                droid.heeding += dt;
                 let to_them = flat(them - droid.feet);
-                if to_them.norm() > 1.0e-3 {
+                if to_them.norm() > 1.0e-3 && droid.heeding >= HEED_TURN_AFTER {
                     droid.heading = to_them.x.atan2(to_them.z);
                 }
             } else if droid.alert.is_some() && droid.windup > 0.0 {
@@ -3482,11 +3495,17 @@ impl Inhabitants {
                     body.set_next_kinematic_translation(droid.feet + Vector3::new(0.0, MIDDLE, 0.0));
                 }
             }
-            // Speaking to the player, its head turned to them.
+            // Talking, or speaking to the player, its head turned to whoever it is - from the way
+            // its body faces, which comes round to them after.
             droid.speaking = (droid.speaking - dt).max(0.0);
-            let to_player = flat(player - droid.feet);
-            let head = (droid.speaking > 0.0 && !droid.down && to_player.norm() > 1.0e-3)
-                .then(|| to_player.x.atan2(to_player.z) - droid.heading);
+            if !(droid.talking || droid.warned > 0) {
+                droid.heeding = 0.0;
+                droid.heeds = None;
+            }
+            let heeds = droid.heeds.or((droid.speaking > 0.0).then_some(player));
+            let to_them = heeds.map_or(Vector3::zeros(), |at| flat(at - droid.feet));
+            let head = (!droid.down && to_them.norm() > 1.0e-3)
+                .then(|| to_them.x.atan2(to_them.z) - droid.avatar.facing());
             if posing {
                 droid.avatar.turn_head(head);
             }

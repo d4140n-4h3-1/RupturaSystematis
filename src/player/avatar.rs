@@ -289,9 +289,13 @@ const CROUCH_IDLE: &str = "droid_crouch_idle";
 /// place of the crouch. Without them, crawling plays the crouch, slower ([`CRAWLING_RATES`]).
 const CRAWL: &str = "droid_crawl_cycle";
 const CRAWL_IDLE: &str = "droid_crawl_idle";
-/// Going down to the floor and getting up off it, standing still, if it has them: played once, from
-/// the idle of the posture it leaves to the idle of the one it comes to.
-const TRANSITIONS: [(Posture, Posture, &str); 4] = [
+/// Going down to the floor and getting up off it, and crouching and standing up again, if it has
+/// them: played once, from the idle of the posture it leaves to the idle of the one it comes to.
+/// Crouching and standing up only standing still: on the move the cycles go over from one to the
+/// other as they are.
+const TRANSITIONS: [(Posture, Posture, &str); 6] = [
+    (Posture::Standing, Posture::Crouching, "droid_down_stand_crouch"),
+    (Posture::Crouching, Posture::Standing, "droid_up_crouch_stand"),
     (Posture::Crouching, Posture::Crawling, "droid_down_crouch_prone"),
     (Posture::Standing, Posture::Crawling, "droid_down_stand_prone"),
     (Posture::Crawling, Posture::Crouching, "droid_up_prone_crouch"),
@@ -2459,7 +2463,7 @@ impl Avatar {
             })
             .collect();
         if transitions.len() < TRANSITIONS.len() {
-            info("Droid: without all its droid_down_*/droid_up_* clips, it goes down and up in a fade".to_string());
+            info("Droid: without all its droid_down_*/droid_up_* clips, it goes down and up, and crouches, in a fade where it lacks them".to_string());
         }
         if crawl.is_none() || crawl_idle.is_none() {
             info(format!("Droid: without {CRAWL} and {CRAWL_IDLE} it crawls in its crouch"));
@@ -4512,7 +4516,13 @@ impl Avatar {
                 .iter()
                 .find(|&&(from, to, _)| from == was && to == going.posture)
                 .map(|&(_, _, clip)| clip)
-                .filter(|_| going.grounded && self.crawl.is_some());
+                .filter(|_| going.grounded)
+                .filter(|_| match (was, going.posture) {
+                    // To and from the floor, only lying as its own crawl lies; crouching and
+                    // standing up, only standing still.
+                    (Posture::Crawling, _) | (_, Posture::Crawling) => self.crawl.is_some(),
+                    _ => going.speed < STILL,
+                });
             if let Some(clip) = clip {
                 if let Some(container) = self.container(graph) {
                     let animation = &mut container[clip];
