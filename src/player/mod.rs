@@ -181,6 +181,9 @@ pub struct Player {
     /// The wall the droid is in cover against, if it is.
     cover: Option<cover::Cover>,
     yaw: f32,
+    /// The way the body was last turned, which the droid steps round after standing still; none
+    /// for a droid just brought in.
+    shown_yaw: Option<f32>,
     pitch: f32,
     sensitivity: f32,
     fov: f32,
@@ -270,6 +273,7 @@ impl Default for Player {
             lean: Vector3::zeros(),
             cover: None,
             yaw: 0.0,
+            shown_yaw: None,
             pitch: 0.0,
             sensitivity: DEFAULT_SENSITIVITY,
             fov: DEFAULT_FOV,
@@ -567,6 +571,12 @@ impl Player {
         let right = rotation * -Vector3::x();
         self.fit_lean(graph, rotation, dt);
 
+        // The droid goes on facing as it did across the world as the body turns with the view,
+        // and turns after it: stepping round, standing still.
+        if let (Some(avatar), Some(shown)) = (self.avatar.as_mut(), self.shown_yaw) {
+            avatar.parent_turned(self.yaw - shown);
+        }
+        self.shown_yaw = Some(self.yaw);
         graph[self.body]
             .local_transform_mut()
             .set_rotation(rotation);

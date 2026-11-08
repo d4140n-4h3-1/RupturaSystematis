@@ -2051,10 +2051,12 @@ impl Inhabitants {
         .build(&mut scene.graph)
         .to_base();
         let model = &self.liveries[character].model;
-        let Some(avatar) = Avatar::spawn(model, scene, body, -MIDDLE, true) else {
+        let Some(mut avatar) = Avatar::spawn(model, scene, body, -MIDDLE, true) else {
             scene.graph.remove_node(body);
             return false;
         };
+        // Standing still, it steps round to turn rather than turning on its heels.
+        avatar.set_steps_round(true);
         // Its number, and its gun by it: odd, a rifle, set as `fire_mode` says - as random as the
         // number, and drawing nothing more from `rng`, so that whatever else is picked with it is
         // as it was.

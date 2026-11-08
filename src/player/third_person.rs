@@ -225,6 +225,11 @@ impl Player {
         model: &fyrox::resource::model::ModelResource,
     ) {
         self.avatar = Avatar::spawn(model, scene, self.body.transmute(), super::FEET, false);
+        // Standing still, it steps round to turn rather than turning on its heels.
+        if let Some(avatar) = self.avatar.as_mut() {
+            avatar.set_steps_round(true);
+        }
+        self.shown_yaw = None;
         if self.avatar.is_none() {
             fyrox::core::log::Log::err("Player: playing without the droid");
         }
