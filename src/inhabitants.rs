@@ -121,6 +121,7 @@ use hydroxus_ai::{
     tactics::{
         conduct::{self, Conduct, Reasoners, Role},
         investigate::{self, Investigation},
+        look::LookAbout,
         blind::{self, BlindFire},
         chase, cover,
         fire,
@@ -278,10 +279,6 @@ const HEARING_REST: f32 = 3.0;
 /// How far ahead of where it last saw the player it looks for them first, in meters, the way
 /// they were going.
 const GUESS: f32 = 4.0;
-/// How long it looks about at each spot it searches, in seconds, and how far either way it turns
-/// looking, in radians.
-const LOOK_ABOUT: f32 = 3.0;
-const LOOK_SWEEP: f32 = 70.0 * std::f32::consts::PI / 180.0;
 /// How far each spot it searches is from the last, in meters of walking, from least to most.
 const SEARCH_TRIP: (f32, f32) = (5.0, 20.0);
 /// How far above its feet, in meters, the middle of the view is taken to be pointed at a droid.
@@ -489,10 +486,9 @@ struct Inhabitant {
     search_left: f32,
     /// How many spots it has set off to search since it lost the player.
     searched: u32,
-    /// How long it has left looking about where it is, in seconds, while it is, and which way it
-    /// faced as it started.
-    looking: Option<f32>,
-    look_from: f32,
+    /// Looking about where it is, searching, while it is (see
+    /// [`hydroxus_ai::tactics::look`]).
+    looking: Option<LookAbout>,
     /// How long before it heeds another noise, in seconds.
     deaf: f32,
     /// How long it has had the pistol pointed at it since it last warned the player, or since it
@@ -2148,7 +2144,6 @@ impl Inhabitants {
             search_left: 0.0,
             searched: 0,
             looking: None,
-            look_from: 0.0,
             deaf: 0.0,
             threat: 0.0,
             warned: 0,
@@ -3132,13 +3127,9 @@ impl Inhabitants {
                 };
             } else if droid.conduct == Some(Conduct::Search) {
                 if droid.route.is_empty() {
-                    match droid.looking {
+                    match droid.looking.as_mut().map(|look| look.step(dt)) {
                         // Looking about where it is, one way and then the other.
-                        Some(left) if left > 0.0 => {
-                            droid.looking = Some(left - dt);
-                            let turn = std::f32::consts::TAU * (LOOK_ABOUT - left) / LOOK_ABOUT;
-                            droid.heading = droid.look_from + LOOK_SWEEP * turn.sin();
-                        }
+                        Some(Some(heading)) => droid.heading = heading,
                         // Done looking: on to where the player is likeliest to be, of where it
                         // can get to, clear of where the others are going - or, with nowhere
                         // likelier than anywhere else, another spot nearby.
@@ -3179,8 +3170,7 @@ impl Inhabitants {
                         }
                         // Got there, or has nowhere to go: it looks about.
                         None => {
-                            droid.looking = Some(LOOK_ABOUT);
-                            droid.look_from = droid.heading;
+                            droid.looking = Some(LookAbout::searching(&AI.search, droid.heading));
                         }
                     }
                 }
