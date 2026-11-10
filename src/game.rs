@@ -255,6 +255,8 @@ struct Questioning {
     sentry: usize,
     at: Vector3<f32>,
     knows: bool,
+    /// When the witness saw it, on the inhabitants' clock.
+    seen: f32,
     step: usize,
     next_in: f32,
 }
@@ -3024,10 +3026,10 @@ impl MazeGame {
             self.hud.show_note(format!("{name} found one you shot down"));
         }
         // Each witness come to a sentry stands to be questioned by it.
-        for (m, s, at, knows) in reports.told {
+        for (m, s, at, knows, seen) in reports.told {
             self.inhabitants.set_eyes(m, None);
             self.inhabitants.talk_with(m, s);
-            self.questioning.push(Questioning { witness: m, sentry: s, at, knows, step: 0, next_in: 0.0 });
+            self.questioning.push(Questioning { witness: m, sentry: s, at, knows, seen, step: 0, next_in: 0.0 });
             Log::info(format!("Witness: droid {m} questioned by sentry {s}, who did it {}", if knows { "known" } else { "unknown" }));
         }
         for m in reports.gave_up {
@@ -3086,9 +3088,11 @@ impl MazeGame {
                     // Done: the sentry searches, and calls the others in.
                     self.inhabitants.set_talking(q.sentry, false);
                     self.inhabitants.set_talking(q.witness, false);
-                    self.inhabitants.search_at(q.sentry, q.at);
-                    self.inhabitants.raise_alarm(q.sentry, q.at, sentry);
-                    self.alert_drone(q.at);
+                    // If it believes it: fresh enough, and the witness's word not proved wrong.
+                    if self.inhabitants.take_word(q.sentry, q.witness, q.at, q.knows, q.seen) {
+                        self.inhabitants.raise_alarm(q.sentry, q.at, sentry);
+                        self.alert_drone(q.at);
+                    }
                     let name = self.name_of(q.witness).unwrap_or_else(|| "A witness".into());
                     Log::info(format!("Witness: droid {} questioned, who did it {}", q.witness, if q.knows { "told" } else { "not known" }));
                     if q.knows {

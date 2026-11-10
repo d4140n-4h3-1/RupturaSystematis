@@ -143,6 +143,7 @@ use hydroxus_ai::{
         talk::{self, within_talking},
         ties::{self, Mourning},
         trouble::Kind,
+        word::{Trust, Word},
     },
 };
 use crate::{
@@ -360,9 +361,9 @@ const BODY_LOOK_EVERY: f32 = 0.5;
 /// What came of the witnesses' going to tell a sentry (see [`Inhabitants::report`]).
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct Reports {
-    /// Those that have told a sentry: the witness, the sentry, where it was done, and whether
-    /// the witness knows who did it.
-    pub told: Vec<(usize, usize, Vector3<f32>, bool)>,
+    /// Those that have told a sentry: the witness, the sentry, where it was done, whether the
+    /// witness knows who did it, and when it saw it, on [`Inhabitants::clock`].
+    pub told: Vec<(usize, usize, Vector3<f32>, bool, f32)>,
     /// Those that gave up, with no sentry to be found, and go about their business again.
     pub gave_up: Vec<usize>,
 }
@@ -466,6 +467,13 @@ struct Inhabitant {
     radio: bool,
     calling: Option<(f32, Vector3<f32>)>,
     radioed: bool,
+    /// How far it trusts the word of each droid that has told it where the player was, by index,
+    /// from whether that word proved right (see [`hydroxus_ai::social::word`]); and whose word it
+    /// is searching on, if anyone's.
+    trust: Trust,
+    acting_on: Option<(u32, f32)>,
+    /// A witness: when it saw what it is going to tell, on [`Inhabitants::clock`].
+    saw_it: f32,
     /// What it chose to do last, by utility (see [`hydroxus_ai::tactics::conduct`]).
     conduct: Option<Conduct>,
     /// One of its own shot down before it: going to it and kneeling by it (see
@@ -896,6 +904,11 @@ pub struct Inhabitants {
     search_from: Option<Vector3<f32>>,
     /// How many stars the player is wanted at, as of the last [`Inhabitants::set_wanted`].
     wanted: u32,
+    /// Seconds since it was made: when word of the player was seen.
+    clock: f32,
+    /// How old what `search_from` says is, in seconds: the search spreads as far as the player
+    /// could have got since.
+    search_age: f32,
     /// How each role chooses what to do (see [`hydroxus_ai::tactics::conduct`]).
     reasoners: Reasoners,
     /// Where security has lost the player and found them hiding, this round's maze, for its
@@ -2133,6 +2146,9 @@ impl Inhabitants {
             radio,
             calling: None,
             radioed: false,
+            trust: Trust::new(),
+            acting_on: None,
+            saw_it: 0.0,
             conduct: None,
             mourning: None,
             report_after: None,
@@ -2475,6 +2491,7 @@ impl Inhabitants {
         self.minds.step(dt);
         self.haunts.step(&AI.haunt, dt);
         self.answers.step(&AI.habit, dt);
+        self.clock += dt.max(0.0);
         let mut caught = None;
         let (mut radioed, mut cut_off) = (Vec::new(), Vec::new());
         if let Some((ago, _)) = self.last_call.as_mut() {
@@ -2601,8 +2618,10 @@ impl Inhabitants {
             self.haunts.seen_at(&AI.haunt, mesh, at);
             self.haunts.lean(&AI.haunt, mesh, &mut search);
         } else if let Some(at) = self.search_from.take() {
-            // Something new about where they are: search from there.
+            // Something new about where they are: search from there - as far about as they could
+            // have got since it was so.
             search.lose(mesh, at, None);
+            search.spread(mesh, PLAYER_SPEED * std::mem::take(&mut self.search_age));
             self.haunts.lean(&AI.haunt, mesh, &mut search);
         }
         let searching = self.droids.iter().any(|d| d.alert == Some(Alert::Evasion) && !d.down);
@@ -2827,6 +2846,12 @@ impl Inhabitants {
                 }
                 if alert == Alert::Evasion && next == Some(Alert::Alert) && droid.side.is_none() {
                     found.push(droid.lost_at);
+                }
+                // Searching on another's word: found them, the word was good; gave up, it was not.
+                match (alert, next) {
+                    (Alert::Evasion, Some(Alert::Alert)) => settle_trust(&mut droid.trust, &mut droid.acting_on, true),
+                    (Alert::Evasion, Some(Alert::Caution) | None) => settle_trust(&mut droid.trust, &mut droid.acting_on, false),
+                    _ => (),
                 }
                 droid.enter(me, next, &mut alerts);
             }
@@ -3139,11 +3164,15 @@ impl Inhabitants {
                         Some(_) => {
                             droid.looking = None;
                             droid.searched += 1;
+                            // Where the others are going, and where it stands: it has just looked
+                            // about there, and a polygon's worth counts the chance next to it,
+                            // so the one it stands in would be chosen again and again.
                             let taken: Vec<Vector3<f32>> = goals
                                 .iter()
                                 .enumerate()
                                 .filter(|&(n, _)| n != me)
                                 .filter_map(|(_, g)| *g)
+                                .chain(std::iter::once(droid.feet))
                                 .collect();
                             let next = (!search.is_empty())
                                 .then(|| search.best_by(mesh, droid.feet, &taken, SEARCH_APART, CHASE_REACH, haunts.weigh(&AI.haunt, mesh)))
@@ -3712,7 +3741,9 @@ impl Inhabitants {
             answered.push(m);
         }
         if !answered.is_empty() {
+            // Seen as the call began: the player has had the call's while to get away since.
             self.search_from = Some(at);
+            self.search_age = RADIO_CALL;
         }
         self.last_call = Some((0.0, at));
         Log::info(format!("Radio: droid {n}'s call answered by {answered:?}"));
@@ -4136,6 +4167,7 @@ impl Inhabitants {
             if !answering {
                 continue;
             }
+
             droid.talking = false;
             droid.warned = 0;
             droid.threat = 0.0;
@@ -4147,6 +4179,7 @@ impl Inhabitants {
             self.alarmed.push(m);
             // Where the player was, as the alarm had it, is where the search starts from.
             self.search_from = Some(player);
+            self.search_age = 0.0;
         }
     }
 
@@ -4459,8 +4492,10 @@ impl Inhabitants {
     /// Has the `n`th droid, having seen what the player did at `at` - and who did it, if it
     /// `knows` - go and tell a sentry of it (see [`Inhabitants::report`]).
     pub fn witness(&mut self, n: usize, at: Vector3<f32>, knows: bool) {
+        let now = self.clock;
         if let Some(droid) = self.droids.get_mut(n).filter(|droid| !droid.down) {
             droid.witness = Some(Witness::with(at, knows, AI.report));
+            droid.saw_it = now;
             droid.warned = 0;
             droid.threat = 0.0;
             droid.route.clear();
@@ -4520,7 +4555,7 @@ impl Inhabitants {
                     droid.route.clear();
                     droid.resting = REST.1;
                     Log::info(format!("Witness: droid {n} told sentry {s}"));
-                    reports.told.push((n, s, witness.at, witness.knows));
+                    reports.told.push((n, s, witness.at, witness.knows, droid.saw_it));
                     continue;
                 }
                 Telling::GaveUp => {
@@ -4543,6 +4578,30 @@ impl Inhabitants {
         reports
     }
 
+    /// The `sentry`th droid has been told by the `witness`th where the player did something -
+    /// at `at`, seen at `seen` (on the droids' clock, see [`Reports::told`]), who did it known or
+    /// not. If it believes the witness (see [`believes`]: not one whose word has proved wrong
+    /// before), it searches there - as far about as the player could have got since it was seen -
+    /// and will trust the witness the more if it finds them, and the less if it was told soon
+    /// after and does not. Whether it believed it.
+    pub fn take_word(&mut self, sentry: usize, witness: usize, at: Vector3<f32>, knows: bool, seen: f32) -> bool {
+        let Some(droid) = self.droids.get(sentry) else {
+            return false;
+        };
+        let word = word_of(at, seen, witness, if knows { 1.0 } else { WITNESS_UNSURE });
+        if !believes(&droid.trust, &word) {
+            Log::info(format!("Witness: sentry {sentry} doubts droid {witness}, whose word has led nowhere before"));
+            return false;
+        }
+        let age = word.age(self.clock);
+        self.search_at(sentry, at);
+        if let Some(droid) = self.droids.get_mut(sentry).filter(|droid| droid.alert == Some(Alert::Evasion)) {
+            droid.acting_on = Some((witness as u32, age));
+            self.search_age = age;
+        }
+        true
+    }
+
     /// Has the `n`th droid, if it hunts the player at all, search from `at` - where it found
     /// one they shot down, say - unless it is after them already.
     pub fn search_at(&mut self, n: usize, at: Vector3<f32>) {
@@ -4559,6 +4618,7 @@ impl Inhabitants {
         droid.enter(n, Some(Alert::Evasion), &mut self.alerts);
         self.alarmed.push(n);
         self.search_from = Some(at);
+        self.search_age = 0.0;
     }
 
     /// Has everyone after the player, searching for them or wary of them, or on their way to tell
@@ -5270,8 +5330,75 @@ fn seen_by(
     if visible > 0.0 && in_sight(feet) { visible } else { 0.0 }
 }
 
+/// How much a droid has to believe word of where the player is (see
+/// [`hydroxus_ai::social::word::Word::belief`]) to go after it: as the AI's optional
+/// orchestration layer has it.
+pub const BELIEVE: f32 = hydroxus_ai::orchestrate::BELIEVE;
+/// How sure a witness that did not see who did it is of what it saw, against one that did.
+const WITNESS_UNSURE: f32 = 0.8;
+
+/// Word of the player at `at`, seen at `seen` on the droids' clock by the `witness`th droid, as
+/// sure as `sure`, as it passes it on to a sentry.
+fn word_of(at: Vector3<f32>, seen: f32, witness: usize, sure: f32) -> Word<()> {
+    Word::seen((), at, seen, witness as u32).confidence(sure).passed_on(&AI.word, witness as u32)
+}
+
+/// Whether one that trusts its sources as `trust` has it believes `word` enough to go after it:
+/// how sure the one that saw it was, how often it has been passed on, and how far its teller is
+/// trusted - not how old it is. Old word of where something was done is still where to start;
+/// its age only says how far about to search (see [`Inhabitants::take_word`]).
+fn believes(trust: &Trust, word: &Word<()>) -> bool {
+    word.belief(&AI.word, trust, word.seen) >= BELIEVE
+}
+
+/// A search on someone's word, `acting_on` - theirs, and how old it was when acted on - is over:
+/// it `found` the player, and the word was good; or it did not, and the word was fresh when acted
+/// on, and so no good. Word already old that came to nothing says nothing of whoever gave it: the
+/// player had long gone.
+fn settle_trust(trust: &mut Trust, acting_on: &mut Option<(u32, f32)>, found: bool) {
+    if let Some((source, age)) = acting_on.take() {
+        if found {
+            trust.confirmed(&AI.word, source);
+        } else if age <= AI.word.stale_half_life {
+            trust.refuted(&AI.word, source);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+
+    /// A witness's word, ROADMAP 5.2: believed by default however old - where it was done is still
+    /// where to start - but not from one whose fresh word has led nowhere before.
+    #[test]
+    fn a_witness_is_believed_unless_its_fresh_word_has_led_nowhere_before() {
+        let at = Vector3::new(10.0, 0.0, 5.0);
+        let trusting = Trust::new();
+        for (sure, age) in [(1.0, 0.0), (1.0, 90.0), (WITNESS_UNSURE, 0.0), (WITNESS_UNSURE, 90.0)] {
+            assert!(believes(&trusting, &word_of(at, 100.0 - age, 3, sure)), "{sure} {age}");
+        }
+        // Twice its word, fresh when acted on, led nowhere: no longer.
+        let mut misled = Trust::new();
+        for _ in 0..2 {
+            let mut acting_on = Some((3, 5.0));
+            settle_trust(&mut misled, &mut acting_on, false);
+            assert!(acting_on.is_none());
+        }
+        assert!(!believes(&misled, &word_of(at, 0.0, 3, 1.0)));
+        assert!(believes(&misled, &word_of(at, 0.0, 4, 1.0)), "another witness is believed still");
+        // Word already old that came to nothing says nothing of whoever gave it.
+        let mut patient = Trust::new();
+        for _ in 0..5 {
+            settle_trust(&mut patient, &mut Some((3, 60.0)), false);
+        }
+        assert!(believes(&patient, &word_of(at, 0.0, 3, 1.0)));
+        assert_eq!(patient.of(&AI.word, 3), AI.word.trust);
+        // And word that found them is trusted the more.
+        let mut proved = Trust::new();
+        settle_trust(&mut proved, &mut Some((3, 60.0)), true);
+        assert!(proved.of(&AI.word, 3) > AI.word.trust);
+    }
+
     use super::*;
 
     #[test]
