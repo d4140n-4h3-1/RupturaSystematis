@@ -82,3 +82,15 @@ mod tiles;
 mod traffic;
 mod train;
 mod vault;
+
+#[cfg(test)]
+mod ai_tuning {
+    /// The game's AI tuning holds no number the droids could not work with (see
+    /// [`hydroxus_ai::validate`]): a change to [`super::AI`] that does is caught here.
+    #[test]
+    fn the_ai_tuning_is_valid() {
+        if let Err(invalid) = super::AI.validate() {
+            panic!("{invalid}");
+        }
+    }
+}
