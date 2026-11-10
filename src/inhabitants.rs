@@ -2671,6 +2671,9 @@ impl Inhabitants {
         let mut mourned = Vec::new();
         // Where a searcher found the player again, to remember as somewhere they hide.
         let mut found = Vec::new();
+        // Where they have hidden before: each searcher weighs where it goes next by it - wherever
+        // the search has spread to, not only where they were lost (see `Haunts::weigh`).
+        let haunts = &self.haunts;
         for (me, droid) in self.droids.iter_mut().enumerate() {
             droid.avatar.fly_voxels(graph, dt);
             droid.passing.step(dt);
@@ -3143,7 +3146,7 @@ impl Inhabitants {
                                 .filter_map(|(_, g)| *g)
                                 .collect();
                             let next = (!search.is_empty())
-                                .then(|| search.best(mesh, droid.feet, &taken, SEARCH_APART, CHASE_REACH))
+                                .then(|| search.best_by(mesh, droid.feet, &taken, SEARCH_APART, CHASE_REACH, haunts.weigh(&AI.haunt, mesh)))
                                 .flatten();
                             (droid.route, droid.trip) = match next {
                                 Some(to) => go_to(droid.feet, to),
