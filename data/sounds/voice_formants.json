@@ -47,6 +47,10 @@
       "pitch": 105.0, "speed": 1.0, "size": 1.0, "lilt": 0.1, "fall": 0.2, "rise": 0.35,
       "breath": 0.12, "volume": 0.75, "reach": 3.0
     },
+    "Mutator": {
+      "pitch": 122.0, "speed": 1.1, "size": 1.02, "lilt": 0.22, "fall": 0.15, "rise": 0.42,
+      "breath": 0.04, "volume": 0.78, "reach": 3.0
+    },
     "Protegator": {
       "pitch": 160.0, "speed": 1.2, "size": 1.1, "lilt": 0.14, "fall": 0.12, "rise": 0.4,
       "breath": 0.02, "volume": 0.8, "reach": 4.0

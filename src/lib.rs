@@ -70,6 +70,7 @@ mod loading;
 mod lockpick;
 mod menu;
 mod notes;
+mod powerups;
 mod precinct;
 mod race;
 pub mod platform;

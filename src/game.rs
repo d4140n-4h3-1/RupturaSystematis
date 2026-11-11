@@ -21,6 +21,7 @@ use fyrox::{
 };
 use crate::{
     credits::Credits,
+    powerups::{Carried, PowerUp},
     computer::{self, Beeps, Computer, ScreenTerminal, Terminal, COMPUTER_MODEL},
     vault,
     ctf::{self, Bases, Side, MAPS, PLAYERS},
@@ -312,6 +313,9 @@ const FOG_VIEW: f32 = 140.0;
 const VIEW: f32 = 2048.0;
 /// The credits the player starts with, before they have taken any.
 const STARTING_CREDITS: Credits = Credits::new(200, 0);
+/// What a merchant asks of a player it likes, and of one it is wary of, against its prices.
+const FRIEND_PRICE: f32 = 0.8;
+const WARY_PRICE: f32 = 1.5;
 /// How long the player is shown they were deleted before the next maze, in seconds.
 const DELETED_FOR: f32 = 4.0;
 /// How high the floor under everything is: a little below the level's own, or, in the void, far
@@ -642,6 +646,11 @@ pub struct MazeGame {
     #[visit(skip)]
     #[reflect(hidden)]
     credits: Credits,
+    /// The power-ups the player carries, bought from a merchant, kept as the credits are (see
+    /// [`crate::powerups`]).
+    #[visit(skip)]
+    #[reflect(hidden)]
+    carried: Carried,
     /// The witnesses being questioned by security (see [`MazeGame::question`]).
     #[visit(skip)]
     #[reflect(hidden)]
@@ -1045,6 +1054,7 @@ impl MazeGame {
             alarm_sound: AlarmSound::make(),
             latency: OutputLatency::watch(),
             credits: STARTING_CREDITS,
+            carried: Carried::default(),
             ..Default::default()
         }
     }
@@ -2189,6 +2199,7 @@ impl MazeGame {
                     || self.talking.is_some(),
                 alarm: self.inhabitants.alarm(),
                 credits: self.credits,
+                carried: self.carried.shown(),
                 wanted: self.stars(),
                 shield: self.shield.as_ref().filter(|s| s.charge.is_up()).map(|s| s.charge.health()),
                 shield_ready: self.shield.as_ref().is_some_and(Shield::can_raise),
@@ -2333,6 +2344,8 @@ impl MazeGame {
             }
             KeyCode::KeyE if !self.menu.is_open() => self.start_hacking(ctx),
             KeyCode::Digit1 if !self.menu.is_open() && self.phase == Phase::Playing => self.raise_shield(),
+            KeyCode::Digit2 if !self.menu.is_open() && self.phase == Phase::Playing => self.use_power(ctx, PowerUp::Repair),
+            KeyCode::Digit3 if !self.menu.is_open() && self.phase == Phase::Playing => self.use_power(ctx, PowerUp::Stamina),
             KeyCode::KeyN => self.restart(ctx),
             _ => (),
         }
@@ -4336,7 +4349,13 @@ impl MazeGame {
             return;
         }
         // What it thinks of the player makes it the easier, or the harder, to talk round.
-        let Some(conversation) = Conversation::from(script, character, start).map(|c| c.swayed(self.inhabitants.sway(droid))) else {
+        // And a merchant asks the less of a friend, the more of one it is wary of.
+        let markup = match self.inhabitants.attitude(droid) {
+            Attitude::Friendly => FRIEND_PRICE,
+            Attitude::Wary => WARY_PRICE,
+            _ => 1.0,
+        };
+        let Some(conversation) = Conversation::from(script, character, start).map(|c| c.swayed(self.inhabitants.sway(droid)).priced(markup)) else {
             return;
         };
         let ui = ctx.user_interfaces.first();
@@ -4460,7 +4479,7 @@ impl MazeGame {
         let (Some(talking), Some(script)) = (self.talking.as_mut(), self.script.as_ref()) else {
             return;
         };
-        // A bribe the player cannot pay for is not said.
+        // A bribe, or something bought, the player cannot pay for is not said.
         if talking
             .conversation
             .price(script, choice)
@@ -4469,11 +4488,38 @@ impl MazeGame {
             self.hud.show_note("Not enough credits".into());
             return;
         }
+        // Nor something bought there is no room for.
+        let purchase = talking.conversation.purchase(script, choice).map(|(item, _)| item);
+        if let Some(item) = purchase {
+            let room = match item {
+                PowerUp::Shield => self.shield.as_ref().is_some_and(|shield| shield.spares < shield::MOST_SPARES),
+                _ => self.carried.room(item),
+            };
+            if !room {
+                self.hud.show_note(format!("No room for another {}", item.name()));
+                return;
+            }
+        }
         let before = self.credits;
         let going_on = talking.conversation.choose(script, choice, roll, &mut self.credits);
+        // Bought, it is the player's.
+        if let Some(item) = purchase.filter(|_| self.credits < before) {
+            let have = match item {
+                PowerUp::Shield => self.shield.as_mut().map_or(0, |shield| {
+                    shield.add_spare();
+                    shield.spares
+                }),
+                _ => {
+                    self.carried.add(item);
+                    if item == PowerUp::Repair { self.carried.repairs } else { self.carried.stamina }
+                }
+            };
+            self.hud.show_note(format!("Bought a {}: [{}] to use, {have} carried", item.name(), item.key()));
+            Log::info(format!("Merchant: bought a {} for {}, {} left", item.name(), Credits(before.0 - self.credits.0), self.credits));
+        }
         // Paid off, or talked round, it thinks the better of the player.
         let deed = match talking.conversation.last_check() {
-            Some((_, true)) if self.credits != before => Some(Deed::Bribing),
+            Some((_, true)) if self.credits != before && purchase.is_none() => Some(Deed::Bribing),
             Some((true, false)) => Some(Deed::Persuading),
             _ => None,
         };
@@ -4486,7 +4532,7 @@ impl MazeGame {
             return;
         };
         if going_on {
-            if self.credits != before {
+            if self.credits != before && purchase.is_none() {
                 Log::info(format!("Credits: bribe paid, {} left", self.credits));
             }
             let view = talking.conversation.view(script, &talking.facts, self.credits);
@@ -5800,6 +5846,43 @@ impl MazeGame {
     }
 
     /// Raises the player's shield, if it is charged; or says it is not.
+    /// Uses a repair kit or a stamina cell the player carries (see [`crate::powerups`]): a
+    /// heart's worth of health back, or their breath frozen a while. Not a repair kit while they
+    /// are whole: it would be wasted.
+    fn use_power(&mut self, ctx: &mut PluginContext, power: PowerUp) {
+        let have = match power {
+            PowerUp::Repair => self.carried.repairs,
+            PowerUp::Stamina => self.carried.stamina,
+            PowerUp::Shield => return,
+        };
+        if have == 0 {
+            self.hud.show_note(format!("No {}s - a merchant sells them", power.name()));
+            return;
+        }
+        match power {
+            PowerUp::Repair if !self.health.hurt() => {
+                self.hud.show_note("Not damaged: the repair kit is kept".to_string());
+                return;
+            }
+            PowerUp::Repair => {
+                let graph = &mut ctx.scenes[self.scene].graph;
+                let at = self.player.position(graph);
+                let whole = self.health.heart_and_whole();
+                self.health_sounds.play(graph, Heard::Heart, at);
+                if whole {
+                    self.health_sounds.play(graph, Heard::Whole, at);
+                }
+            }
+            _ => self.player.freeze_stamina(),
+        }
+        self.carried.take(power);
+        let left = have - 1;
+        self.hud.show_note(match power {
+            PowerUp::Repair => format!("Repaired: {left} repair kits left"),
+            _ => format!("Stamina frozen for {:.0} seconds: {left} cells left", crate::player::breath::FREEZE),
+        });
+    }
+
     fn raise_shield(&mut self) {
         let Some(shield) = self.shield.as_mut() else {
             return;

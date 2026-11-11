@@ -22,6 +22,11 @@
 //! line says its own, or takes one from how the check that led to it went: blue if it succeeded,
 //! orange if not.
 //!
+//! A reply can be something bought (see [`Buy`]) - a power-up, from a merchant - shown with its
+//! price, `[30.00 CR] A repair kit.`, and dimmed without the credits. The price is the droid's, as
+//! what it thinks of the player makes it (see [`Conversation::priced`]). It can be bought again and
+//! again; whether the player has room for another is the game's to say.
+//!
 //! A line can have the droid turn on the player once the conversation is over (see
 //! [`Conversation::attacks`]): a sentry that sees through the player goes after them.
 //!
@@ -50,7 +55,7 @@
 
 pub mod screen;
 
-use crate::credits::Credits;
+use crate::{credits::Credits, powerups::PowerUp};
 use hydroxus_ai::social::faction::{Faction, Factions};
 use serde::Deserialize;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -94,6 +99,16 @@ pub struct Reply {
     /// The check tried with a bribe instead, if the droid takes one.
     #[serde(default)]
     pub bribe: Option<Bribe>,
+    /// What saying it buys, if anything, and for how much.
+    #[serde(default)]
+    pub buy: Option<Buy>,
+}
+
+/// Something bought from the droid: a power-up, and its price before the droid's own markup.
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
+pub struct Buy {
+    pub item: PowerUp,
+    pub credits: Credits,
 }
 
 /// A check tried with credits: what the player says instead, how many credits it costs, and the
@@ -481,6 +496,10 @@ impl Script {
                             "{name}'s {key}: \"{}\" has a bribe but no check",
                             reply.say
                         )),
+                        (Some(_), _) if reply.buy.is_some() => problems.push(format!(
+                            "{name}'s {key}: \"{}\" both buys and is a check",
+                            reply.say
+                        )),
                         (Some(check), Some(bribe)) if bribe.chance <= check.chance => {
                             problems.push(format!(
                                 "{name}'s {key}: \"{}\" has a bribe no likelier to work",
@@ -574,6 +593,9 @@ pub struct Conversation {
     sway: i32,
     /// Whether the last check said was a bribe.
     bribed: bool,
+    /// How much more than its prices the droid asks, as what it thinks of the player has it
+    /// (see [`Conversation::priced`]).
+    markup: f32,
     /// The replies said so far, by the line they were said to and which of its replies they were.
     said: HashSet<(String, usize)>,
     /// How the last check went, if the last reply was one: what to say about it, and whether it
@@ -592,6 +614,7 @@ impl Conversation {
             line,
             sway: 0,
             bribed: false,
+            markup: 1.0,
             said: HashSet::new(),
             note: None,
         })
@@ -603,6 +626,26 @@ impl Conversation {
     pub fn swayed(mut self, sway: i32) -> Self {
         self.sway = sway;
         self
+    }
+
+    /// As it is, but with what the droid sells `markup` times its price: less for a friend, more
+    /// for one it is wary of.
+    pub fn priced(mut self, markup: f32) -> Self {
+        self.markup = if markup.is_finite() { markup.max(0.0) } else { 1.0 };
+        self
+    }
+
+    /// What `buy` costs from this droid.
+    fn cost(&self, buy: &Buy) -> Credits {
+        Credits((buy.credits.0 as f64 * self.markup as f64).round() as u64)
+    }
+
+    /// What the `choice`th of the replies on offer buys, if it buys anything, and what it costs.
+    pub fn purchase(&self, script: &Script, choice: usize) -> Option<(PowerUp, Credits)> {
+        let line = self.line(script)?;
+        let (index, _) = (*self.offered(line).get(choice)?)?;
+        let buy = line.replies[index].buy.as_ref()?;
+        Some((buy.item, self.cost(buy)))
     }
 
     /// The chance of a check `chance` likely, as what the droid thinks of the player sways it.
@@ -671,6 +714,11 @@ impl Conversation {
                         ),
                         said: credits < bribe.credits,
                     },
+                    // Its price in front; dimmed while the player cannot pay.
+                    (None, _) if reply.buy.is_some() => {
+                        let cost = self.cost(reply.buy.as_ref().expect("buys"));
+                        Choice { label: format!("[{cost}] {}", facts.fill(&reply.say, false)), said: credits < cost }
+                    }
                     (check, _) => {
                         let say = facts.fill(&reply.say, false);
                         Choice {
@@ -716,8 +764,11 @@ impl Conversation {
         self.line(script).is_some_and(|line| line.identifies)
     }
 
-    /// What the `choice`th of the replies on offer costs, if it is a bribe.
+    /// What the `choice`th of the replies on offer costs, if it is a bribe or buys something.
     pub fn price(&self, script: &Script, choice: usize) -> Option<Credits> {
+        if let Some((_, cost)) = self.purchase(script, choice) {
+            return Some(cost);
+        }
         let line = self.line(script)?;
         let (index, true) = (*self.offered(line).get(choice)?)? else {
             return None;
@@ -740,6 +791,10 @@ impl Conversation {
         let reply = &line.replies[index];
         let bribe = reply.bribe.as_ref().filter(|_| bribed);
         if bribe.is_some_and(|bribe| !credits.spend(bribe.credits)) {
+            return true;
+        }
+        // Bought: paid for, or not said at all.
+        if reply.buy.as_ref().is_some_and(|buy| !credits.spend(self.cost(buy))) {
             return true;
         }
         self.said.insert((self.line.clone(), index));
@@ -1192,6 +1247,41 @@ mod tests {
             .map(|c| c.label)
             .collect();
         assert_eq!(labels, ["Goodbye."]);
+    }
+
+    #[test]
+    fn a_power_up_is_bought_at_the_droids_price_again_and_again_and_dimmed_without_the_credits() {
+        let script: Script = serde_json::from_str(
+            r#"{ "characters": [ { "name": "Mutator", "start": "wares", "lines": {
+                "wares": { "says": "Merces.", "means": "Wares.", "replies": [
+                    { "say": "A repair kit.", "to": "wares", "buy": { "item": "repair", "credits": 40 } },
+                    { "say": "Goodbye." } ] } } } ] }"#,
+        )
+        .unwrap();
+        assert!(script.problems().is_empty(), "{:?}", script.problems());
+        let facts = Facts::default();
+        let wary = Conversation::from(&script, 0, None).unwrap().priced(1.5);
+        assert_eq!(wary.purchase(&script, 0), Some((PowerUp::Repair, Credits::new(60, 0))));
+        assert_eq!(wary.price(&script, 0), Some(Credits::new(60, 0)));
+        assert_eq!(wary.purchase(&script, 1), None);
+        let view = wary.view(&script, &facts, Credits::new(50, 0));
+        assert!(view.choices[0].label.starts_with("[60.00 CR]") && view.choices[0].said, "{:?}", view.choices[0]);
+        // Bought twice, at a friend's price; a third time, short of credits, not.
+        let mut friendly = Conversation::from(&script, 0, None).unwrap().priced(0.8);
+        let mut credits = Credits::new(70, 0);
+        assert!(friendly.choose(&script, 0, 0, &mut credits));
+        assert!(friendly.choose(&script, 0, 0, &mut credits));
+        assert_eq!(credits, Credits::new(6, 0));
+        assert!(friendly.choose(&script, 0, 0, &mut credits));
+        assert_eq!(credits, Credits::new(6, 0));
+        // A reply both buying and a check is refused.
+        let bad: Script = serde_json::from_str(
+            r#"{ "characters": [ { "name": "M", "start": "a", "lines": { "a": { "says": "", "replies": [
+                { "say": "x", "to": "a", "fail": "a", "check": { "skill": "Speech", "chance": 50 },
+                  "buy": { "item": "stamina", "credits": 5 } } ] } } } ] }"#,
+        )
+        .unwrap();
+        assert!(bad.problems().iter().any(|p| p.contains("both buys")), "{:?}", bad.problems());
     }
 
     #[test]

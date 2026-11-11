@@ -1231,6 +1231,315 @@
           "means": "Security's down. Pulling back."
         }
       }
+    },
+    {
+      "name": "Mutator",
+      "faction": "citizens",
+      "in_pairs": 0.15,
+      "model": "data/droid_yellow.glb",
+      "share": 0.3,
+      "start": "wares",
+      "threatened": {
+        "patience": 2.0,
+        "then": "alarm"
+      },
+      "lines": {
+        "wares": {
+          "says": "Mutator codex {code}. Taberna activum. Copia: refectio, cellula energia, cellula scutum.",
+          "means": "Trader unit {code}. My stall is open. In stock: repair kits, stamina cells, shield cells.",
+          "replies": [
+            {
+              "say": "A repair kit.",
+              "to": "sold",
+              "buy": {
+                "item": "repair",
+                "credits": 40
+              }
+            },
+            {
+              "say": "A stamina cell.",
+              "to": "sold",
+              "buy": {
+                "item": "stamina",
+                "credits": 30
+              }
+            },
+            {
+              "say": "A shield cell.",
+              "to": "sold",
+              "buy": {
+                "item": "shield",
+                "credits": 60
+              }
+            },
+            {
+              "say": "What do they do?",
+              "to": "about"
+            },
+            {
+              "say": "Which way to Summa?",
+              "to": "summa"
+            },
+            {
+              "say": "Goodbye."
+            }
+          ]
+        },
+        "about": {
+          "says": "Refectio restituat integritas. Cellula energia suspendat consumptio. Cellula scutum renovat scutum.",
+          "means": "A repair kit restores your integrity. A stamina cell halts your energy use a while. A shield cell recharges your shield.",
+          "replies": [
+            {
+              "say": "A repair kit.",
+              "to": "sold",
+              "buy": {
+                "item": "repair",
+                "credits": 40
+              }
+            },
+            {
+              "say": "A stamina cell.",
+              "to": "sold",
+              "buy": {
+                "item": "stamina",
+                "credits": 30
+              }
+            },
+            {
+              "say": "A shield cell.",
+              "to": "sold",
+              "buy": {
+                "item": "shield",
+                "credits": 60
+              }
+            },
+            {
+              "say": "Goodbye."
+            }
+          ]
+        },
+        "summa": {
+          "says": "Ubi Summa? Non scano. Ego muto. Quaera explorator.",
+          "means": "Where Summa is? I don't map. I trade. Ask a scout.",
+          "replies": [
+            {
+              "say": "What do you sell?",
+              "to": "wares"
+            },
+            {
+              "say": "Goodbye."
+            }
+          ]
+        },
+        "sold": {
+          "says": "Creditum recipo. Quid alius?",
+          "means": "Credits received. What else?",
+          "mood": "success",
+          "replies": [
+            {
+              "say": "A repair kit.",
+              "to": "sold",
+              "buy": {
+                "item": "repair",
+                "credits": 40
+              }
+            },
+            {
+              "say": "A stamina cell.",
+              "to": "sold",
+              "buy": {
+                "item": "stamina",
+                "credits": 30
+              }
+            },
+            {
+              "say": "A shield cell.",
+              "to": "sold",
+              "buy": {
+                "item": "shield",
+                "credits": 60
+              }
+            },
+            {
+              "say": "Goodbye."
+            }
+          ]
+        },
+        "witness_saw": {
+          "says": "Tu. Observavo tu. Tu deletavas civis.",
+          "means": "You! I saw you. You deleted a citizen!",
+          "mood": "agitated",
+          "replies": [
+            {
+              "say": "Forget what you saw, or you're next.",
+              "check": {
+                "skill": "Intimidate",
+                "chance": 40
+              },
+              "to": "silenced",
+              "fail": "defiant",
+              "bribe": {
+                "say": "Take these credits, and forget what you saw.",
+                "credits": 60.0,
+                "chance": 80
+              }
+            },
+            {
+              "say": "You're mistaken. It wasn't me.",
+              "check": {
+                "skill": "Speech",
+                "chance": 25
+              },
+              "to": "doubt",
+              "fail": "defiant"
+            },
+            {
+              "say": "Goodbye."
+            }
+          ]
+        },
+        "silenced": {
+          "says": "Affirmatum. Nullum observavo. Silentium.",
+          "means": "Yes. I saw nothing. I'll keep quiet.",
+          "silenced": true
+        },
+        "doubt": {
+          "says": "Possibilum. Dubium. Ignoro id.",
+          "means": "Maybe. I'm not sure now. I'll let it go.",
+          "mood": "warning",
+          "silenced": true
+        },
+        "defiant": {
+          "says": "Negativum. Quaero praesidium statim.",
+          "means": "No! I'm going to security, now.",
+          "mood": "hostile"
+        },
+        "witness_unsure": {
+          "says": "Civis deletatum. Sonus longe. Aggressor incognitum. Utrum tu observavas aggressor?",
+          "means": "A citizen deleted! The shot came from far off, I didn't see who. Did you see the shooter?",
+          "mood": "warning",
+          "replies": [
+            {
+              "say": "No. I didn't see anything.",
+              "to": "unsure_go"
+            },
+            {
+              "say": "Best keep out of it. Go home.",
+              "check": {
+                "skill": "Speech",
+                "chance": 50
+              },
+              "to": "unsure_quiet",
+              "fail": "unsure_go",
+              "bribe": {
+                "say": "Here, for your trouble. Go home, and keep out of it.",
+                "credits": 20.0,
+                "chance": 85
+              }
+            },
+            {
+              "say": "It was me.",
+              "to": "confessed"
+            },
+            {
+              "say": "Goodbye."
+            }
+          ]
+        },
+        "unsure_go": {
+          "says": "Affirmatum. Quaero praesidium.",
+          "means": "All right. I'm going to find security."
+        },
+        "unsure_quiet": {
+          "says": "Possibilum. Redio. Silentium.",
+          "means": "Maybe you're right. I'm going home. I'll keep quiet.",
+          "silenced": true
+        },
+        "confessed": {
+          "says": "Tu esas aggressor. Quaero praesidium statim.",
+          "means": "You're the shooter! I'm going to security, now!",
+          "mood": "hostile",
+          "identifies": true
+        }
+      },
+      "barks": {
+        "warned": {
+          "says": "Quid? Telum tu periculosum.",
+          "means": "What? Your weapon is dangerous."
+        },
+        "warned_again": {
+          "says": "Desactiva telum tu. Periculum.",
+          "means": "Put your weapon away. Danger."
+        },
+        "provoked": {
+          "says": "Aggressor detectum. Sireno.",
+          "means": "Attacker detected. I am sounding the alarm."
+        },
+        "calmed": {
+          "says": "Accipatum.",
+          "means": "Acknowledged."
+        },
+        "drawn": {
+          "says": "Ego reparo. Cur telum activum?",
+          "means": "I am only doing repairs. Why is your weapon out?"
+        },
+        "drawn_close": {
+          "says": "Recedo. Ego inermum.",
+          "means": "I am backing off. I am unarmed."
+        },
+        "drawn_put_away": {
+          "says": "Affirmatum. Resumo reparatio.",
+          "means": "Good. Back to my repairs."
+        },
+        "greet": {
+          "says": "Usor. Taberna activum.",
+          "means": "Oh, it is you. My stall is open."
+        },
+        "tip": {
+          "says": "Securitas zetans. Evada.",
+          "means": "Security is out hunting. Lie low."
+        },
+        "tip_turf": {
+          "says": "Zona hostilum prope. Evada ab ille.",
+          "means": "Gang turf near. Keep clear of it."
+        },
+        "avoid": {
+          "says": "Occupatum. Ego reparo.",
+          "means": "Busy. I have repairs to do."
+        },
+        "glare": {
+          "says": "Negativum. Tu periculosum.",
+          "means": "No. You are trouble."
+        },
+        "mourn": {
+          "says": "Unitas percutatum. Ego reparabso id.",
+          "means": "A unit is down. I will fix it."
+        },
+        "grief_flee": {
+          "says": "Evado statim.",
+          "means": "I am getting out of here."
+        },
+        "witnessed": {
+          "says": "Aggressio detectum. Quaero praesidium.",
+          "means": "Attack detected! I am looking for a guard."
+        },
+        "body": {
+          "says": "Civis deletatum. Quaero praesidium.",
+          "means": "A citizen deleted. I am looking for a guard."
+        },
+        "reported": {
+          "says": "Aggressio detectum. Civis deletatum. Zeta aggressor.",
+          "means": "Attack detected. A citizen deleted. Hunt the attacker."
+        },
+        "saw_who": {
+          "says": "Affirmatum. Observavo aggressor. Identifico id.",
+          "means": "Yes. I saw the shooter. I'd know them anywhere."
+        },
+        "saw_none": {
+          "says": "Negativum. Sonus longe. Civis deletatum. Aggressor incognitum.",
+          "means": "No. Just a shot from far off, and a citizen deleted. I didn't see who."
+        }
+      }
     }
   ],
   "meetings": [

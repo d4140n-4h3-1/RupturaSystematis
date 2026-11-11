@@ -114,8 +114,9 @@ pub enum Status {
         /// How the droids hunting the player are going about it, if any are, and how many seconds
         /// that has left.
         alarm: Option<(Alert, f32)>,
-        /// The player's credits.
+        /// The player's credits, and the power-ups they carry, as shown under them.
         credits: Credits,
+        carried: String,
         /// How many stars the player is wanted at (see [`wanted_shown`]).
         wanted: u32,
         /// While the shield is up, how much of its health it has left, from 0 to 1: the health
@@ -169,9 +170,12 @@ pub struct Hud {
     /// The ammo under the name, and what it last showed.
     rounds: Handle<Text>,
     shown_rounds: Option<(u32, bool)>,
-    /// The player's credits in the top right, and what it last said.
+    /// The player's credits in the top right, and what it last said; and the power-ups they carry,
+    /// under the wanted level.
     credits: Handle<Text>,
     shown_credits: Option<Credits>,
+    carried: Handle<Text>,
+    shown_carried: Option<String>,
     /// The wanted level under them - the star, and the number on it - and what it last said.
     wanted: Handle<UiNode>,
     wanted_number: Handle<Text>,
@@ -502,9 +506,24 @@ impl Hud {
         .with_texture(star)
         .build(ctx)
         .to_base();
+        // The power-ups the player carries, each with its key, under the wanted level.
+        let carried = TextBuilder::new(
+            WidgetBuilder::new()
+                .with_horizontal_alignment(HorizontalAlignment::Right)
+                .with_vertical_alignment(VerticalAlignment::Top)
+                .with_margin(Thickness { left: 12.0, top: 40.0 + WANTED_SIZE + 8.0, right: 12.0, bottom: 12.0 })
+                .with_visibility(false)
+                .with_foreground(Brush::Solid(Color::WHITE).into()),
+        )
+        .with_font_size(17.0.into())
+        .with_horizontal_text_alignment(HorizontalAlignment::Right)
+        .with_shadow(true)
+        .with_shadow_brush(Brush::Solid(Color::opaque(0, 0, 0)))
+        .build(ctx);
         let screen = ScreenBuilder::new(
             WidgetBuilder::new()
                 .with_child(credits)
+                .with_child(carried)
                 .with_child(wanted)
                 .with_child(hurt)
                 .with_child(health)
@@ -538,6 +557,7 @@ impl Hud {
             gun_label,
             rounds: endless,
             credits,
+            carried,
             wanted,
             wanted_number,
             screen,
@@ -574,6 +594,10 @@ impl Hud {
         let blinking_on = self.blink < BLINK_ON;
         let wanted = match &status {
             Status::Round { wanted, .. } => wanted_shown(*wanted),
+            _ => None,
+        };
+        let carried = match &status {
+            Status::Round { carried, .. } if !carried.is_empty() => Some(carried.clone()),
             _ => None,
         };
         let (text, alarm, breath, health, (armed, gun, ammo), credits, shield, shield_ready, (detection, watchers)) = match status {
@@ -756,6 +780,14 @@ impl Hud {
                 ui.send(self.credits, TextMessage::Text(credits.to_string()));
             }
             self.shown_credits = credits;
+        }
+
+        if carried != self.shown_carried {
+            ui.send(self.carried, WidgetMessage::Visibility(carried.is_some()));
+            if let Some(carried) = &carried {
+                ui.send(self.carried, TextMessage::Text(carried.clone()));
+            }
+            self.shown_carried = carried;
         }
 
         if armed != self.shown_ammo {
