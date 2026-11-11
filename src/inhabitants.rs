@@ -127,6 +127,8 @@ use hydroxus_ai::{
         fire,
         join::{could_see_other, joiners, Watch},
         pace::{pace, sprints},
+        priority::{self, Context, Traits},
+        roles::{self, Chaser, Part},
         search::SearchMap,
         threat::{pointed_at, stage_after},
     },
@@ -138,8 +140,10 @@ use hydroxus_ai::{
         faction::{Faction, Factions},
         opinion::{self, Attitude, Deed},
         passing::Passing,
+        relation,
         report::{hears_alarm, Telling, Witness},
         rumour::Minds,
+        suspicion::Suspicions,
         talk::{self, within_talking},
         ties::{self, Mourning},
         trouble::Kind,
@@ -204,6 +208,12 @@ const EYES: &str = "eyes";
 /// How long a droid with a radio takes to call for help, in seconds - long enough to be stopped -
 /// and how far off, in meters, those of security it calls hear it: much further than an alarm.
 pub const RADIO_CALL: f32 = 2.5;
+/// How far each droid's traits stray from the middle, either way, at most (see
+/// [`Traits::from_seed`]): enough that one droid is not another's copy.
+pub const TRAIT_SPREAD: f32 = 0.3;
+/// How near the player a droid has to be to note seeing them, to suspect them of trouble later,
+/// in meters (see [`hydroxus_ai::social::suspicion`]).
+pub const SUSPECT_SIGHT: f32 = 30.0;
 pub const RADIO_REACH: f32 = 300.0;
 /// One call for one sighting: no other droid calls for help on its radio while one is calling, or
 /// for this many seconds after a call went out, for the player seen within as many meters of
@@ -472,6 +482,18 @@ struct Inhabitant {
     /// is searching on, if anyone's.
     trust: Trust,
     acting_on: Option<(u32, f32)>,
+    /// What kind of droid it is - observant, social, independent, aggressive, cautious, curious -
+    /// its own, from its number (see [`hydroxus_ai::tactics::priority::Traits`]).
+    traits: Traits,
+    /// Its part in a chase after the player with others (see [`hydroxus_ai::tactics::roles`]).
+    part: Option<Part>,
+    /// When it last saw the player, on [`Inhabitants::clock`].
+    lost_when: f32,
+    /// What it suspects the player of, from where it saw them and what trouble it knows of (see
+    /// [`hydroxus_ai::social::suspicion`]); and each trouble it is weighing against its sightings,
+    /// with when it came to know of it.
+    suspicions: Suspicions,
+    weighing: Vec<(u32, f32)>,
     /// A witness: when it saw what it is going to tell, on [`Inhabitants::clock`].
     saw_it: f32,
     /// What it chose to do last, by utility (see [`hydroxus_ai::tactics::conduct`]).
@@ -1212,11 +1234,11 @@ impl Inhabitant {
         self.wariness.note(&AI.alert, incident);
     }
 
-    /// How keenly it looks and listens for the player: the more searching, and the more the
-    /// warier it is.
+    /// How keenly it looks and listens for the player: the more searching, the warier it is, and
+    /// the more observant.
     fn eagerness(&self) -> f32 {
         let searching = if self.alert == Some(Alert::Evasion) { AI.detection.searching } else { 1.0 };
-        searching * self.wariness.keenness(&AI.alert) * keener(self.stars)
+        searching * self.wariness.keenness(&AI.alert) * keener(self.stars) * priority::keenness(&AI.priority, &self.traits)
     }
 
     /// Starts searching from where it last saw the player.
@@ -2148,6 +2170,11 @@ impl Inhabitants {
             radioed: false,
             trust: Trust::new(),
             acting_on: None,
+            traits: Traits::from_seed(code.wrapping_mul(104_729) ^ self.droids.len() as u32, TRAIT_SPREAD),
+            part: None,
+            lost_when: 0.0,
+            suspicions: Suspicions::new(),
+            weighing: Vec::new(),
             saw_it: 0.0,
             conduct: None,
             mourning: None,
@@ -2489,6 +2516,7 @@ impl Inhabitants {
     ) -> News {
         // What they think and know of the player fades a little, and what they learned of them.
         self.minds.step(dt);
+        self.suspect();
         self.haunts.step(&AI.haunt, dt);
         self.answers.step(&AI.habit, dt);
         self.clock += dt.max(0.0);
@@ -2642,16 +2670,37 @@ impl Inhabitants {
             .iter()
             .map(|d| (d.alert == Some(Alert::Evasion)).then(|| d.route.first().copied()).flatten())
             .collect();
-        // The droid after the player that is nearest them goes straight at them; the others make
-        // for somewhere ahead of them, to cut them off.
-        let nearest_chaser = self
-            .droids
-            .iter()
-            .enumerate()
-            .filter(|(_, d)| d.alert == Some(Alert::Alert) && !d.down && d.windup == 0.0)
-            .min_by(|(_, a), (_, b)| flat(a.feet - player).norm().total_cmp(&flat(b.feet - player).norm()))
-            .map(|(n, _)| n);
         let player_going = seeing.map(|d| d.lost_going);
+        // Parts in the chase (see `roles`): the nearest after the player go straight at them -
+        // one already doing so, or quick to, the sooner; one that sees them close by, whatever -
+        // and the others, if they are on the move, make for somewhere ahead of them, each to its
+        // own side, to cut them off. `lost_going` is about a quarter of their speed, a second.
+        let going = player_going.filter(|g| g.norm() * 4.0 >= AI.orchestrate.going_least);
+        let chasing: Vec<usize> = (0..self.droids.len())
+            .filter(|&n| {
+                let d = &self.droids[n];
+                d.alert == Some(Alert::Alert) && !d.down && d.windup == 0.0
+            })
+            .collect();
+        let chasers: Vec<Chaser> = chasing
+            .iter()
+            .map(|&n| {
+                let d = &self.droids[n];
+                Chaser { feet: d.feet, them: player, going, sees: d.sees_player, aggression: d.traits.aggression, was: d.part }
+            })
+            .collect();
+        let mut parts: Vec<Option<(Part, Chaser)>> = vec![None; self.droids.len()];
+        for ((&n, part), chaser) in chasing.iter().zip(roles::parts(&AI.roles, &chasers)).zip(chasers) {
+            parts[n] = Some((part, chaser));
+        }
+        for (droid, part) in self.droids.iter_mut().zip(&parts) {
+            droid.part = part.map(|(part, _)| part);
+        }
+        // Where each searcher is: one making for where another is already looking about gives it
+        // up for somewhere else (see `orchestrate::Tuning::covered_within`).
+        let searchers: Vec<Option<Vector3<f32>>> =
+            self.droids.iter().map(|d| (d.alert == Some(Alert::Evasion) && !d.down).then_some(d.feet)).collect();
+
         // Which of those leading have one of their pair or group to wait for: kept talking, or
         // fallen behind.
         let mut waits = vec![false; self.droids.len()];
@@ -2824,6 +2873,7 @@ impl Inhabitants {
                 let moved = flat(player - droid.lost_at);
                 droid.lost_going = droid.lost_going * (-4.0 * dt).exp() + moved;
                 droid.lost_at = player;
+                droid.lost_when = self.clock;
             }
             // Seeing the player or not, a hostile droid goes into the phase that follows - once it
             // is done standing, having just turned hostile.
@@ -2967,7 +3017,11 @@ impl Inhabitants {
                     Some(_) => Role::Fighter,
                     None => self.groupings.get(droid.character).map_or(Role::Sentry, |g| g.role),
                 };
-                Some(self.reasoners.choose(role, &reading, droid.conduct))
+                // Weighed by what kind of droid it is: the aggressive chase and fight the more,
+                // the cautious keep safe, the curious look into things (see `priority`).
+                let traits = droid.traits;
+                let weigh = |c| priority::weigh(&AI.priority, &traits, &Context::default(), c);
+                Some(self.reasoners.of(role).choose_by(&reading, droid.conduct, weigh).unwrap_or(Conduct::GoAbout))
             };
             // Stopped, it stays where it went down - aboard the train, going along with it.
             if droid.down {
@@ -3109,8 +3163,7 @@ impl Inhabitants {
                 // last time, only once it is time to look again.
                 if !standing_to_shoot && (droid.replan <= 0.0 || droid.route.is_empty() && !droid.no_way) {
                     droid.replan = REPLAN;
-                    let away = flat(player - droid.feet).norm();
-                    let cut_off = chase::cut_off(&AI.chase, player, player_going, away, Some(me) == nearest_chaser, &floor_at);
+                    let cut_off = parts[me].and_then(|(part, chaser)| roles::cut_spot(&AI.roles, &AI.chase, &chaser, part, &floor_at));
                     (droid.route, droid.trip) = go_to(droid.feet, cut_off.unwrap_or(player));
                     droid.no_way = droid.route.is_empty();
                 }
@@ -3154,6 +3207,20 @@ impl Inhabitants {
                     }
                 };
             } else if droid.conduct == Some(Conduct::Search) {
+                // Making for where another searcher, nearer it, already is: that is being looked
+                // over. It stops, looks about where it is, and goes on somewhere else.
+                if let Some(&goal) = droid.route.first() {
+                    let mine = flat(goal - droid.feet).norm();
+                    let covered = searchers.iter().enumerate().filter(|&(n, _)| n != me).filter_map(|(_, f)| *f).any(|f| {
+                        let theirs = flat(f - goal).norm();
+                        theirs < AI.orchestrate.covered_within && theirs < mine
+                    });
+                    if covered && droid.searched > 0 {
+                        droid.route.clear();
+                        droid.trip = None;
+                        droid.looking = None;
+                    }
+                }
                 if droid.route.is_empty() {
                     match droid.looking.as_mut().map(|look| look.step(dt)) {
                         // Looking about where it is, one way and then the other.
@@ -3167,13 +3234,12 @@ impl Inhabitants {
                             // Where the others are going, and where it stands: it has just looked
                             // about there, and a polygon's worth counts the chance next to it,
                             // so the one it stands in would be chosen again and again.
-                            let taken: Vec<Vector3<f32>> = goals
-                                .iter()
-                                .enumerate()
-                                .filter(|&(n, _)| n != me)
-                                .filter_map(|(_, g)| *g)
-                                .chain(std::iter::once(droid.feet))
-                                .collect();
+                            // Where the other searchers stand, too: they look over it as they go.
+                            let others = |of: &[Option<Vector3<f32>>]| -> Vec<Vector3<f32>> {
+                                of.iter().enumerate().filter(|&(n, _)| n != me).filter_map(|(_, at)| *at).collect()
+                            };
+                            let taken: Vec<Vector3<f32>> =
+                                others(&goals).into_iter().chain(others(&searchers)).chain(std::iter::once(droid.feet)).collect();
                             let next = (!search.is_empty())
                                 .then(|| search.best_by(mesh, droid.feet, &taken, SEARCH_APART, CHASE_REACH, haunts.weigh(&AI.haunt, mesh)))
                                 .flatten();
@@ -3862,7 +3928,12 @@ impl Inhabitants {
     ) {
         // A weapon drawn catches the eye.
         let conspicuous = if armed { AI.detection.armed } else { 1.0 };
+        let clock = self.clock;
         for droid in &mut self.droids {
+            // Anyone near enough that sees them notes it, to suspect them of trouble later.
+            if !droid.down && flat(player - droid.feet).norm() < SUSPECT_SIGHT && seen_by(droid.alert, droid.feet, droid.heading, player, posture, seeing, &in_sight) > 0.0 {
+                droid.suspicions.saw_player(&AI.suspicion, player, clock);
+            }
             // Whether it has them in view, as it looks now - calm or not, and whatever it makes of
             // it: only one hostile and watching becomes aware of them for it.
             let looking = !droid.down && droid.hunts_player();
@@ -4454,9 +4525,43 @@ impl Inhabitants {
         self.droids.iter().any(|droid| !droid.down && droid.turf.is_some_and(|(spot, _)| flat(spot - at).norm() < reach))
     }
 
+    /// Each droid weighs each trouble it knows of - come across, or told - against where it saw the
+    /// player about when it came to know of it, for as long as a sighting could still count, once (see
+    /// [`hydroxus_ai::social::suspicion`]): told it second hand, the weaker. What it suspects
+    /// fades, and is forgotten.
+    fn suspect(&mut self) {
+        let clock = self.clock;
+        let within = AI.suspicion.within;
+        for (n, droid) in self.droids.iter_mut().enumerate() {
+            let Some(mind) = self.minds.mind(n) else { continue };
+            for trouble in mind.troubles() {
+                if !droid.weighing.iter().any(|&(id, _)| id == trouble.id) {
+                    droid.weighing.push((trouble.id, clock));
+                }
+            }
+            // Each kept as long as it knows of the trouble, so as not to weigh it afresh; weighed
+            // only while a sighting could still count.
+            droid.weighing.retain(|&(id, _)| mind.troubles().iter().any(|t| t.id == id));
+            for &(id, when) in droid.weighing.iter().filter(|&&(_, when)| clock - when <= within) {
+                if let Some(trouble) = mind.troubles().iter().find(|t| t.id == id) {
+                    let was = droid.suspicions.of(&AI.suspicion, id, clock);
+                    let now = droid.suspicions.trouble(&AI.suspicion, id, trouble.at, when, trouble.strength, clock);
+                    if was == 0.0 && now > 0.0 {
+                        Log::info(format!("Suspicion: droid {n} suspects the player of {:?} ({now:.2})", trouble.kind));
+                    }
+                }
+            }
+            droid.suspicions.forget(&AI.suspicion, clock);
+        }
+    }
+
     /// How the `n`th droid takes the player, by what it thinks of them.
     pub fn attitude(&self, n: usize) -> Attitude {
-        self.minds.attitude(n)
+        match self.droids.get(n) {
+            // Warier of them for what it suspects them of (see `suspicion`).
+            Some(droid) => opinion::attitude(&self.minds.opinion, droid.suspicions.regard(&AI.suspicion, self.minds.regard(n), self.clock)),
+            None => self.minds.attitude(n),
+        }
     }
 
     /// How many points of chance what the `n`th droid thinks of the player puts on a talk check.
@@ -4526,10 +4631,18 @@ impl Inhabitants {
             })
             .map(|(n, droid)| (n, droid.feet))
             .collect();
+        // A witness tells only a sentry it gets on with well enough, as their factions take each
+        // other: one of a gang at odds with security keeps what it saw from it (see `relation`).
+        let factions: Vec<Option<Faction>> = (0..self.droids.len()).map(|k| self.faction_of(k)).collect();
         for (n, droid) in self.droids.iter_mut().enumerate() {
             let Some(mut witness) = droid.witness else {
                 continue;
             };
+            let sentries: Vec<(usize, Vector3<f32>)> = sentries
+                .iter()
+                .copied()
+                .filter(|&(k, _)| relation::shares_with(&AI.relation, relation::base(&AI.relation, &self.minds.factions, factions[n], factions[k])))
+                .collect();
             // Gone after the player itself, or caught up in a shootout, it has more to think of.
             if droid.down || droid.alert.is_some() || droid.side.is_some() {
                 droid.witness = None;
@@ -4589,9 +4702,20 @@ impl Inhabitants {
             return false;
         };
         let word = word_of(at, seen, witness, if knows { 1.0 } else { WITNESS_UNSURE });
-        if !believes(&droid.trust, &word) {
+        if !believes_as(&droid.trust, &droid.traits, &word) {
             Log::info(format!("Witness: sentry {sentry} doubts droid {witness}, whose word has led nowhere before"));
             return false;
+        }
+        // Searching on what it saw itself, lately, it takes another's word over that only if it
+        // is clearly surer - the more so the more independent it is (see `priority`).
+        if droid.alert == Some(Alert::Evasion) && droid.acting_on.is_none() {
+            let o = &AI.orchestrate;
+            let holding = 0.5f32.powf((self.clock - droid.lost_when).max(0.0) / o.sighting_half_life.max(1.0e-3));
+            let belief = credited(&droid.trust, &droid.traits, &word);
+            if belief < holding + o.switch_lead_by * priority::self_reliance(&AI.priority, &droid.traits) {
+                Log::info(format!("Witness: sentry {sentry} keeps to what it saw itself over droid {witness}'s word"));
+                return false;
+            }
         }
         let age = word.age(self.clock);
         self.search_at(sentry, at);
@@ -5347,8 +5471,25 @@ fn word_of(at: Vector3<f32>, seen: f32, witness: usize, sure: f32) -> Word<()> {
 /// how sure the one that saw it was, how often it has been passed on, and how far its teller is
 /// trusted - not how old it is. Old word of where something was done is still where to start;
 /// its age only says how far about to search (see [`Inhabitants::take_word`]).
+#[cfg(test)]
 fn believes(trust: &Trust, word: &Word<()>) -> bool {
-    word.belief(&AI.word, trust, word.seen) >= BELIEVE
+    believes_as(trust, &Traits::NEUTRAL, word)
+}
+
+/// How far one that trusts its sources as `trust` has it, and is as social as `traits` say,
+/// believes `word` - not how old it is (see [`believes`]): the readier the more social.
+fn credited(trust: &Trust, traits: &Traits, word: &Word<()>) -> f32 {
+    let belief = word.belief(&AI.word, trust, word.seen);
+    if word.firsthand() {
+        belief
+    } else {
+        (belief * priority::credulity(&AI.priority, traits)).min(1.0)
+    }
+}
+
+/// [`believes`], for one with `traits`: the social believe the more readily.
+fn believes_as(trust: &Trust, traits: &Traits, word: &Word<()>) -> bool {
+    credited(trust, traits, word) >= BELIEVE
 }
 
 /// A search on someone's word, `acting_on` - theirs, and how old it was when acted on - is over:
@@ -5397,6 +5538,28 @@ mod tests {
         let mut proved = Trust::new();
         settle_trust(&mut proved, &mut Some((3, 60.0)), true);
         assert!(proved.of(&AI.word, 3) > AI.word.trust);
+    }
+
+    /// ROADMAP 3.4: one droid is not another's copy. A witness whose word has led nowhere twice is
+    /// doubted by most, but an outgoing droid still takes it up; and a trusted witness is believed
+    /// even by the least social.
+    #[test]
+    fn the_social_believe_a_doubtful_witness_the_rest_doubt() {
+        let at = Vector3::new(10.0, 0.0, 5.0);
+        let mut misled = Trust::new();
+        for _ in 0..2 {
+            settle_trust(&mut misled, &mut Some((3, 5.0)), false);
+        }
+        let word = word_of(at, 0.0, 3, 1.0);
+        let outgoing = Traits { sociability: 0.9, ..Traits::NEUTRAL };
+        let quiet = Traits { sociability: 0.1, ..Traits::NEUTRAL };
+        assert!(!believes_as(&misled, &Traits::NEUTRAL, &word));
+        assert!(believes_as(&misled, &outgoing, &word));
+        assert!(believes_as(&Trust::new(), &quiet, &word));
+        // Each droid's traits are its own, and the same every run.
+        let a = Traits::from_seed(17u32.wrapping_mul(104_729), TRAIT_SPREAD);
+        assert_eq!(a, Traits::from_seed(17u32.wrapping_mul(104_729), TRAIT_SPREAD));
+        assert_ne!(a, Traits::from_seed(18u32.wrapping_mul(104_729) ^ 1, TRAIT_SPREAD));
     }
 
     use super::*;
