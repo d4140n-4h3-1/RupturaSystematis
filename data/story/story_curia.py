@@ -719,6 +719,14 @@ def places():
     for name, (i, j) in (("place_mall", (6, 3)), ("place_embassies", (1, 6)), ("place_residences", (12, 6))):
         cx, cy = block_middle(i, j)
         marker(name, cx - PITCH / 2 + 4.0, cy, KERB, 0.0)
+        # By place_mall, a row of vending machines on the block's sidewalk, their backs to
+        # the block, facing the street: one of each kind (vending_<kind>_<n>, numbered from 101 so as
+        # not to meet the stations' own).
+        if name in ('place_mall',):
+            places.vending = getattr(places, "vending", 100)
+            for k, kind in enumerate(urbs.VENDING):
+                places.vending += 1
+                marker(f"vending_{kind}_{places.vending}", cx - (PITCH - STREET) / 2 + 2.6, cy + (k - 1) * 1.3, KERB, math.pi)
 
 
 def streets(m, rng):
