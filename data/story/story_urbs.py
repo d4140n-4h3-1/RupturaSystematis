@@ -43,6 +43,10 @@ bank's strongroom, and three manholes in the street (hatch_<name>, each); and a 
 way out with a cache of credits in it (cache_<k>, its box cache_box_<k>). The game takes the player
 between a hatch and its other end as through a door.
 
+Vending machines (vending_<kind>_<n>, each its back where it is marked, facing the way it is):
+one on each station platform, against the parapet, and a row of all three by the plaza and in
+the middle of the market.
+
 Stores and banks to rob: some of the shops are stores to walk into, with shelves, a counter and a
 computer at the back keeping the takings (store_<n>); and six blocks have a bank on a corner, a hall
 behind a colonnade with a gold credit sign, a tellers' counter, four computers (bank_<n>_vault,
@@ -106,6 +110,7 @@ DEPTH = 3.0
 CANAL = (-320.0, 10.0, 1.0)   # the canal: its middle (y), its width, and how far down its water is
 BRIDGE_WIDTH = 12.0
 RAIL = (9.5, 1.2, 1.4)        # the railway's beam: the top of it, how wide, how deep
+VENDING = ("repair", "stamina", "shield")   # the vending machines' kinds, in turn (vending_<kind>_<n>)
 STATION = (332.0, 372.0, 8.0)  # the north station: from and to (y), and its platforms' height
 # The stations along the railway, each between two cross streets: from and to (y), which end its
 # stairs go down from (1 its north end, -1 its south), and its marker.
@@ -2091,6 +2096,10 @@ def plaza(m, rng, cx, cy, inner):
     for sx, sy in ((-1, -1), (1, -1), (1, 1), (-1, 1)):
         m.pylon(WORLD, cx + sx * 12.0, cy + sy * 12.0, KERB, height=7.0, shade="yellow")
     br_town.marker("place_plaza", cx, cy - 20.0, KERB, math.pi / 2)
+    # A vending machine of each kind by it, side by side, facing the monument.
+    for k, kind in enumerate(VENDING):
+        m.n_vending = getattr(m, "n_vending", 0) + 1
+        br_town.marker(f"vending_{kind}_{m.n_vending}", cx + (k - 1) * 1.3, cy - 22.0, KERB, math.pi / 2)
 
 
 def summa(m, rng, cx, cy, inner):
@@ -2188,6 +2197,10 @@ def market(m, rng, cx, cy, inner):
     for sx, sy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
         m.pylon(WORLD, cx + sx * 8.0, cy + sy * 8.0, KERB, height=5.0, shade="orange")
     br_town.marker("place_market", cx, cy, KERB, 0.0)
+    # And in its middle, clear of the stalls, a vending machine of each kind, facing south.
+    for k, kind in enumerate(VENDING):
+        m.n_vending = getattr(m, "n_vending", 0) + 1
+        br_town.marker(f"vending_{kind}_{m.n_vending}", cx + (k - 1) * 1.3, cy + 0.6, KERB, -math.pi / 2)
 
 
 def civic_hall(m, rng, cx, cy, inner):
@@ -2392,6 +2405,13 @@ def station(m, s0, s1, plat, way, marker, f=WORLD):
             m.box(f, x - 0.4, x + 0.4, y - 0.4, y + 0.4, 0.0, plat - DECK, m.struct, m.facades["concrete"])
     foot = stairs + way * (n * RUN + 2.0)
     m.mark(marker, f.at(0.0, foot), (-math.pi / 2 if way > 0 else math.pi / 2) + f.angle)
+    # A vending machine on each platform, its back to the parapet between the posts, facing the
+    # beam: of each kind in turn, station by station.
+    for sx in (-1, 1):
+        m.n_vending = getattr(m, "n_vending", 0) + 1
+        kind = VENDING[(m.n_vending - 1) % len(VENDING)]
+        at = f.at(sx * (STREET / 2 - 1.3), (s0 + s1) / 2 + 4.0, plat)
+        m.mark(f"vending_{kind}_{m.n_vending}", at, f.angle + (math.pi if sx > 0 else 0.0))
 
 
 def gates(m):
