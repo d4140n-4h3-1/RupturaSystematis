@@ -102,6 +102,7 @@ use hydroxus_ai::navigation::walk::route_to;
 use crate::{ferry::Crossing, train::Doors};
 use hydroxus_ai::{
     flat, forward, heading_of,
+    life::routine::{self, Block, Routine},
     navigation::{
         reach::Reach,
         ride::{take_train, Rides, Riding, Ride},
@@ -491,6 +492,10 @@ struct Inhabitant {
     part: Option<Part>,
     /// When it last saw the player, on [`Inhabitants::clock`].
     lost_when: f32,
+    /// Its day, in a town whose people keep routines: one of the townsfolk, not security, a gang,
+    /// nor one at a post; and what its day had it doing last it looked.
+    day: Option<Day>,
+    keeping: Option<Activity>,
     /// What it suspects the player of, from where it saw them and what trouble it knows of (see
     /// [`hydroxus_ai::social::suspicion`]); and each trouble it is weighing against its sightings,
     /// with when it came to know of it.
@@ -900,6 +905,76 @@ struct Partner {
     held: bool,
 }
 
+/// What one of a town's people does with its day (see [`hydroxus_ai::life::routine`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Activity {
+    Home,
+    Work,
+    /// Out on the plaza: lunch, or the evening.
+    Plaza,
+    /// Off to the vending machines.
+    Shops,
+}
+
+/// The day the townsfolk share, each keeping it its own way: home till eight, work, lunch on the
+/// plaza, work, the machines, the plaza, home.
+pub const TOWN_DAY: [(f32, Activity); 7] = [
+    (0.0, Activity::Home),
+    (8.0, Activity::Work),
+    (12.0, Activity::Plaza),
+    (13.0, Activity::Work),
+    (17.0, Activity::Shops),
+    (17.75, Activity::Plaza),
+    (19.5, Activity::Home),
+];
+/// How far round where its day takes it a townsperson wanders once there, and how near it has to
+/// be to count as there, in meters.
+const LINGER: f32 = 4.0;
+const THERE: f32 = 8.0;
+
+/// Where a town's people spend their days: its homes and workplaces, its plaza, and where they
+/// shop - each at the pavement in front.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Town {
+    pub homes: Vec<Vector3<f32>>,
+    pub works: Vec<Vector3<f32>>,
+    pub plaza: Option<Vector3<f32>>,
+    pub shops: Vec<Vector3<f32>>,
+}
+
+/// One of the townsfolk's day: the town's routine kept a little early or late, and its own home,
+/// work and shop.
+#[derive(Debug, Clone, PartialEq)]
+struct Day {
+    routine: Routine<Activity>,
+    home: Vector3<f32>,
+    work: Vector3<f32>,
+    shop: Option<Vector3<f32>>,
+}
+
+impl Day {
+    /// The day of one numbered `seed` in `town`: none, with no homes or work in it.
+    fn of(town: &Town, seed: u32) -> Option<Self> {
+        let pick = |of: &[Vector3<f32>], salt: u32| -> Option<Vector3<f32>> {
+            (!of.is_empty()).then(|| of[(seed.wrapping_mul(2_654_435_761).rotate_left(salt) as usize) % of.len()])
+        };
+        let (home, work) = (pick(&town.homes, 3)?, pick(&town.works, 11)?);
+        let routine = Routine::new(TOWN_DAY.map(|(from, doing)| Block { from, doing }))?
+            .shifted(routine::offset(&AI.routine, seed));
+        Some(Self { routine, home, work, shop: pick(&town.shops, 19) })
+    }
+
+    /// Where `doing` takes it.
+    fn place(&self, town: &Town, doing: Activity) -> Vector3<f32> {
+        match doing {
+            Activity::Home => self.home,
+            Activity::Work => self.work,
+            Activity::Plaza => town.plaza.unwrap_or(self.home),
+            Activity::Shops => self.shop.or(town.plaza).unwrap_or(self.home),
+        }
+    }
+}
+
 /// Everyone who lives in the maze.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct Inhabitants {
@@ -950,6 +1025,10 @@ pub struct Inhabitants {
     last_call: Option<(f32, Vector3<f32>)>,
     /// How long till the searchers next look over the map, in seconds.
     look_in: f32,
+    /// A town's places for its people's days, and the hour of its day, while its people keep
+    /// routines (see [`Inhabitants::set_town`]).
+    town: Option<Town>,
+    hour: Option<f32>,
     /// In a city, where its droids can turn up again (see [`Inhabitants::recycle`]).
     crowd: Option<Crowd>,
     /// The foot chase going on, if there is one, and how long until the next is looked for, in
@@ -1944,6 +2023,8 @@ impl Inhabitants {
                 && droid.warned == 0
                 && droid.side.is_none()
                 && droid.post.is_none()
+                // One keeping its day lives it out, wherever it takes it.
+                && droid.day.is_none()
                 && droid.trip.is_none()
                 && !droid.aboard()
                 && droid.foe.is_none()
@@ -2178,6 +2259,8 @@ impl Inhabitants {
             traits: Traits::from_seed(code.wrapping_mul(104_729) ^ self.droids.len() as u32, TRAIT_SPREAD),
             part: None,
             lost_when: 0.0,
+            day: None,
+            keeping: None,
             suspicions: Suspicions::new(),
             weighing: Vec::new(),
             saw_it: 0.0,
@@ -2749,6 +2832,33 @@ impl Inhabitants {
         // the search has spread to, not only where they were lost (see `Haunts::weigh`).
         let haunts = &self.haunts;
         for (me, droid) in self.droids.iter_mut().enumerate() {
+            // One of the townsfolk, in a town that keeps routines, keeps one of its own.
+            if let Some(town) = self.town.as_ref().filter(|_| droid.day.is_none()) {
+                let gang = self.groupings.get(droid.character).is_some_and(|g| g.role == Role::Gang);
+                if !droid.sentry && !gang && droid.side.is_none() && droid.post.is_none() && droid.turf.is_none() {
+                    droid.day = Day::of(town, droid.code.wrapping_mul(7919) ^ me as u32);
+                }
+            }
+            // Where its day takes it now, if it keeps one. Time for something else, and only going
+            // about its business, it drops whatever wander it was on and sets off.
+            let now_doing = self.hour.zip(droid.day.as_ref()).map(|(hour, day)| *day.routine.at(hour));
+            if now_doing.is_some() && now_doing != droid.keeping {
+                let about_its_business = !droid.down
+                    && droid.alert.is_none()
+                    && !droid.talking
+                    && droid.pursuit.is_none()
+                    && droid.cover.is_none()
+                    && droid.witness.is_none()
+                    && droid.mourning.is_none()
+                    && droid.trip.is_none()
+                    && droid.ride.is_none();
+                if about_its_business && droid.keeping.is_some() {
+                    droid.route.clear();
+                    droid.resting = 0.0;
+                }
+                droid.keeping = now_doing;
+            }
+            let day_goal = self.town.as_ref().zip(droid.day.as_ref()).zip(now_doing).map(|((town, day), doing)| day.place(town, doing));
             droid.avatar.fly_voxels(graph, dt);
             droid.passing.step(dt);
             droid.regarding = (droid.regarding - dt).max(0.0);
@@ -3380,6 +3490,13 @@ impl Inhabitants {
                             // Keeping to its turf, about its spot; or else anywhere off the
                             // others' turf.
                             None => match droid.turf {
+                                // Keeping its day: off to where it takes it, and once there,
+                                // about it a while.
+                                None if day_goal.is_some() => {
+                                    let goal = day_goal.expect("some");
+                                    let reach = if flat(goal - droid.feet).norm() > THERE { 2.0 } else { LINGER };
+                                    spot_near(mesh, goal, reach, rng).map(|to| go_to(droid.feet, to)).unwrap_or_default()
+                                }
                                 Some((at, _)) => (
                                     spot_near(mesh, at, TURF_KEEP, rng)
                                         .map_or_else(Vec::new, |to| route_to(droid.feet, to)),
@@ -4830,6 +4947,48 @@ impl Inhabitants {
         let n = self.droids.len() - 1;
         self.droids[n].post = Some(post);
         Some(n)
+    }
+
+    /// Has the townsfolk keep routines in `town` (see [`TOWN_DAY`]): each takes its day up as it
+    /// next has nothing else to do. None, they go about as they please.
+    pub fn set_town(&mut self, town: Option<Town>) {
+        self.town = town;
+        self.hour = None;
+        for droid in &mut self.droids {
+            droid.day = None;
+        }
+    }
+
+    /// The town's hour of the day, 0 up to 24, for those keeping routines. Each whole hour, it logs
+    /// what they are doing and how many are where it takes them.
+    pub fn set_hour(&mut self, hour: Option<f32>) {
+        let was = self.hour;
+        self.hour = hour.map(routine::wrap);
+        let (Some(now), Some(town)) = (self.hour, self.town.as_ref()) else {
+            return;
+        };
+        if was.is_some_and(|was| was.floor() == now.floor()) {
+            return;
+        }
+        let mut doing: Vec<(Activity, usize, usize)> = Vec::new();
+        let mut off = Vec::new();
+        for droid in self.droids.iter().filter(|d| !d.down) {
+            let Some(day) = &droid.day else { continue };
+            let what = *day.routine.at(now);
+            off.push(flat(day.place(town, what) - droid.feet).norm());
+            let there = flat(day.place(town, what) - droid.feet).norm() <= THERE;
+            match doing.iter_mut().find(|(d, ..)| *d == what) {
+                Some((_, n, at)) => {
+                    *n += 1;
+                    *at += there as usize;
+                }
+                None => doing.push((what, 1, there as usize)),
+            }
+        }
+        let said: Vec<String> = doing.iter().map(|(d, n, at)| format!("{n} {d:?} ({at} there)")).collect();
+        off.sort_by(f32::total_cmp);
+        let middle = off.get(off.len() / 2).copied().unwrap_or(0.0);
+        Log::info(format!("Town {:02}:00: {}; half within {middle:.0} m of where their day takes them", now.floor() as u32, said.join(", ")));
     }
 
     /// Puts a droid of `character` to keep a shop: at `post`, behind its counter, standing there

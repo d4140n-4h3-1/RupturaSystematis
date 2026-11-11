@@ -19,6 +19,10 @@ others each hold one of the town's buildings (see data/arena/br_town.py), every 
 into. Crossings at every junction, striped, where the droids step onto the road; everywhere
 else they keep to the pavements. The player starts at the south-west corner (`place_station`);
 the north-east corner is `place_summa`. It is day.
+
+For its townsfolk's days (see the game's routines): `home_<n>` before each house and apartment
+block, `work_<n>` before each office and warehouse, `place_plaza` in the middle; and along the
+plaza's south edge, facing the street, a vending machine of each kind, `vending_<kind>_1`.
 """
 
 import bpy
@@ -118,6 +122,7 @@ def main():
         add_box(f"TownWall_{n}", x0, x1, y0, y1, 0.0, TOWN_WALL, town.struct, town.town_wall)
 
     kinds, weights = zip(*[(k, v[3]) for k, v in KINDS.items()])
+    homes = works = 0
     for bi in range(BLOCKS):
         for bj in range(BLOCKS):
             cx, cy = first + bi * pitch, first + bj * pitch
@@ -127,6 +132,11 @@ def main():
             if bi == middle and bj == middle:
                 with lifted(KERB):
                     square(town, rng, cx, cy, name)
+                # Where the town comes to pass the time, and along its south edge, backs to it,
+                # facing the street, its vending machines: one of each.
+                marker("place_plaza", cx, cy, KERB, -math.pi / 2)
+                for k, kind in enumerate(("repair", "stamina", "shield")):
+                    marker(f"vending_{kind}_1", cx + (k - 1) * 1.3, cy - BLOCK / 2 + 0.9, KERB, -math.pi / 2)
                 continue
             # The yard: grass inside a ring of pavement, a hair over it.
             add_box(f"{name}_Yard", cx - BLOCK / 2 + 2.5, cx + BLOCK / 2 - 2.5, cy - BLOCK / 2 + 2.5, cy + BLOCK / 2 - 2.5,
@@ -138,6 +148,14 @@ def main():
             oy = rng.uniform(-(BLOCK - d) / 2 + 3, (BLOCK - d) / 2 - 3)
             with lifted(KERB):
                 building(town, rng, kind, cx + ox, cy + oy, w, d, 0, name)
+            # Somewhere to live, or to work: before its front, which faces -y. Marked after the
+            # building, drawing nothing from rng, so the town is as it was.
+            if kind in ("house", "apartment"):
+                homes += 1
+                marker(f"home_{homes}", cx + ox, cy + oy - d / 2 - 1.5, KERB, -math.pi / 2)
+            else:
+                works += 1
+                marker(f"work_{works}", cx + ox, cy + oy - d / 2 - 1.5, KERB, -math.pi / 2)
 
     # The crossings, striped across the road.
     for n, (x0, x1, y0, y1) in enumerate(crossings()):

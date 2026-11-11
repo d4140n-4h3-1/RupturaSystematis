@@ -83,6 +83,7 @@ mod tiles;
 mod traffic;
 mod train;
 mod vault;
+mod vending;
 
 #[cfg(test)]
 mod ai_tuning {

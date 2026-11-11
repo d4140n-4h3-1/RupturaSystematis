@@ -56,7 +56,8 @@ use crate::{
     loading::{LoadingScreen, Step},
     train::{Train, LINES, TRAIN_MODEL},
     locker::LOCKER_MODEL,
-    inhabitants::{Alert, Grouping, Inhabitants, Livery, News, Rival, Threat, Uneasy, EARPIECE_MODEL, HOSTILE_MODEL, set_earpiece_glow},
+    vending::{self, VENDING_MODEL},
+    inhabitants::{Alert, Grouping, Inhabitants, Livery, News, Rival, Threat, Town, Uneasy, EARPIECE_MODEL, HOSTILE_MODEL, set_earpiece_glow},
     layout::{self, Rng},
     level::Level,
     menu::{Choice, Game, MainMenu, PauseMenu, Start},
@@ -315,6 +316,10 @@ const VIEW: f32 = 2048.0;
 const STARTING_CREDITS: Credits = Credits::new(200, 0);
 /// How far in front of a store's computer its merchant stands, behind the counter, in meters.
 const KEEPER_FROM_COMPUTER: f32 = 1.0;
+/// In a town whose people keep routines, the hour its day starts at each round, and how many
+/// minutes of play a whole day takes - or MAZE_DAY_MINUTES's.
+const TOWN_START: f32 = 7.0;
+const TOWN_DAY_MINUTES: f32 = 12.0;
 /// The landmarks a street merchant stands by, by their markers' names, and how far off it may.
 const STREET_SHOPS: [&str; 5] = ["place_station", "place_market", "place_mall", "place_terminal", "place_quarter"];
 const STREET_SHOP_REACH: f32 = 8.0;
@@ -466,6 +471,14 @@ pub struct MazeGame {
     #[visit(skip)]
     #[reflect(hidden)]
     locker_model: Option<ModelResource>,
+    /// The vending machines, to go into the level where it marks them (see [`crate::vending`]).
+    #[visit(skip)]
+    #[reflect(hidden)]
+    vending_model: Option<ModelResource>,
+    /// The vending machine the player is at, if one: which, and what it sells.
+    #[visit(skip)]
+    #[reflect(hidden)]
+    at_vending: Option<(usize, PowerUp)>,
     #[visit(skip)]
     #[reflect(hidden)]
     trains: Vec<Train>,
@@ -497,6 +510,11 @@ pub struct MazeGame {
     #[visit(skip)]
     #[reflect(hidden)]
     guards_posted: bool,
+    /// In a town whose people keep routines, the hour of its day, 0 up to 24 (see
+    /// [`TOWN_DAY_MINUTES`]).
+    #[visit(skip)]
+    #[reflect(hidden)]
+    town_hour: Option<f32>,
     #[visit(skip)]
     #[reflect(hidden)]
     picking: Option<(PhaseLock, bool)>,
@@ -1195,6 +1213,7 @@ impl MazeGame {
                 self.alongside = alongside.iter().map(|&other| (other.to_string(), resources.request::<Model>(other))).collect();
                 self.train_model = (path == ctf::URBS.path).then(|| resources.request::<Model>(TRAIN_MODEL));
                 self.locker_model = (path == ctf::URBS.path).then(|| resources.request::<Model>(LOCKER_MODEL));
+                self.vending_model = Some(resources.request::<Model>(VENDING_MODEL));
                 self.sky = ctf::map_at(&path)
                     .filter(|map| map.void || map.night)
                     .map(|_| resources.request::<Texture>(ctf::VOID_SKY));
@@ -1321,6 +1340,7 @@ impl MazeGame {
         self.alongside.clear();
         self.train_model = None;
         self.locker_model = None;
+        self.vending_model = None;
         for train in self.trains.drain(..) {
             train.remove(&mut ctx.scenes[self.scene].graph);
         }
@@ -1369,7 +1389,7 @@ impl MazeGame {
         if let Some(model) = &self.model {
             let fbx = self.model_path.to_ascii_lowercase().ends_with(".fbx");
             let alongside: Vec<&ModelResource> = self.alongside.iter().map(|(_, model)| model).collect();
-            self.level = Level::from_model(model, &alongside, self.locker_model.as_ref(), fbx, scene, &mut self.doubled);
+            self.level = Level::from_model(model, &alongside, self.locker_model.as_ref(), self.vending_model.as_ref(), fbx, scene, &mut self.doubled);
             return Ok(());
         }
         let Some(prefabs) = self.prefabs.clone() else {
@@ -1606,6 +1626,8 @@ impl MazeGame {
         self.locker = None;
         self.precinct_guards.clear();
         self.guards_posted = false;
+        self.town_hour = None;
+        self.inhabitants.set_town(None);
         self.tried_arrest = false;
         self.passing = None;
         self.hatch_told = None;
@@ -2145,6 +2167,7 @@ impl MazeGame {
                 let mut models = vec![(self.model_path.clone(), model.clone())];
                 models.extend(self.alongside.iter().cloned());
                 models.extend(self.locker_model.iter().map(|model| (LOCKER_MODEL.to_string(), model.clone())));
+                models.extend(self.vending_model.iter().map(|model| (VENDING_MODEL.to_string(), model.clone())));
                 models.extend(self.firewalls.models());
                 models.extend(self.doors.models());
                 models
@@ -2208,7 +2231,9 @@ impl MazeGame {
                 wanted: self.stars(),
                 shield: self.shield.as_ref().filter(|s| s.charge.is_up()).map(|s| s.charge.health()),
                 shield_ready: self.shield.as_ref().is_some_and(Shield::can_raise),
-                objective: self.heist.as_ref().map(Heist::objective).or_else(|| self.jail_objective()),
+                objective: self.heist.as_ref().map(Heist::objective).or_else(|| self.jail_objective()).or_else(|| {
+                    self.town_hour.filter(|h| h.is_finite()).map(|h| format!("Town {:02}:{:02}", h as u32, ((h.fract()) * 60.0) as u32))
+                }),
                 detection: self.sneaking_meter(),
                 watchers: self.watcher_bearings(&ctx.scenes[self.scene].graph),
             },
@@ -2347,6 +2372,7 @@ impl MazeGame {
             KeyCode::KeyE if !self.menu.is_open() && self.talkable.is_some() => {
                 self.start_talking(ctx)
             }
+            KeyCode::KeyE if !self.menu.is_open() && self.at_vending.is_some() && self.at_computer.is_none() => self.buy_from_machine(),
             KeyCode::KeyE if !self.menu.is_open() => self.start_hacking(ctx),
             KeyCode::Digit1 if !self.menu.is_open() && self.phase == Phase::Playing => self.raise_shield(),
             KeyCode::Digit2 if !self.menu.is_open() && self.phase == Phase::Playing => self.use_power(ctx, PowerUp::Repair),
@@ -2710,6 +2736,36 @@ impl MazeGame {
                     Log::info(format!("Shops: {kept} kept by merchants"));
                 }
             }
+        }
+        // A town that marks homes and workplaces: its people keep routines between them, its
+        // plaza and its vending machines, on its own clock.
+        if self.story && self.guards_posted && self.town_hour.is_none() {
+            let at = |prefix: &str| -> Vec<Vector3<f32>> {
+                self.level.markers.iter().filter(|m| m.name.starts_with(prefix)).map(|m| m.position).collect()
+            };
+            let town = Town {
+                homes: at("home_"),
+                works: at("work_"),
+                plaza: at("place_plaza").first().copied(),
+                shops: self.level.vending.faces(),
+            };
+            if !town.homes.is_empty() && !town.works.is_empty() {
+                Log::info(format!(
+                    "Town: {} homes, {} workplaces, {} machines; the day from {TOWN_START:02}:00",
+                    town.homes.len(),
+                    town.works.len(),
+                    town.shops.len()
+                ));
+                self.inhabitants.set_town(Some(town));
+                self.town_hour = Some(TOWN_START);
+            } else {
+                self.town_hour = Some(f32::NAN);
+            }
+        }
+        if let Some(hour) = self.town_hour.as_mut().filter(|hour| hour.is_finite()) {
+            let minutes = platform::var("MAZE_DAY_MINUTES").and_then(|m| m.trim().parse::<f32>().ok()).filter(|m| *m > 0.0).unwrap_or(TOWN_DAY_MINUTES);
+            *hour = (*hour + ctx.dt * 24.0 / (minutes * 60.0)) % 24.0;
+            self.inhabitants.set_hour(Some(*hour));
         }
         let graph = &scene.graph;
         let posture = self.player.posture();
@@ -4238,19 +4294,32 @@ impl MazeGame {
             }
             false => None,
         };
-        if talkable != self.talkable || (talkable.is_none() && at_computer != self.at_computer) {
+        // With neither, a vending machine, if they are at one, facing it.
+        let at_vending = match talkable.is_none() && at_computer.is_none() && can_use_computer {
+            true => {
+                let graph = &ctx.scenes[self.scene].graph;
+                self.level.vending.at(self.player.feet(graph), self.player.ahead())
+            }
+            false => None,
+        };
+        if talkable != self.talkable || (talkable.is_none() && (at_computer != self.at_computer || at_vending != self.at_vending)) {
             let ui = ctx.user_interfaces.first();
-            match (&talkable, at_computer) {
-                (Some((_, who)), _) => self.dialogue.set_prompt(ui, Some(who)),
-                (None, Some((n, cleared))) => self.dialogue.set_action_prompt(
+            match (&talkable, at_computer, at_vending) {
+                (Some((_, who)), _, _) => self.dialogue.set_prompt(ui, Some(who)),
+                (None, Some((n, cleared)), _) => self.dialogue.set_action_prompt(
                     ui,
                     Some((self.computers[n].kind().name(), if cleared { "Use" } else { "Hack" })),
                 ),
-                (None, None) => self.dialogue.set_prompt(ui, None),
+                (None, None, Some((_, sells))) => {
+                    let what = format!("Vending machine: {}, {}", sells.name(), vending::price(sells));
+                    self.dialogue.set_action_prompt(ui, Some((&what, "Buy")))
+                }
+                (None, None, None) => self.dialogue.set_prompt(ui, None),
             }
             self.talkable = talkable;
         }
         self.at_computer = at_computer;
+        self.at_vending = at_vending;
     }
 
     /// Puts bars over the head of each sentry the player can see that is after them, has spent
@@ -5883,6 +5952,36 @@ impl MazeGame {
     }
 
     /// Raises the player's shield, if it is charged; or says it is not.
+    /// Buys what the vending machine the player is at sells, if they can pay and have room for it.
+    fn buy_from_machine(&mut self) {
+        let Some((_, sells)) = self.at_vending else {
+            return;
+        };
+        let room = match sells {
+            PowerUp::Shield => self.shield.as_ref().is_some_and(|shield| shield.spares < shield::MOST_SPARES),
+            _ => self.carried.room(sells),
+        };
+        let price = vending::price(sells);
+        if !room {
+            self.hud.show_note(format!("No room for another {}", sells.name()));
+        } else if !self.credits.spend(price) {
+            self.hud.show_note(format!("Not enough credits: a {} is {price}", sells.name()));
+        } else {
+            let have = match sells {
+                PowerUp::Shield => self.shield.as_mut().map_or(0, |shield| {
+                    shield.add_spare();
+                    shield.spares
+                }),
+                _ => {
+                    self.carried.add(sells);
+                    if sells == PowerUp::Repair { self.carried.repairs } else { self.carried.stamina }
+                }
+            };
+            self.hud.show_note(format!("Bought a {} for {price}: [{}] to use, {have} carried", sells.name(), sells.key()));
+            Log::info(format!("Vending: bought a {} for {price}, {} left", sells.name(), self.credits));
+        }
+    }
+
     /// Uses a repair kit or a stamina cell the player carries (see [`crate::powerups`]): a
     /// heart's worth of health back, or their breath frozen a while. Not a repair kit while they
     /// are whole: it would be wasted.

@@ -17,6 +17,7 @@ use crate::{
     escape::Tunnels,
     precinct::Precincts,
     vault::Vaults,
+    vending::Vending,
     fixtures::{self, Glow},
     generate::Maze,
     survey,
@@ -51,11 +52,13 @@ const FLAG_MIDDLE: f32 = 2.0;
 /// vault and its terminals, ways out, guards, drones and where its waves come from (see
 /// [`crate::heist`]), or a city's stores and banks, each with a computer keeping its takings (see
 /// [`crate::computer::Kind`]), or a race's start line, checkpoints and grid (see [`crate::race`]),
-/// or a market stall kept by a merchant.
-const MARKERS: [&str; 28] = [
+/// or a market stall kept by a merchant, a vending machine, or the homes and workplaces of a town's
+/// routines.
+const MARKERS: [&str; 31] = [
     "flag_", "computer_", "post_", "spawn_", "heist_start", "door_", "loot", "extract_", "guard_", "drone_",
     "terminal_", "wave_", "place_", "store_", "bank_", "vault_", "precinct_", "cell_", "tunnel_", "hatch_",
-    "cache_", "den_", "fence", "grate_", "hideout_", "race_", "checkpoint_", "stall_",
+    "cache_", "den_", "fence", "grate_", "hideout_", "race_", "checkpoint_", "stall_", "vending_",
+    "home_", "work_",
 ];
 
 /// Somewhere a maze model marks with an empty, by the empty's name, for the game to put
@@ -119,6 +122,8 @@ pub struct Level {
     pub precincts: Precincts,
     /// Their evidence lockers: see [`Lockers`].
     pub lockers: Lockers,
+    /// Its vending machines: see [`Vending`].
+    pub vending: Vending,
     /// The escape tunnels under a city, and the hatches down to them: see [`Tunnels`].
     pub tunnels: Tunnels,
     /// Whether it has roads, for the droids to keep off but to cross: the polygons of the navmesh
@@ -163,7 +168,7 @@ impl Level {
             maze.depth,
             pieces.len()
         ));
-        let mut level = Self::prepare(root, scene, false, None, doubled);
+        let mut level = Self::prepare(root, scene, false, None, None, doubled);
         level.culling = Some(culling);
         Ok(level)
     }
@@ -174,6 +179,7 @@ impl Level {
         model: &ModelResource,
         alongside: &[&ModelResource],
         lockers: Option<&ModelResource>,
+        vending: Option<&ModelResource>,
         fbx: bool,
         scene: &mut Scene,
         doubled: &mut FxHashSet<u64>,
@@ -188,7 +194,7 @@ impl Level {
                 .local_transform_mut()
                 .set_scale(Vector3::repeat(FBX_SCALE));
         }
-        Self::prepare(root, scene, true, lockers, doubled)
+        Self::prepare(root, scene, true, lockers, vending, doubled)
     }
 
     /// Readies a level under `root` for play: its glass, its lamps' places, and a static
@@ -199,6 +205,7 @@ impl Level {
         scene: &mut Scene,
         fixed: bool,
         lockers: Option<&ModelResource>,
+        vending: Option<&ModelResource>,
         doubled: &mut FxHashSet<u64>,
     ) -> Self {
         // World transforms must be up to date before anything is measured in world space.
@@ -239,6 +246,11 @@ impl Level {
         let lockers = match lockers {
             Some(model) if fixed => Lockers::place(scene, root, model, &markers),
             _ => Lockers::default(),
+        };
+        // And the vending machines, where it marks them, the same way: solid, and surveyed round.
+        let vending = match vending {
+            Some(model) if fixed => Vending::place(scene, root, model, &markers),
+            _ => Vending::default(),
         };
 
         // The lamps' glass, while it can still be told by its colour, to go with the full detail
@@ -324,6 +336,7 @@ impl Level {
             vaults,
             precincts,
             lockers,
+            vending,
             tunnels,
             has_roads: false,
         }
