@@ -26,6 +26,11 @@ LIVERIES = {
         "Material.003": [1, 0.3, 0, 1],
         "Material.004": [1, 0.3, 0, 1],
     },
+    # Yellow: a droid of no role yet.
+    "droid_yellow.glb": {
+        "Material.003": [1, 0.9, 0, 1],
+        "Material.004": [1, 0.9, 0, 1],
+    },
     "droid_security.glb": {
         "Material.003": [0, 0, 1, 1],
     },
