@@ -100,6 +100,7 @@ use hydroxus_ai::{
     prelude::*,
     tactics::{
         blind::{self, BlindFire},
+        roles::{self, Chaser, Part},
         team::{self, Exposure, Intel, Stuck},
     },
 };
@@ -397,6 +398,11 @@ struct Droid {
     suppress_at: Option<(usize, Vector3<f32>)>,
     /// Whether it goes round the side, and which side: 1 or -1.
     flank: Option<f32>,
+    /// Its part in going after an enemy on the move with the rest of its team, advancing (see
+    /// hydroxus-ai's [`roles`]): running at them, or cutting them off ahead.
+    part: Option<Part>,
+    /// The enemy it is going after with the others, as its team knows it, while it has a part.
+    after: Option<Chaser>,
     /// Where it was, and how long ago, to tell if it is stuck.
     stuck_from: Stuck,
     /// How aware it is of each droid, by its index: it fights only those it has spotted (see
@@ -602,6 +608,9 @@ struct Battle {
     arrivals: Vec<Arrival>,
     /// Where each team last saw each enemy, and how long ago.
     intel: [Intel; 2],
+    /// Which way each team has seen each enemy going (see [`Battle::note_going`]): where it was
+    /// when last worked out, how long ago, and its way and speed, in meters a second.
+    going: [Vec<Option<(Vector3<f32>, f32, Vector3<f32>)>>; 2],
     score: [u32; 2],
     phase: Phase,
     paused: bool,
@@ -1161,6 +1170,7 @@ impl Battle {
             self.respawn(i);
         }
         self.intel = [Intel::new(self.droids.len()), Intel::new(self.droids.len())];
+        self.going = [vec![None; self.droids.len()], vec![None; self.droids.len()]];
     }
 
     /// One of the team's droids, made from its model, standing where it is put. None if the
@@ -1222,6 +1232,8 @@ impl Battle {
             suppressed: 0.0,
             suppress_at: None,
             flank: None,
+            part: None,
+            after: None,
             stuck_from: Stuck::default(),
             aware: Vec::new(),
             heard: None,
@@ -1339,6 +1351,10 @@ impl Battle {
         for intel in &mut self.intel {
             intel.age(dt);
         }
+        for (_, since, _) in self.going.iter_mut().flatten().flatten() {
+            *since += dt;
+        }
+        self.assign_parts();
         self.exposure_in -= dt;
         if self.exposure_in <= 0.0 {
             self.exposure_in = AI.team.exposure_every;
@@ -1395,6 +1411,7 @@ impl Battle {
         let team = self.droids[i].team.index();
         for &j in &visible {
             self.intel[team].saw(j, self.droids[j].position);
+            self.note_going(team, j);
         }
         let me = self.droids[i].position;
         if !self.smart(i) {
@@ -1412,6 +1429,69 @@ impl Battle {
             team::target_worth((them.position - me).norm(), them.health / HEALTH, them.target == Some(i), in_the_open)
         };
         self.droids[i].target = team::target(&visible, self.droids[i].target, worth);
+    }
+
+    /// Team `team` sees enemy `j` where it is: which way it is going, from where the team saw it
+    /// last - a fifth of a second ago at least, or the step says nothing - the last way seen
+    /// counting for half. Seen after a long while, it starts afresh.
+    fn note_going(&mut self, team: usize, j: usize) {
+        let at = self.droids[j].position;
+        let Some(entry) = self.going[team].get_mut(j) else { return };
+        *entry = match *entry {
+            Some(seen @ (_, since, _)) if since < 0.2 => Some(seen),
+            Some((was, since, way)) if since < 2.0 => Some((at, 0.0, way * 0.5 + flat(at - was) / since * 0.5)),
+            _ => Some((at, 0.0, Vector3::zeros())),
+        };
+    }
+
+    /// Each smart team's droids advancing with no target of their own take parts in going after
+    /// the enemy each believes nearest, with the rest of the team going after the same one (see
+    /// hydroxus-ai's [`roles`]): the nearest run at them, the rest - if it is on the move - cut it
+    /// off ahead. Each knows only what its team has seen.
+    fn assign_parts(&mut self) {
+        let alive: Vec<bool> = self.droids.iter().map(|d| d.alive()).collect();
+        // Who goes after whom: (team, enemy, droids).
+        let mut groups: Vec<(usize, usize, Vec<usize>)> = Vec::new();
+        for i in 0..self.droids.len() {
+            let d = &self.droids[i];
+            if !alive[i] || !self.smart(i) || d.task != Task::Advance || d.target.is_some() {
+                self.droids[i].part = None;
+                self.droids[i].after = None;
+                continue;
+            }
+            let (t, me) = (d.team.index(), d.position);
+            let nearest = self.intel[t].seen_within(AI.team.intel_time, |j| alive[j]).min_by(|a, b| (a.1 - me).norm().total_cmp(&(b.1 - me).norm()));
+            let Some((j, _)) = nearest else {
+                self.droids[i].part = None;
+                self.droids[i].after = None;
+                continue;
+            };
+            match groups.iter_mut().find(|g| g.0 == t && g.1 == j) {
+                Some(g) => g.2.push(i),
+                None => groups.push((t, j, vec![i])),
+            }
+        }
+        for (t, j, members) in groups {
+            let Some((_, them)) = self.intel[t].seen_within(AI.team.intel_time, |k| k == j).next() else { continue };
+            let going = self.going[t].get(j).copied().flatten().map(|(_, _, way)| way).filter(|way| way.norm() >= AI.orchestrate.going_least);
+            let chasers: Vec<Chaser> = members
+                .iter()
+                .map(|&i| Chaser { feet: self.droids[i].position, them, going, sees: false, aggression: 0.5, was: self.droids[i].part })
+                .collect();
+            for ((&i, part), chaser) in members.iter().zip(roles::parts(&AI.roles, &chasers)).zip(chasers) {
+                if matches!(part, Part::CutOff { .. }) && !matches!(self.droids[i].part, Some(Part::CutOff { .. })) {
+                    Log::info(format!(
+                        "Team battle: {} droid {} goes to cut {} droid {} off",
+                        self.droids[i].team.name(),
+                        i % PER_TEAM + 1,
+                        self.droids[j].team.name(),
+                        j % PER_TEAM + 1
+                    ));
+                }
+                self.droids[i].part = Some(part);
+                self.droids[i].after = Some(chaser);
+            }
+        }
     }
 
     /// Whether droid `i`'s team fights as a team.
@@ -1487,7 +1567,13 @@ impl Battle {
                 }
                 // Move up: to where an enemy was seen - or, going round the side, off to one side
                 // of it - or somewhere in the enemy half.
+                let cut = match (self.droids[i].part, self.droids[i].after, &self.mesh) {
+                    (Some(part), Some(after), Some(mesh)) => roles::cut_spot(&AI.roles, &AI.chase, &after, part, |p| mesh.poly_at(p).is_some()),
+                    _ => None,
+                };
                 let goal = match threat {
+                    // On the move, and its part to cut them off: ahead of them.
+                    Some(_) if cut.is_some() => cut.unwrap(),
                     Some(threat) if self.smart(i) && self.droids[i].flank.is_some() => {
                         self.flank_point(i, threat).unwrap_or(threat)
                     }
@@ -2216,6 +2302,11 @@ impl Battle {
             for intel in &mut self.intel {
                 intel.forget(j);
             }
+            for going in &mut self.going {
+                if let Some(g) = going.get_mut(j) {
+                    *g = None;
+                }
+            }
         } else {
             // Shot at out in the open: get to cover. Badly hurt anywhere: fall back.
             let threat = self.droids[i].position;
@@ -2522,6 +2613,8 @@ impl Battle {
                         "firing blind"
                     } else if d.target.is_none() && d.heard.is_some() && d.task == Task::Advance {
                         "going to shooting heard"
+                    } else if d.task == Task::Advance && matches!(d.part, Some(Part::CutOff { .. })) {
+                        "cutting them off"
                     } else {
                         d.task.label()
                     }
