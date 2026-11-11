@@ -313,6 +313,11 @@ const FOG_VIEW: f32 = 140.0;
 const VIEW: f32 = 2048.0;
 /// The credits the player starts with, before they have taken any.
 const STARTING_CREDITS: Credits = Credits::new(200, 0);
+/// How far in front of a store's computer its merchant stands, behind the counter, in meters.
+const KEEPER_FROM_COMPUTER: f32 = 1.0;
+/// The landmarks a street merchant stands by, by their markers' names, and how far off it may.
+const STREET_SHOPS: [&str; 5] = ["place_station", "place_market", "place_mall", "place_terminal", "place_quarter"];
+const STREET_SHOP_REACH: f32 = 8.0;
 /// What a merchant asks of a player it likes, and of one it is wary of, against its prices.
 const FRIEND_PRICE: f32 = 0.8;
 const WARY_PRICE: f32 = 1.5;
@@ -2671,6 +2676,38 @@ impl MazeGame {
                         .filter_map(|at| self.inhabitants.post_guard(scene, mesh, at, rng.below(628) as f32 / 100.0, gang, rng))
                         .count();
                     Log::info(format!("Escape tunnels and hideouts: {kept} of the gang kept there"));
+                }
+                // A merchant behind the counter of each store, a step in front of the computer that
+                // keeps the takings, facing the door; at some of the market's stalls, in front; and
+                // a street merchant by each of the landmarks where people come and go - a station, a
+                // market, the mall, the terminal - facing it, so that every city has somewhere to
+                // buy.
+                let keeper = script.and_then(|script| script.characters.iter().position(|c| c.keeps_shop));
+                if let Some(keeper) = keeper {
+                    let shops: Vec<(Vector3<f32>, f32)> = self
+                        .level
+                        .markers
+                        .iter()
+                        .filter_map(|m| {
+                            let into = Vector3::new(m.yaw.cos(), 0.0, -m.yaw.sin());
+                            let heading = into.x.atan2(into.z);
+                            match () {
+                                _ if m.name.starts_with("store_") => Some((m.position + into * KEEPER_FROM_COMPUTER, heading)),
+                                _ if m.name.starts_with("stall_") => Some((m.position, heading)),
+                                _ if STREET_SHOPS.iter().any(|place| m.name.starts_with(place)) => {
+                                    let at = hydroxus_ai::navigation::walk::spot_near(mesh, m.position, STREET_SHOP_REACH, rng)?;
+                                    let to = m.position - at;
+                                    Some((at, to.x.atan2(to.z)))
+                                }
+                                _ => None,
+                            }
+                        })
+                        .collect();
+                    let kept = shops
+                        .into_iter()
+                        .filter_map(|(at, heading)| self.inhabitants.keep_shop(scene, mesh, at, heading, keeper, rng))
+                        .count();
+                    Log::info(format!("Shops: {kept} kept by merchants"));
                 }
             }
         }

@@ -280,6 +280,10 @@ pub struct Character {
     /// minds what is done to anyone as done to its own, and starts each droid of it afresh.
     #[serde(default)]
     pub faction: Option<String>,
+    /// Whether its kind keeps the city's shops: one is put behind the counter of each store, and
+    /// at market stalls, to trade with the player.
+    #[serde(default)]
+    pub keeps_shop: bool,
 }
 
 /// A group's turf: the spot it keeps to, standing about there, and the ground round it that it
@@ -1078,6 +1082,17 @@ mod tests {
             let summa = character.lines.values().any(|line| line.says.contains("Summa"));
             assert!(summa, "{} talks of Summa", character.name);
         }
+    }
+
+    #[test]
+    fn urbs_has_one_kind_keeping_its_shops_and_it_sells_every_power_up() {
+        let script = Script::load(URBS_SCRIPT).unwrap();
+        assert!(script.problems().is_empty(), "{:?}", script.problems());
+        let keepers: Vec<&Character> = script.characters.iter().filter(|c| c.keeps_shop).collect();
+        assert_eq!(keepers.len(), 1, "one kind keeps the shops");
+        let sold: HashSet<PowerUp> = keepers[0].lines.values().flat_map(|line| &line.replies).filter_map(|r| r.buy.map(|b| b.item)).collect();
+        assert_eq!(sold, [PowerUp::Shield, PowerUp::Repair, PowerUp::Stamina].into_iter().collect());
+        assert!(!keepers[0].gang && keepers[0].threatened.is_some_and(|t| t.then == Provoked::Alarm), "a citizen");
     }
 
     #[test]

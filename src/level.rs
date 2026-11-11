@@ -50,11 +50,12 @@ const FLAG_MIDDLE: f32 = 2.0;
 /// where someone starts in battle royale (see [`crate::royale`]), or a heist's way in, doors,
 /// vault and its terminals, ways out, guards, drones and where its waves come from (see
 /// [`crate::heist`]), or a city's stores and banks, each with a computer keeping its takings (see
-/// [`crate::computer::Kind`]), or a race's start line, checkpoints and grid (see [`crate::race`]).
-const MARKERS: [&str; 27] = [
+/// [`crate::computer::Kind`]), or a race's start line, checkpoints and grid (see [`crate::race`]),
+/// or a market stall kept by a merchant.
+const MARKERS: [&str; 28] = [
     "flag_", "computer_", "post_", "spawn_", "heist_start", "door_", "loot", "extract_", "guard_", "drone_",
     "terminal_", "wave_", "place_", "store_", "bank_", "vault_", "precinct_", "cell_", "tunnel_", "hatch_",
-    "cache_", "den_", "fence", "grate_", "hideout_", "race_", "checkpoint_",
+    "cache_", "den_", "fence", "grate_", "hideout_", "race_", "checkpoint_", "stall_",
 ];
 
 /// Somewhere a maze model marks with an empty, by the empty's name, for the game to put

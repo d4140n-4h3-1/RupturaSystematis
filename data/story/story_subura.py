@@ -17,7 +17,8 @@ acid green, violet and amber:
 - The Hive (place_hive) in the middle, over the streets between its blocks: four towers of stacked
   dwellings at its corners, skybridges between them, crowned in neon, round a court open to the
   streets, where the stalls and the braziers are.
-- The Night Market (place_market): rows of stalls under tarps, lanterns strung over them.
+- The Night Market (place_market): rows of stalls under tarps, lanterns strung over them; one in
+  four kept by a merchant (stall_<n>, where it stands, facing its lane).
 - The Stronghold (place_stronghold): the Praedatores' compound, walled in plate, a watchtower either
   side of its gate, braziers in its yard, a bunker at its back - where the gang keeps (hideout_<k>).
 - The Pit (place_pit): a cage to fight in, ringed by stepped stands.
@@ -426,6 +427,12 @@ def market(m, rng, cx, cy, inner):
                 if rng.random() < 0.1:
                     continue
                 front = ya if k == 0 else yb           # each faces its lane
+                # One stall in four is kept by a merchant, standing in front of it, facing the
+                # lane: picked by where it is, drawing nothing from rng, so the city stays as it was.
+                if (r * 7 + c * 3 + k) % 4 == 0:
+                    market.stalls = getattr(market, "stalls", 0) + 1
+                    out = -0.7 if k == 0 else 0.7
+                    marker(f"stall_{market.stalls}", xx + sw / 2, front + out, KERB, -math.pi / 2 if k == 0 else math.pi / 2)
                 m.box(WORLD, xx, xx + sw, ya + 0.2, yb - 0.2, KERB, KERB + 0.95, m.cover, m.crate, cover="low")
                 m.line(V(xx, front, KERB + 0.95), V(xx + sw, front, KERB + 0.95), m.lines[m.shade()], width=0.05,
                        light=rng.random() < 0.3)

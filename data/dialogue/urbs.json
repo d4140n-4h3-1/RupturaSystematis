@@ -1235,6 +1235,7 @@
     {
       "name": "Mutator",
       "faction": "citizens",
+      "keeps_shop": true,
       "in_pairs": 0.15,
       "model": "data/droid_yellow.glb",
       "share": 0.3,

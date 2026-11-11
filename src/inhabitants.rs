@@ -311,6 +311,8 @@ const RING_WANDER: f32 = 35.0;
 /// In capture the flag: how far from its post a droid wanders, and is put down, in meters; how long it keeps after one of the other side it has lost sight of, and
 /// how long it keeps its pistol out once there is no one to shoot at, in seconds.
 const POST_REACH: f32 = 3.0;
+/// How near its post a shopkeeper keeps, in meters.
+const SHOP_REACH: f32 = 0.6;
 const SPAWN_REACH: f32 = 1.5;
 const FOE_MEMORY: f32 = 6.0;
 /// In capture the flag, how near one of the other side has to be for a droid to notice it even
@@ -571,6 +573,9 @@ struct Inhabitant {
     /// longer, in seconds.
     side: Option<Side>,
     post: Option<Vector3<f32>>,
+    /// A shopkeeper's: which way it faces at its post, standing there rather than wandering
+    /// about it (see [`Inhabitants::keep_shop`]).
+    post_facing: Option<f32>,
     foe: Option<Foe>,
     foe_unseen: f32,
     shot_from: Option<(Vector3<f32>, f32)>,
@@ -2210,6 +2215,7 @@ impl Inhabitants {
             witness: None,
             side: None,
             post: None,
+            post_facing: None,
             foe: None,
             foe_unseen: 0.0,
             shot_from: None,
@@ -3340,12 +3346,17 @@ impl Inhabitants {
                 }
                 catching_up = off > CATCH_UP;
             } else if droid.route.is_empty() {
-                if let Some(aside) = step_aside(&AI.steer, droid.feet, others.clone(), floor_at) {
+                let keeping = droid.post.zip(droid.post_facing).filter(|&(post, _)| flat(post - droid.feet).norm() < SHOP_REACH);
+                if let Some((_, facing)) = keeping {
+                    // A shopkeeper at its counter: it stands there, facing the door.
+                    droid.heading = facing;
+                    droid.resting = droid.resting.max(REST.0);
+                } else if let Some(aside) = step_aside(&AI.steer, droid.feet, others.clone(), floor_at) {
                     droid.route = vec![aside];
                 } else if droid.resting == 0.0 {
                     (droid.route, droid.trip) = match droid.post {
                         // In capture the flag, about where it keeps to.
-                        Some(post) => spot_near(mesh, post, POST_REACH, rng)
+                        Some(post) => spot_near(mesh, post, if droid.post_facing.is_some() { SHOP_REACH } else { POST_REACH }, rng)
                             .map(|to| go_to(droid.feet, to))
                             .unwrap_or_default(),
                         // In battle royale, somewhere inside the ring, well in from its edge.
@@ -4818,6 +4829,14 @@ impl Inhabitants {
         }
         let n = self.droids.len() - 1;
         self.droids[n].post = Some(post);
+        Some(n)
+    }
+
+    /// Puts a droid of `character` to keep a shop: at `post`, behind its counter, standing there
+    /// facing `heading` - the door - and going back there whenever it has gone off. Which droid.
+    pub fn keep_shop(&mut self, scene: &mut Scene, mesh: &NavMesh, post: Vector3<f32>, heading: f32, character: usize, rng: &mut Rng) -> Option<usize> {
+        let n = self.post_guard(scene, mesh, post, heading, character, rng)?;
+        self.droids[n].post_facing = Some(heading);
         Some(n)
     }
 
