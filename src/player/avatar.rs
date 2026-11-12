@@ -715,6 +715,11 @@ fn screen_glass(color: Color) -> GlassMaterial {
 /// How quickly the turn that brings the barrel round to the camera catches up with how far it
 /// has to, like a rate: after 1/`AIM_FIX_RATE` seconds, about two thirds of the way.
 const AIM_FIX_RATE: f32 = 15.0;
+/// How quickly that turn eases back out once a gun held in both hands - the rifle - comes down
+/// from the aim, like a rate: the low ready is the ready's own hold, squared to where the droid
+/// faces, not the last aim's turn laid over it. Slower than it catches up, about as long as the
+/// rifle takes to come down.
+const AIM_FIX_REST: f32 = 6.0;
 /// How long after the last shot the pistol is lowered to the ready again, unless it is held
 /// raised, in seconds; and how long going from one of its animations to the next takes.
 const READY_AFTER: f32 = 1.0;
@@ -1463,6 +1468,12 @@ struct Square {
 fn shoulders_yaw(left: Vector3<f32>, right: Vector3<f32>) -> f32 {
     let across = left - right;
     (-across.z).atan2(across.x)
+}
+
+/// The turn that brings the barrel round, `fix`, another `dt` on its way back out (see
+/// [`AIM_FIX_REST`]).
+fn rested_fix(fix: UnitQuaternion<f32>, dt: f32) -> UnitQuaternion<f32> {
+    fix.slerp(&UnitQuaternion::identity(), 1.0 - (-AIM_FIX_REST * dt.max(0.0)).exp())
 }
 
 /// How much of the shoulders' swing is left in as they are squared up: `off`, which way they
@@ -3736,7 +3747,6 @@ impl Avatar {
                 }
                 let yaw = across + off.clamp(right, left);
                 let wanted = pointing(pitch.clamp(bottom, top), wrap(yaw + facing - self.heading));
-                // At the ready, the rifle is held dipped from where it aimed last.
                 let two_handed = self.gun.as_ref().is_some_and(|gun| gun.pistol.two_handed);
                 if self.arms == Arms::Aiming || (self.arms == Arms::Ready && !two_handed) {
                     let barrel =
@@ -3745,6 +3755,12 @@ impl Avatar {
                         let catch_up = 1.0 - (-AIM_FIX_RATE * dt).exp();
                         self.aim_fix = self.aim_fix.slerp(&needed, catch_up);
                     }
+                } else if two_handed && !matches!(self.arms, Arms::Raising | Arms::Firing(_)) {
+                    // Down from the aim, the rifle's hold is the ready's own: the turn that kept
+                    // the barrel on target while it aimed was for that pose, with the camera where
+                    // it was then - left on, it held the body twisted that way under the ready
+                    // until the next aim. It eases back out as the rifle comes down.
+                    self.aim_fix = rested_fix(self.aim_fix, dt);
                 }
                 // Reaching round the corner, the arm is as far out as it goes: turning the back
                 // would only swing it into the wall.
@@ -4743,6 +4759,26 @@ impl Avatar {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn down_from_the_aim_the_turn_that_kept_the_barrel_on_target_eases_back_out() {
+        // Aimed 40 degrees down and 30 round: lowered, half a second on it is all but gone, at any
+        // frame rate, and it never overshoots.
+        let fix = UnitQuaternion::from_euler_angles(0.7, 0.5, 0.0);
+        for hz in [30.0f32, 60.0, 144.0] {
+            let mut eased = fix;
+            let mut last = eased.angle();
+            for _ in 0..(0.5 * hz) as usize {
+                eased = rested_fix(eased, 1.0 / hz);
+                assert!(eased.angle() <= last + 1.0e-6);
+                last = eased.angle();
+            }
+            assert!(eased.angle() < fix.angle() * 0.06, "{hz} Hz: {} of {}", eased.angle(), fix.angle());
+        }
+        // No time, no change; nonsense, none either.
+        assert!((rested_fix(fix, 0.0).angle() - fix.angle()).abs() < 1.0e-6);
+        assert!((rested_fix(fix, -1.0).angle() - fix.angle()).abs() < 1.0e-6);
+    }
 
     #[test]
     fn squared_up_the_shoulders_keep_the_strides_swing_about_where_they_point_on_average() {
