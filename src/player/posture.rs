@@ -134,7 +134,8 @@ impl Player {
 
     /// How fast the player is going: sprinting while Shift is held down, and otherwise whichever
     /// of walking, jogging and running Caps Lock and a tap of Shift last left them in. Strafing,
-    /// or with the pistol out, a sprint is a run. Out of breath they only walk. Shuffling along
+    /// or with the pistol out, a sprint is a run; with the rifle out, at the ready, it is a sprint
+    /// (see `Player::strafing`). Out of breath they only walk. Shuffling along
     /// a wall in cover, anything faster than a walk is a jog.
     pub(super) fn gait(&self) -> Gait {
         if self.winded {

@@ -258,6 +258,29 @@ mod tests {
     }
 
     #[test]
+    fn with_the_rifle_at_the_ready_a_sprint_is_a_sprint_and_with_the_pistol_a_run() {
+        let mut player = Player::default();
+        player.armed = true;
+        player.rifle = true;
+        hold_shift(&mut player);
+        assert_eq!(player.gait(), Gait::Sprinting, "the rifle at the ready: a sprint");
+        assert!(!player.strafing(), "facing the way it runs");
+        // Raised to aim, it strafes, and a sprint is a run.
+        player.set_strafing(true);
+        assert_eq!(player.gait(), Gait::Running);
+        player.set_strafing(false);
+        // Shift let go, the rifle out: strafing again, as ever.
+        player.on_key(KeyCode::ShiftLeft, false);
+        assert!(player.strafing());
+        // The pistol: a sprint is a run.
+        let mut player = Player::default();
+        player.armed = true;
+        hold_shift(&mut player);
+        assert_eq!(player.gait(), Gait::Running, "the pistol out: a run");
+        assert!(player.strafing());
+    }
+
+    #[test]
     fn strafing_a_sprint_is_a_run() {
         let mut player = Player::default();
         hold_shift(&mut player);

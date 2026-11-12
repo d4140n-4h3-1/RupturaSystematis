@@ -641,9 +641,21 @@ impl Player {
         }
     }
 
-    /// Whether the droid strafes: with the right mouse button held, or the pistol out.
+    /// Whether the droid strafes: with the right mouse button held, or a gun out - but for the
+    /// rifle at the ready, sprinting, when the droid runs the way it is going, hunched over it.
     fn strafing(&self) -> bool {
-        self.keys.strafe || self.armed
+        self.keys.strafe || self.armed && !self.sprinting_at_the_ready()
+    }
+
+    /// Whether the player sprints with the rifle at the ready: Shift held long enough, the rifle
+    /// out and not raised to aim, and breath left. The droid faces the way it runs, and plays the
+    /// rifle's own sprint.
+    fn sprinting_at_the_ready(&self) -> bool {
+        self.armed
+            && self.rifle
+            && !self.keys.strafe
+            && !self.winded
+            && self.keys.shift_held.is_some_and(|held| held >= posture::SPRINT_HOLD)
     }
 
     /// How fast the player goes at `gait` in the posture they are in, in meters per second: as
