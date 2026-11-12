@@ -475,6 +475,11 @@ const EYE_REACH: f32 = 1.2;
 /// How long the face and shoulders take to square up to straight ahead as the droid starts
 /// strafing, or to let go as it stops, in seconds.
 const SQUARE_FADE: f32 = 0.2;
+/// Squared up, the shoulders still sway with the stride: it is where they point on average that is
+/// brought to straight ahead - the average over this long, in seconds, about a stride - and their
+/// swing about it, up to this much either way, in radians, is left in.
+const SWAY_MEAN: f32 = 0.5;
+const SWAY_MOST: f32 = 0.35;
 /// The screen on top of the pistol, crosshair and all, and the shell round the glowing core of
 /// the ball at its muzzle that the shots come out of.
 const PISTOL_PARTS: GunParts = GunParts {
@@ -1460,6 +1465,13 @@ fn shoulders_yaw(left: Vector3<f32>, right: Vector3<f32>) -> f32 {
     (-across.z).atan2(across.x)
 }
 
+/// How much of the shoulders' swing is left in as they are squared up: `off`, which way they
+/// point off straight ahead, less `mean`, where they point on average - no more than
+/// [`SWAY_MOST`] either way - times `kept`, from 0 to 1.
+fn swing_kept(off: f32, mean: f32, kept: f32) -> f32 {
+    wrap(off - mean).clamp(-SWAY_MOST, SWAY_MOST) * kept.clamp(0.0, 1.0)
+}
+
 /// Which way `way` points along the ground, in radians from ahead, left positive.
 fn yaw_of(way: Vector3<f32>) -> f32 {
     way.x.atan2(way.z)
@@ -1985,6 +1997,9 @@ pub struct Avatar {
     /// and bob swing about.
     right_forearm: Vec<Handle<Node>>,
     stride_mean: (f32, f32),
+    /// Which way the shoulders point on average, off straight ahead, as the pose has them before
+    /// they are squared up: what squaring brings to straight ahead (see [`SWAY_MEAN`]).
+    sway_mean: f32,
     /// The hips' drop below their mean as the pistol's dip has caught up with it ([`PISTOL_BOB_LAG`]).
     bob_drop: f32,
     /// Which way the barrel pointed, across the world, as the trigger was last pulled.
@@ -2925,6 +2940,7 @@ impl Avatar {
             left_free: 0.0,
             right_forearm,
             stride_mean: (0.0, 0.0),
+            sway_mean: 0.0,
             bob_drop: 0.0,
             barrel: Vector3::z(),
             shot: None,
@@ -3636,14 +3652,27 @@ impl Avatar {
         let step = dt / SQUARE_FADE;
         let squared = if self.squaring { 1.0 } else { 0.0 };
         self.square_weight += (squared - self.square_weight).clamp(-step, step);
-        if let Some(square) = self.square.as_ref().filter(|_| self.square_weight > 0.0) {
-            let w = self.square_weight * self.square_weight * (3.0 - 2.0 * self.square_weight);
-            let ahead = -self.heading;
+        // Where the shoulders point on average, off straight ahead, kept up whether squaring or
+        // not, so that it is already right as the droid starts to.
+        let shoulders_off = self.square.as_ref().map(|square| {
             let [left, right] = square
                 .shoulders
                 .each_ref()
                 .map(|chain| place(chain, |bone| target[&bone]).position);
-            let off = wrap(ahead - shoulders_yaw(left, right));
+            wrap(shoulders_yaw(left, right) + self.heading)
+        });
+        if let Some(off) = shoulders_off {
+            self.sway_mean += wrap(off - self.sway_mean) * (1.0 - (-dt / SWAY_MEAN).exp());
+        }
+        if let Some(square) = self.square.as_ref().filter(|_| self.square_weight > 0.0) {
+            let w = self.square_weight * self.square_weight * (3.0 - 2.0 * self.square_weight);
+            let ahead = -self.heading;
+            // The stride's swing of the shoulders is left in as far as the upper body is a cycle's
+            // own - the legs', or the gun's walk, jog or run - and not a pose held still: running
+            // with the rifle at the ready, one shoulder comes forward as the other goes back.
+            let held_still = smooth(arms_weight) * (1.0 - smooth(self.moving_weight));
+            let swing = swing_kept(shoulders_off.unwrap_or(0.0), self.sway_mean, 1.0 - held_still);
+            let off = wrap(-shoulders_off.unwrap_or(0.0)) + swing;
             twist_back(&mut target, &square.back, w * off);
             let face = place(&square.head, |bone| target[&bone]).rotation * square.face;
             // By the neck, as the head's own turn below is: the head bone turned by itself would
@@ -4714,6 +4743,20 @@ impl Avatar {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn squared_up_the_shoulders_keep_the_strides_swing_about_where_they_point_on_average() {
+        // Pointing 0.5 rad off on average and swung 0.2 further: squared, the 0.2 is left.
+        assert!((swing_kept(0.7, 0.5, 1.0) - 0.2).abs() < 1.0e-6);
+        assert!((swing_kept(0.3, 0.5, 1.0) + 0.2).abs() < 1.0e-6);
+        // No more than the most, however far off - turning to strafe another way, say.
+        assert_eq!(swing_kept(1.5, 0.0, 1.0), SWAY_MOST);
+        // Held still - the pistol raised - none of it; halfway over, half.
+        assert_eq!(swing_kept(0.7, 0.5, 0.0), 0.0);
+        assert!((swing_kept(0.7, 0.5, 0.5) - 0.1).abs() < 1.0e-6);
+        // Round the back of the circle, the short way.
+        assert!((swing_kept(-3.1, 3.1, 1.0) - (std::f32::consts::TAU - 6.2)).abs() < 1.0e-5);
+    }
 
     #[test]
     fn a_guns_sprint_on_the_move_is_optional() {
