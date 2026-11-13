@@ -67,6 +67,7 @@ pub mod pistol;
 pub use noise::SHOT_NOISE;
 pub use pistol::PISTOL_SOUNDS;
 pub mod posture;
+mod sight;
 mod talk;
 mod third_person;
 mod view;
@@ -211,20 +212,23 @@ pub struct Player {
     confiscated: bool,
     /// The pistol's shots.
     bolts: pistol::Bolts,
-    /// Whether the gun the player wants is the rifle rather than the pistol; how the rifle
-    /// fires; how many shots of a burst are left to fire; and how many shots the droid had
+    /// The gun the player wants - the pistol, the rifle or the sniper; how the rifle fires; how many shots of a burst are left to fire; and how many shots the droid had
     /// fired as of the last frame, to count them off.
-    rifle: bool,
+    weapon: pistol::Weapon,
     fire_mode: pistol::FireMode,
     burst_left: u8,
     fired_seen: u32,
-    /// How many shots are left in the rifle's magazine, and how long it has left recharging, in
-    /// seconds, once it is empty (see [`pistol::MAGAZINE`]).
-    rounds: u32,
-    recharging: f32,
+    /// How many shots are left in each gun's magazine, and how long it has left recharging, in
+    /// seconds, once it is empty (see [`pistol::Weapon::magazine`]), by [`pistol::Weapon::index`].
+    rounds: [u32; 3],
+    recharging: [f32; 3],
     /// The pistol and the rifle held in view in first person, once the droid has loaded, as it
     /// has them.
     viewmodels: Vec<viewmodel::Viewmodel>,
+    /// The sniper's scope and laser; and how many times the view is zoomed in through the scope
+    /// as of this frame.
+    sight: sight::Sight,
+    zoom: f32,
     /// Whether the view is from the droid's own eyes, as of this frame: first person, and
     /// neither swung round the droid nor closed in on someone talked to.
     in_own_eyes: bool,
@@ -287,13 +291,15 @@ impl Default for Player {
             armed: false,
             confiscated: false,
             bolts: Default::default(),
-            rifle: false,
+            weapon: pistol::Weapon::Pistol,
             fire_mode: pistol::FireMode::default(),
             burst_left: 0,
             fired_seen: 0,
-            rounds: pistol::MAGAZINE,
-            recharging: 0.0,
+            rounds: pistol::Weapon::ALL.map(|weapon| weapon.magazine().map_or(0, |(magazine, _)| magazine)),
+            recharging: [0.0; 3],
             viewmodels: Vec::new(),
+            sight: Default::default(),
+            zoom: 1.0,
             in_own_eyes: false,
             noises: Default::default(),
             talk: Default::default(),
@@ -370,6 +376,7 @@ impl Player {
             flashlight,
             pistol_lamp: pistol::muzzle_lamp(graph),
             bolts: pistol::Bolts::new(graph),
+            sight: sight::Sight::new(graph, camera.transmute()),
             ..Default::default()
         }
     }
@@ -619,7 +626,7 @@ impl Player {
             // In cover, the wall sets which way the droid faces.
             strafing: can_move && self.strafing() && !self.in_cover(),
             armed: self.armed,
-            rifle: self.rifle,
+            weapon: self.weapon,
             trigger: can_move && keys.trigger,
             raised: can_move && keys.strafe,
             look: (look.y.clamp(-1.0, 1.0).asin(), look.x.atan2(look.z)),
@@ -636,6 +643,7 @@ impl Player {
         // The shot leaves the muzzle as it is held, and only then does the pistol kick.
         self.hold_pistol(graph, dt);
         self.shoot(graph, dt);
+        self.aim_sights(graph);
         if fired {
             self.kick_pistol(graph);
         }
@@ -652,7 +660,7 @@ impl Player {
     /// rifle's own sprint.
     fn sprinting_at_the_ready(&self) -> bool {
         self.armed
-            && self.rifle
+            && self.weapon.long()
             && !self.keys.strafe
             && !self.winded
             && self.keys.shift_held.is_some_and(|held| held >= posture::SPRINT_HOLD)

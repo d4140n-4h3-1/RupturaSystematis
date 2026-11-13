@@ -29,7 +29,9 @@ impl Player {
     /// Turns the view by a mouse movement - or, with the middle button held, swings the camera
     /// round the droid instead, leaving the droid facing as it was.
     pub fn look(&mut self, dx: f32, dy: f32) {
-        let (across, up) = (-dx * self.sensitivity, dy * self.sensitivity);
+        // Through the sniper's scope, as much more finely as the view is zoomed in.
+        let sensitivity = self.sensitivity / self.zoom.max(1.0);
+        let (across, up) = (-dx * sensitivity, dy * sensitivity);
         if self.orbit.held {
             self.orbit.swing(across, up, self.pitch);
             return;

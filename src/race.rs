@@ -1725,7 +1725,7 @@ pub(crate) fn build_bike(scene: &mut Scene, model: &ModelResource, droid: Option
         // apart, out of sight - or its green insides would show through its shell - and its
         // guns put away.
         let _ = crate::dismember::Dismember::new(graph, rider);
-        for gun in ["pistol", "rifle"] {
+        for gun in ["pistol", "rifle", "sniper"] {
             if let Some((node, _)) = graph.find_by_name(rider, gun) {
                 graph[node].set_visibility(false);
             }

@@ -160,7 +160,7 @@ use crate::{
     player::{
         avatar::{self, Avatar, Going},
         breath,
-        pistol::{self, FireMode, Pass},
+        pistol::{self, FireMode, Pass, Weapon},
         posture::{Gait, Posture},
         Strike,
     },
@@ -2552,6 +2552,7 @@ impl Inhabitants {
             collider: droid.collider,
             at: droid.feet + Vector3::new(0.0, CHEST, 0.0),
             way: -Vector3::y(),
+            power: 1,
         };
         let feet = droid.feet;
         self.shot(graph, strike, feet) == Some(n)
@@ -3832,7 +3833,7 @@ impl Inhabitants {
                 pushing: true,
                 strafing: false,
                 armed: droid.armed_left > 0.0 && !droid.down,
-                rifle: droid.rifle,
+                weapon: if droid.rifle { Weapon::Rifle } else { Weapon::Pistol },
                 trigger,
                 raised: target.is_some() || held.is_some(),
                 look,
@@ -5367,6 +5368,7 @@ impl Inhabitants {
             collider: droid.collider,
             at,
             way: (at - from).try_normalize(1.0e-6).unwrap_or_else(Vector3::z),
+            power: 1,
         };
         let n = (0..SENTRY_HITS.max(HITS)).find_map(|_| self.shot(graph, strike, player))?;
         if let Some(bodies) = crate::platform::var("MAZE_DISMEMBER") {
@@ -5424,7 +5426,7 @@ impl Inhabitants {
         }
         // A good headshot stops it there and then.
         let headshot = droid.headshot(graph, strike.at, strike.way);
-        droid.hits += 1;
+        droid.hits += strike.power.max(1);
         droid.note(Incident::Hurt);
         if droid.hits < droid.stopped_by() && headshot.is_none() {
             if droid.side.is_some() {

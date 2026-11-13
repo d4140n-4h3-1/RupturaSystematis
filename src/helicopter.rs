@@ -163,7 +163,7 @@ fn build(scene: &mut Scene, model: &ModelResource, pilot: Option<&ModelResource>
         graph.link_nodes(crew, root);
         // As a bike's rider: its pieces for coming apart out of sight, its guns put away.
         let _ = crate::dismember::Dismember::new(graph, crew);
-        for gun in ["pistol", "rifle"] {
+        for gun in ["pistol", "rifle", "sniper"] {
             if let Some((node, _)) = graph.find_by_name(crew, gun) {
                 graph[node].set_visibility(false);
             }

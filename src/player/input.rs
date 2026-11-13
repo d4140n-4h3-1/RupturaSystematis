@@ -261,7 +261,7 @@ mod tests {
     fn with_the_rifle_at_the_ready_a_sprint_is_a_sprint_and_with_the_pistol_a_run() {
         let mut player = Player::default();
         player.armed = true;
-        player.rifle = true;
+        player.weapon = crate::player::pistol::Weapon::Rifle;
         hold_shift(&mut player);
         assert_eq!(player.gait(), Gait::Sprinting, "the rifle at the ready: a sprint");
         assert!(!player.strafing(), "facing the way it runs");

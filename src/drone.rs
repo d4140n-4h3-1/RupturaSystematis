@@ -843,11 +843,11 @@ impl Drone {
     /// A bolt that hit `collider`, fired by the player from `from`: if it hit the drone, it takes
     /// the hit, and searches where it came from if it was not after the player already. Whether it
     /// was the drone, and whether that brought it down.
-    pub fn shot(&mut self, graph: &mut Graph, collider: Handle<Collider>, from: Vector3<f32>) -> Option<bool> {
+    pub fn shot(&mut self, graph: &mut Graph, collider: Handle<Collider>, from: Vector3<f32>, power: u32) -> Option<bool> {
         if collider != self.collider || self.mind.state == State::Down || !self.placed {
             return None;
         }
-        self.hits += 1;
+        self.hits += power.max(1);
         if self.hits >= HITS {
             // Its body goes down with it (see `update`), and lies on the floor as solid as ever:
             // the drone's as its death has it, the quadcopter's falling.

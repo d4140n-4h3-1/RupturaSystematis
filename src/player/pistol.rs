@@ -52,6 +52,73 @@ pub const PISTOL_SOUNDS: &str = "data/sounds/pistol_formants.json";
 /// The rifle's: its own `shot`, heavier and shorter, the bolt humming as the pistol's does.
 pub const RIFLE_SOUNDS: &str = "data/sounds/rifle_formants.json";
 
+/// The guns the player can carry, in the order the mouse wheel goes through them: the pistol, the
+/// rifle, and the sniper - a long marksman's rifle with a scope and a laser sight.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Weapon {
+    #[default]
+    Pistol,
+    Rifle,
+    Sniper,
+}
+
+impl Weapon {
+    pub const ALL: [Weapon; 3] = [Weapon::Pistol, Weapon::Rifle, Weapon::Sniper];
+
+    /// Where it is among [`Weapon::ALL`].
+    pub fn index(self) -> usize {
+        self as usize
+    }
+
+    /// The one after it, round again after the last.
+    pub fn next(self) -> Self {
+        Self::ALL[(self.index() + 1) % Self::ALL.len()]
+    }
+
+    /// Whether it is a long gun, held in both hands, with a magazine that runs out: the rifle
+    /// and the sniper. The pistol is held in one hand and never runs out.
+    pub fn long(self) -> bool {
+        self != Weapon::Pistol
+    }
+
+    /// How many shots its magazine holds, and how long it takes to recharge once they are all
+    /// fired, in seconds. The pistol's never runs out.
+    pub fn magazine(self) -> Option<(u32, f32)> {
+        match self {
+            Weapon::Pistol => None,
+            Weapon::Rifle => Some((MAGAZINE, RECHARGE)),
+            Weapon::Sniper => Some((SNIPER_MAGAZINE, SNIPER_RECHARGE)),
+        }
+    }
+
+    /// Its glow's colour: its bolts', its flash's and its muzzle's.
+    pub fn color(self) -> Color {
+        match self {
+            Weapon::Pistol => BOLT_COLOR,
+            Weapon::Rifle => RIFLE_COLOR,
+            Weapon::Sniper => SNIPER_COLOR,
+        }
+    }
+
+    /// Its glow in linear light, as the Blender files have it.
+    fn glow(self) -> Vector3<f32> {
+        match self {
+            Weapon::Pistol => BOLT_GREEN,
+            Weapon::Rifle => RIFLE_BLUE,
+            Weapon::Sniper => SNIPER_VIOLET,
+        }
+    }
+
+    /// How fast its bolts fly, in meters per second, and how far, in meters, if they hit
+    /// nothing; and how many hits one that does hit counts as.
+    fn bolt(self) -> (f32, f32, u32) {
+        match self {
+            Weapon::Sniper => (SNIPER_BOLT_SPEED, SNIPER_BOLT_RANGE, SNIPER_POWER),
+            _ => (BOLT_SPEED, BOLT_RANGE, 1),
+        }
+    }
+}
+
 /// How the rifle fires while the trigger is held: once a pull, three shots a pull, or for as
 /// long as it is held. X goes from one to the next; the pistol fires once a pull, always.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -89,6 +156,16 @@ const BURST: u8 = 3;
 /// (see [`crate::inhabitants`]). The pistol never runs out.
 pub const MAGAZINE: u32 = 30;
 pub const RECHARGE: f32 = 1.5;
+/// The sniper's: five shots, and a slower recharge.
+pub const SNIPER_MAGAZINE: u32 = 5;
+pub const SNIPER_RECHARGE: f32 = 2.5;
+/// The sniper's bolts fly three times as fast as the others, three times as far, and each that
+/// hits counts as this many hits.
+const SNIPER_BOLT_SPEED: f32 = 120.0;
+const SNIPER_BOLT_RANGE: f32 = 300.0;
+const SNIPER_POWER: u32 = 3;
+/// Its shot is the rifle's, played this much lower: deeper, and slower to die away.
+const SNIPER_PITCH: f64 = 0.7;
 
 /// How long after the mouse wheel changes guns it can change them again, in seconds.
 const WHEEL_REPEAT: f32 = 0.35;
@@ -112,6 +189,10 @@ const BOLT_GREEN: Vector3<f32> = Vector3::new(0.02, 1.0, 0.05);
 /// 1.0) in linear light - as a colour, and as the glow.
 pub(super) const RIFLE_COLOR: Color = Color::opaque(39, 149, 255);
 const RIFLE_BLUE: Vector3<f32> = Vector3::new(0.02, 0.3, 1.0);
+/// The sniper's are violet - `GLOW_COLOUR` in `build_cyber_sniper.py`: (0.45, 0.04, 1.0) in
+/// linear light - and so is its laser.
+pub(super) const SNIPER_COLOR: Color = Color::opaque(180, 56, 255);
+pub(super) const SNIPER_VIOLET: Vector3<f32> = Vector3::new(0.45, 0.04, 1.0);
 /// The glow of the ball at the muzzle, lighting what is round it while the pistol is out: how
 /// bright it is, and how far it reaches, in meters.
 const MUZZLE_BRIGHTNESS: f32 = 0.6;
@@ -129,6 +210,8 @@ pub struct Strike {
     pub collider: Handle<Collider>,
     pub at: Vector3<f32>,
     pub way: Vector3<f32>,
+    /// How many hits it counts as: the sniper's more than one.
+    pub power: u32,
 }
 
 /// The stretch a bolt flew in one frame, from `start` to `end`, and where it was fired from:
@@ -177,6 +260,9 @@ struct Bolt {
     /// Whether it has been drawn in flight yet: the first time, it is drawn all the way back to
     /// where it was fired from, having flown a whole frame's way out of the muzzle already.
     out: bool,
+    /// How fast it flies, in meters per second, and how many hits it counts as if it hits.
+    speed: f32,
+    power: u32,
 }
 
 /// The pistol's bolts: a few meshes, shown while they fly. Anyone with a pistol can have them -
@@ -190,12 +276,13 @@ pub struct Bolts {
     /// Every bolt's flash, as `bolts` has them; and how a bolt glows, the pistol's and the
     /// rifle's: each bolt is given the one it is fired from as it is fired.
     flashes: Vec<Handle<Node>>,
-    glows: [MaterialResource; 2],
+    glows: [MaterialResource; 3],
     /// The sound of a shot, and how far off it is heard at full volume, if there is one.
     shot: Option<(SoundBufferResource, f32)>,
-    /// The rifle's shot, likewise; and whether the bolt being fired is the rifle's.
+    /// The rifle's shot, likewise (the sniper's too, deeper); and which gun the bolt being fired
+    /// is from.
     rifle_shot: Option<(SoundBufferResource, f32)>,
-    rifle: bool,
+    kind: Weapon,
     /// What bolts have hit since the game last asked, and where they flew in their last flight.
     struck: Vec<Strike>,
     passed: Vec<Pass>,
@@ -226,10 +313,10 @@ impl Bolts {
             vec![255; 4],
         )
         .map(TextureResource::new_embedded);
-        let glows = [(BOLT_COLOR, BOLT_GREEN), (RIFLE_COLOR, RIFLE_BLUE)].map(|(color, glow)| {
+        let glows = Weapon::ALL.map(|weapon| {
             let mut material = Material::standard();
-            material.set_property("diffuseColor", color);
-            material.set_property("emissionStrength", glow * BOLT_GLOW);
+            material.set_property("diffuseColor", weapon.color());
+            material.set_property("emissionStrength", weapon.glow() * BOLT_GLOW);
             material.bind("emissionTexture", white.clone());
             MaterialResource::new_embedded(material)
         });
@@ -297,7 +384,7 @@ impl Bolts {
             glows,
             shot,
             rifle_shot,
-            rifle: false,
+            kind: Weapon::Pistol,
             struck: Vec::new(),
             passed: Vec::new(),
         }
@@ -326,16 +413,22 @@ impl Bolts {
     /// Fires a bolt from the rifle, from `from` along `direction`, one meter long: as
     /// [`Bolts::fire`], but with the rifle's shot.
     pub fn fire_rifle(&mut self, graph: &mut Graph, from: Vector3<f32>, direction: Vector3<f32>) {
-        self.rifle = true;
-        self.fire(graph, from, direction);
-        self.rifle = false;
+        self.fire_from(graph, Weapon::Rifle, from, direction);
+    }
+
+    /// Fires a bolt from `weapon`, from `from` along `direction`, one meter long: its colour,
+    /// its shot, and its bolt's speed, reach and power.
+    pub fn fire_from(&mut self, graph: &mut Graph, weapon: Weapon, from: Vector3<f32>, direction: Vector3<f32>) {
+        self.kind = weapon;
+        self.fire_for(graph, from, direction, weapon.bolt().1, false);
+        self.kind = Weapon::Pistol;
     }
 
     /// As [`Bolts::fire_for`], but with the rifle's shot: blue, where the pistol's is green.
     pub fn fire_rifle_for(&mut self, graph: &mut Graph, from: Vector3<f32>, direction: Vector3<f32>, range: f32, lands: bool) {
-        self.rifle = true;
+        self.kind = Weapon::Rifle;
         self.fire_for(graph, from, direction, range, lands);
-        self.rifle = false;
+        self.kind = Weapon::Pistol;
     }
 
     /// Fires a bolt from `from` along `direction`, one meter long, that flies no further than
@@ -358,25 +451,28 @@ impl Bolts {
         else {
             return;
         };
+        let (speed, reach, power) = self.kind.bolt();
         *bolt = Some(Bolt {
             fired_at: from,
             position: from,
             direction,
-            range: range.min(BOLT_RANGE),
+            range: range.min(reach),
             lands,
             landed: None,
             out: false,
+            speed,
+            power,
         });
         let mesh = *mesh;
-        // Green from the pistol, blue from the rifle.
+        // Green from the pistol, blue from the rifle, violet from the sniper.
         if let Ok(node) = graph.try_get_mut_of_type::<Mesh>(mesh) {
             for surface in node.surfaces_mut() {
-                surface.set_material(self.glows[self.rifle as usize].clone());
+                surface.set_material(self.glows[self.kind.index()].clone());
             }
         }
         if let Some(&flash) = self.flashes.get(index) {
             if let Ok(flash) = graph.try_get_mut_of_type::<PointLight>(flash) {
-                flash.base_light_mut().set_color(if self.rifle { RIFLE_COLOR } else { BOLT_COLOR });
+                flash.base_light_mut().set_color(self.kind.color());
             }
         }
         let Some((_, bolt)) = self.bolts.get(index) else {
@@ -390,16 +486,19 @@ impl Bolts {
             show(graph, mesh, bolt);
         }
         self.hum(graph, index, true);
-        // The shot sounds where it leaves, once, and is gone: the rifle's, from the rifle.
-        let shot = if self.rifle { self.rifle_shot.as_ref().or(self.shot.as_ref()) } else { self.shot.as_ref() };
+        // The shot sounds where it leaves, once, and is gone: the rifle's, from the rifle, and
+        // deeper from the sniper.
+        let shot = if self.kind.long() { self.rifle_shot.as_ref().or(self.shot.as_ref()) } else { self.shot.as_ref() };
         if let Some((buffer, reach)) = shot {
+            let sniper = self.kind == Weapon::Sniper;
             SoundBuilder::new(
                 BaseBuilder::new().with_local_transform(
                     TransformBuilder::new().with_local_position(from).build(),
                 ),
             )
             .with_buffer(Some(buffer.clone()))
-            .with_radius(*reach)
+            .with_pitch(if sniper { SNIPER_PITCH } else { 1.0 })
+            .with_radius(if sniper { 2.0 * *reach } else { *reach })
             .with_play_once(true)
             .with_status(Status::Playing)
             .build(graph);
@@ -423,7 +522,7 @@ impl Bolts {
             .iter()
             .map(|(_, bolt)| {
                 let bolt = bolt.filter(|bolt| bolt.landed.is_none())?;
-                let step = (BOLT_SPEED * dt).min(bolt.range);
+                let step = (bolt.speed * dt).min(bolt.range);
                 Some(
                     match first_hit(graph, bolt.position, bolt.direction, step) {
                         Some((reach, hit)) => (reach, Some(hit), true),
@@ -458,6 +557,7 @@ impl Bolts {
                 collider,
                 at: flying.position + flying.direction * reach,
                 way: flying.direction,
+                power: flying.power,
             }));
             if hit.is_some() {
                 // Its tip against what it hit, its flash lighting it up; and quiet, and the first
@@ -564,11 +664,8 @@ impl Player {
         }
         let shot = shot.map(|shot| self.aim_from_view(graph).unwrap_or(shot));
         if let Some((muzzle, direction)) = shot {
-            if self.avatar.as_ref().is_some_and(|avatar| avatar.rifle_in_hand()) {
-                self.bolts.fire_rifle(graph, muzzle, direction);
-            } else {
-                self.bolts.fire(graph, muzzle, direction);
-            }
+            let weapon = self.avatar.as_ref().map_or(Weapon::Pistol, |avatar| avatar.in_hand());
+            self.bolts.fire_from(graph, weapon, muzzle, direction);
             self.make_noise(muzzle, noise::SHOT_NOISE, true);
         }
         // Each bolt on for another `dt`: what it hits, the droids hear, and the game is told.
@@ -588,7 +685,7 @@ impl Player {
     /// it, one meter long. None while it is put away.
     pub fn pistol_aim(&self, graph: &Graph) -> Option<(Vector3<f32>, Vector3<f32>)> {
         let avatar = self.avatar.as_ref()?;
-        let out = avatar.gun_out(graph, false) || avatar.gun_out(graph, true);
+        let out = Weapon::ALL.into_iter().any(|weapon| avatar.gun_out(graph, weapon));
         let camera = &graph[self.camera];
         out.then(|| (camera.global_position(), camera.look_vector().normalize()))
     }
@@ -613,19 +710,19 @@ impl Player {
         };
         let from_view = self.viewmodel_nodes(graph).filter(|&(_, pistol, _)| showing(pistol));
         let from_droid = self.avatar.as_ref().and_then(|avatar| {
-            [false, true]
+            Weapon::ALL
                 .into_iter()
-                .filter_map(|rifle| avatar.gun_nodes(rifle).map(|(pistol, muzzle)| (rifle, pistol, muzzle)))
+                .filter_map(|weapon| avatar.gun_nodes(weapon).map(|(pistol, muzzle)| (weapon, pistol, muzzle)))
                 .find(|&(_, pistol, _)| showing(pistol))
         });
-        let muzzle = from_view.or(from_droid).and_then(|(rifle, _, muzzle)| {
-            Some((rifle, graph.try_get(muzzle).ok()?.global_position()))
+        let muzzle = from_view.or(from_droid).and_then(|(weapon, _, muzzle)| {
+            Some((weapon, graph.try_get(muzzle).ok()?.global_position()))
         });
-        // Green at the pistol's muzzle, blue at the rifle's.
+        // Green at the pistol's muzzle, blue at the rifle's, violet at the sniper's.
         if let Ok(lamp) = graph.try_get_mut_of_type::<PointLight>(self.pistol_lamp) {
-            if let Some((rifle, at)) = muzzle {
+            if let Some((weapon, at)) = muzzle {
                 lamp.local_transform_mut().set_position(at);
-                let color = if rifle { RIFLE_COLOR } else { BOLT_COLOR };
+                let color = weapon.color();
                 if lamp.base_light_ref().color() != color {
                     lamp.base_light_mut().set_color(color);
                 }
@@ -646,18 +743,23 @@ impl Player {
         self.armed = !self.armed && !self.confiscated;
     }
 
-    /// Changes from the pistol to the rifle, or back, if the droid has a rifle: the one out is
-    /// put away and the other drawn; with neither out, the other is the one drawn next.
+    /// Changes to the next gun the droid has, round from the pistol to the rifle to the sniper:
+    /// the one out is put away and the next drawn; with none out, the next is the one drawn next.
     fn change_gun(&mut self) {
-        if self.avatar.as_ref().is_some_and(|avatar| avatar.has_rifle()) {
-            self.rifle = !self.rifle;
+        let Some(avatar) = self.avatar.as_ref() else {
+            return;
+        };
+        let mut next = self.weapon.next();
+        while next != self.weapon && !avatar.has(next) {
+            next = next.next();
         }
+        self.weapon = next;
     }
 
     /// Goes on to the rifle's next way of firing, if the rifle is the gun out or to be drawn:
-    /// the pistol has only the one.
+    /// the pistol and the sniper have only the one, a shot a pull.
     pub(super) fn select_fire(&mut self) {
-        if self.rifle {
+        if self.weapon == Weapon::Rifle {
             self.fire_mode = self.fire_mode.next();
             self.burst_left = 0;
         }
@@ -669,37 +771,45 @@ impl Player {
     }
 
     /// The ammo of the gun the player has, or will draw: None for the pistol, which never runs
-    /// out; for the rifle, how many shots are left - while it recharges, how far along it is, as
-    /// shots, filling up to [`MAGAZINE`] - and whether it is recharging.
+    /// out; for the rifle and the sniper, how many shots are left - while it recharges, how far
+    /// along it is, as shots, filling up to its magazine - and whether it is recharging.
     pub fn ammo(&self) -> Option<(u32, bool)> {
-        self.rifle.then(|| match self.recharging > 0.0 {
-            true => (((1.0 - self.recharging / RECHARGE) * MAGAZINE as f32) as u32, true),
-            false => (self.rounds, false),
+        let (magazine, recharge) = self.weapon.magazine()?;
+        let k = self.weapon.index();
+        Some(match self.recharging[k] > 0.0 {
+            true => (((1.0 - self.recharging[k] / recharge) * magazine as f32) as u32, true),
+            false => (self.rounds[k], false),
         })
     }
 
-    /// Takes the `shots` just fired out of the rifle's magazine, if it was the `rifle` that fired
-    /// them; and, the magazine empty, recharges it for another `dt`.
-    fn spend(&mut self, rifle: bool, shots: u32, dt: f32) {
-        if rifle {
-            self.rounds = self.rounds.saturating_sub(shots);
-        }
-        if self.rounds == 0 && self.recharging == 0.0 {
-            self.recharging = RECHARGE;
-        }
-        if self.recharging > 0.0 {
-            self.recharging -= dt;
-            if self.recharging <= 0.0 {
-                (self.rounds, self.recharging) = (MAGAZINE, 0.0);
+    /// Takes the `shots` just fired out of the magazine of the `weapon` that fired them; and any
+    /// magazine empty, recharges it for another `dt`.
+    fn spend(&mut self, weapon: Weapon, shots: u32, dt: f32) {
+        let k = weapon.index();
+        self.rounds[k] = self.rounds[k].saturating_sub(shots);
+        for weapon in Weapon::ALL {
+            let Some((magazine, recharge)) = weapon.magazine() else {
+                continue;
+            };
+            let k = weapon.index();
+            if self.rounds[k] == 0 && self.recharging[k] == 0.0 {
+                self.recharging[k] = recharge;
+            }
+            if self.recharging[k] > 0.0 {
+                self.recharging[k] -= dt;
+                if self.recharging[k] <= 0.0 {
+                    (self.rounds[k], self.recharging[k]) = (magazine, 0.0);
+                }
             }
         }
     }
 
     /// The name of the gun the player has, or will draw, and for the rifle how it fires.
     pub fn gun_name(&self) -> String {
-        match self.rifle {
-            true => format!("CYBER RIFLE  {}", self.fire_mode.name()),
-            false => "CYBER PISTOL".to_string(),
+        match self.weapon {
+            Weapon::Rifle => format!("CYBER RIFLE  {}", self.fire_mode.name()),
+            Weapon::Sniper => "CYBER SNIPER".to_string(),
+            Weapon::Pistol => "CYBER PISTOL".to_string(),
         }
     }
 
@@ -711,9 +821,9 @@ impl Player {
         }
     }
 
-    /// Whether the gun the player has, or will draw, is the rifle.
-    pub fn rifle(&self) -> bool {
-        self.rifle
+    /// The gun the player has, or will draw.
+    pub fn weapon(&self) -> Weapon {
+        self.weapon
     }
 
     /// Takes the pistol off the player, put away, or gives it back.
@@ -738,7 +848,7 @@ impl Player {
         if self.armed {
             self.keys.trigger = true;
             self.keys.trigger_held = true;
-            let rifle = self.avatar.as_ref().is_some_and(|avatar| avatar.rifle_in_hand());
+            let rifle = self.avatar.as_ref().is_some_and(|avatar| avatar.in_hand() == Weapon::Rifle);
             if rifle && self.fire_mode == FireMode::Burst && self.burst_left == 0 {
                 self.burst_left = BURST;
             }
@@ -761,12 +871,13 @@ impl Player {
         let Some(avatar) = self.avatar.as_ref() else {
             return;
         };
-        let (rifle, fired) = (avatar.rifle_in_hand(), avatar.fired());
+        let (weapon, fired) = (avatar.in_hand(), avatar.fired());
+        let rifle = weapon == Weapon::Rifle;
         let shots = fired.wrapping_sub(self.fired_seen) as u8;
         self.fired_seen = fired;
         self.burst_left = self.burst_left.saturating_sub(shots);
-        self.spend(rifle, shots as u32, dt);
-        if rifle && self.rounds == 0 {
+        self.spend(weapon, shots as u32, dt);
+        if weapon.long() && self.rounds[weapon.index()] == 0 {
             self.keys.trigger = false;
             self.burst_left = 0;
             return;
@@ -895,21 +1006,36 @@ mod tests {
     fn the_rifle_fires_thirty_and_recharges_quickly_and_the_pistol_never_runs_out() {
         let mut player = Player::default();
         assert_eq!(player.ammo(), None, "the pistol's is endless");
-        player.rifle = true;
+        player.weapon = Weapon::Rifle;
         assert_eq!(player.ammo(), Some((MAGAZINE, false)));
         // The pistol's shots take nothing out of the rifle.
-        player.spend(false, 5, 0.1);
+        player.spend(Weapon::Pistol, 5, 0.1);
         assert_eq!(player.ammo(), Some((MAGAZINE, false)));
-        player.spend(true, MAGAZINE - 1, 0.1);
+        player.spend(Weapon::Rifle, MAGAZINE - 1, 0.1);
         assert_eq!(player.ammo(), Some((1, false)));
         // The last shot: it recharges, counting back up.
-        player.spend(true, 1, 0.0);
+        player.spend(Weapon::Rifle, 1, 0.0);
         assert_eq!(player.ammo(), Some((0, true)));
-        player.spend(false, 0, RECHARGE / 2.0);
+        player.spend(Weapon::Pistol, 0, RECHARGE / 2.0);
         assert_eq!(player.ammo(), Some((MAGAZINE / 2, true)));
-        player.spend(false, 0, RECHARGE / 2.0 + 0.01);
+        player.spend(Weapon::Pistol, 0, RECHARGE / 2.0 + 0.01);
         assert_eq!(player.ammo(), Some((MAGAZINE, false)), "full again");
         assert!(RECHARGE <= 2.0, "a quick recharge");
+    }
+
+    #[test]
+    fn the_sniper_has_five_shots_of_its_own_and_its_bolts_hit_harder_further_and_faster() {
+        let mut player = Player::default();
+        player.weapon = Weapon::Sniper;
+        assert_eq!(player.ammo(), Some((SNIPER_MAGAZINE, false)));
+        player.spend(Weapon::Sniper, SNIPER_MAGAZINE, 0.0);
+        assert_eq!(player.ammo(), Some((0, true)));
+        player.weapon = Weapon::Rifle;
+        assert_eq!(player.ammo(), Some((MAGAZINE, false)), "the rifle's magazine is its own");
+        let (speed, reach, power) = Weapon::Sniper.bolt();
+        assert!(speed > BOLT_SPEED && reach > BOLT_RANGE && power > 1);
+        assert_eq!(Weapon::Pistol.next(), Weapon::Rifle);
+        assert_eq!(Weapon::Sniper.next(), Weapon::Pistol);
     }
 
     #[test]

@@ -13797,5 +13797,29 @@
   "show_frame": 6,
   "hide_after_frame": 9,
   "shot_frame": 2
+ },
+ "sniper": {
+  "about": "As the pistol's: the sniper node shows from the draw's show_frame and hides after the holster's hide_after_frame; the bolt leaves the muzzle node on the fire clip's shot_frame. Both hands hold it at the ready too.",
+  "node": "sniper",
+  "muzzle_node": "sniper_muzzle",
+  "parent_bone": "DEF-hand.R",
+  "clips": {
+   "draw": "droid_sniper_draw",
+   "aim": "droid_sniper_aim",
+   "fire": "droid_sniper_fire",
+   "holster": "droid_sniper_holster",
+   "ready": "droid_sniper_ready",
+   "ready_to_aim": "droid_sniper_ready_to_aim",
+   "aim_to_ready": "droid_sniper_aim_to_ready"
+  },
+  "moving": {
+   "walk": "droid_sniper_walk",
+   "jog": "droid_sniper_jog",
+   "run": "droid_sniper_run",
+   "sprint": "droid_sniper_sprint"
+  },
+  "show_frame": 6,
+  "hide_after_frame": 9,
+  "shot_frame": 2
  }
 }

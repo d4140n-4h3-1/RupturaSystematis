@@ -2515,7 +2515,7 @@ impl Battle {
                 raised: raised && tall.is_none_or(|(_, _, out)| out),
                 look,
                 way,
-                rifle: droid.rifle,
+                weapon: if droid.rifle { pistol::Weapon::Rifle } else { pistol::Weapon::Pistol },
             };
             droid.avatar.animate(graph, going, dt);
         }

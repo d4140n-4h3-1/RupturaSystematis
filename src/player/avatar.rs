@@ -103,6 +103,7 @@
 //! only while it is seen from outside (see [`Avatar::set_casts_shadows`]): seen through its
 //! eyes, the flashlight is inside its head.
 
+use super::pistol::Weapon;
 use super::posture::{Gait, Posture};
 use crate::dismember::Dismember;
 use crate::fixtures::{glow_strength, property, DIFFUSE_COLOR, EMISSION_STRENGTH};
@@ -432,10 +433,15 @@ const SWINGING_FOLLOW: f32 = 0.15;
 const PISTOL: &str = "pistol";
 /// The rifle in its right hand, as long as [`MOTION`] does not say otherwise.
 const RIFLE: &str = "rifle";
+/// The sniper, likewise.
+const SNIPER: &str = "sniper";
 /// How long after one shot the next can be fired, in seconds: the pistol a pull of the trigger
 /// at a time, at most five a second; the rifle, held, ten a second.
 const PISTOL_INTERVAL: f32 = 0.2;
 const RIFLE_INTERVAL: f32 = 0.1;
+/// The sniper: one shot each pull, and no more than one in this long, the time it takes to work
+/// the bolt.
+const SNIPER_INTERVAL: f32 = 1.2;
 /// How far up, down and to either side the rifle is brought round to where the camera looks, by
 /// the back, in degrees.
 const RIFLE_AIM_REACH: f32 = 60.0;
@@ -494,6 +500,14 @@ const RIFLE_PARTS: GunParts = GunParts {
     shell: "rifle_source",
     core: "rifle_source.001",
     glass: super::pistol::RIFLE_COLOR,
+};
+
+/// The sniper's: its scope's eyepiece, and the chamber in its receiver, violet.
+const SNIPER_PARTS: GunParts = GunParts {
+    screen: "sniper_hud",
+    shell: "sniper_source",
+    core: "sniper_source.001",
+    glass: super::pistol::SNIPER_COLOR,
 };
 
 /// The parts of a gun that the droid lights and tumbles, by name, and the colour of their glass.
@@ -1188,6 +1202,9 @@ struct Motions {
     /// The rifle, held as the pistol is, but with both hands at the ready too.
     #[serde(default)]
     rifle: Option<PistolMotion>,
+    /// The sniper, held as the rifle is.
+    #[serde(default)]
+    sniper: Option<PistolMotion>,
     #[serde(default)]
     aim: Option<AimMotion>,
 }
@@ -1383,6 +1400,8 @@ struct Pistol {
     shot_at: f32,
     /// Held in both hands at the ready too, as the rifle is, rather than in the right alone.
     two_handed: bool,
+    /// Where its laser sight's beam starts, running down the node's +X, if it has one.
+    laser: Option<Handle<Node>>,
     /// How long after one shot the next can be fired, in seconds.
     interval: f32,
 }
@@ -1855,10 +1874,9 @@ pub struct Going {
     pub pushing: bool,
     /// Whether it is strafing: keeping facing ahead whichever way it goes.
     pub strafing: bool,
-    /// Whether it wants its pistol out - or its rifle, if `rifle`, changing to it if the other
-    /// is out.
+    /// Whether it wants a gun out, and which, changing to it if another is out.
     pub armed: bool,
-    pub rifle: bool,
+    pub weapon: Weapon,
     /// Whether the trigger was pulled this frame.
     pub trigger: bool,
     /// Whether it wants the pistol raised to aim, rather than held at the ready.
@@ -1996,8 +2014,8 @@ pub struct Avatar {
     /// The gun in its hand when it draws, if it has one, and the other it can change to; and
     /// whether the one in hand is the rifle rather than the pistol.
     gun: Option<Gun>,
-    stowed: Option<Gun>,
-    rifle_in_hand: bool,
+    rack: [Option<Gun>; 3],
+    in_hand: Weapon,
     /// The gun's own walk, jog or run last gone over to at the ready, with the legs' cycle it
     /// goes with, and how far over to it the upper body is, from 0 to 1: see [`Gun::moving`].
     moving_with: Option<(Handle<Animation>, Handle<Animation>)>,
@@ -2264,10 +2282,12 @@ impl Avatar {
             .collect();
         // Out of sight until it is drawn.
         let motions = motions();
-        // The pistol, and the rifle: each as its node, its muzzle, and its parts.
+        // The pistol, the rifle and the sniper, as [`Weapon::ALL`] has them: each as its node,
+        // its muzzle, and its parts.
         let guns = [
             (motions.and_then(|motions| motions.pistol.as_ref()), PISTOL, PISTOL_PARTS),
             (motions.and_then(|motions| motions.rifle.as_ref()), RIFLE, RIFLE_PARTS),
+            (motions.and_then(|motions| motions.sniper.as_ref()), SNIPER, SNIPER_PARTS),
         ];
         let gun_nodes = guns.map(|(motion, default, _)| {
             let node = graph
@@ -2279,7 +2299,11 @@ impl Avatar {
             let muzzle = motion
                 .and_then(|motion| graph.find_by_name(root, &motion.muzzle_node))
                 .map(|(muzzle, _)| muzzle);
-            (node, muzzle)
+            // Its laser sight, if it has one: `<node>_laser` under it.
+            let laser = node.and_then(|node| {
+                graph.find_by_name(node, &format!("{}_laser", graph[node].name())).map(|(laser, _)| laser)
+            });
+            (node, muzzle, laser)
         });
         let upper: Vec<Handle<Node>> = graph
             .find_by_name(root, UPPER_BODY)
@@ -2340,7 +2364,7 @@ impl Avatar {
                 face,
             })
         })();
-        let mut barrel_chains = gun_nodes.map(|(_, muzzle)| {
+        let mut barrel_chains = gun_nodes.map(|(_, muzzle, _)| {
             muzzle.map_or_else(Vec::new, |muzzle| chain(parent_of, root, muzzle))
         });
         let right_forearm =
@@ -2368,7 +2392,7 @@ impl Avatar {
             None => Handle::NONE,
         };
         let dismember = Dismember::new(graph, root);
-        let mut dressed = [0, 1].map(|k| match gun_nodes[k].0 {
+        let mut dressed = [0, 1, 2].map(|k| match gun_nodes[k].0 {
             Some(gun) => dress_gun(graph, gun, guns[k].2),
             None => (Vec::new(), None),
         });
@@ -2722,10 +2746,10 @@ impl Avatar {
         // Each gun with all that goes with it; and only the pistol has aims, which are after.
         let moving_with =
             MOVING_WITH.map(|name| container.find_by_name_ref(name).map(|(handle, _)| handle));
-        let loaded = [0, 1].map(|k| {
-            let what = ["pistol", "rifle"][k];
+        let loaded = [0, 1, 2].map(|k| {
+            let what = ["pistol", "rifle", "sniper"][k];
             let pistol = match (guns[k].0, gun_nodes[k]) {
-                (Some(motion), (Some(node), Some(muzzle))) if !upper.is_empty() => {
+                (Some(motion), (Some(node), Some(muzzle), laser)) if !upper.is_empty() => {
                     let clips = &motion.clips;
                     let mut find = |name: &str, looped: bool| {
                         let found = container.find_by_name_mut(name).map(|(handle, animation)| {
@@ -2802,8 +2826,9 @@ impl Avatar {
                             show_at: frame_time(motion.show_frame),
                             hide_after: frame_time(motion.hide_after_frame),
                             shot_at: frame_time(motion.shot_frame),
-                            two_handed: k == 1,
-                            interval: [PISTOL_INTERVAL, RIFLE_INTERVAL][k],
+                            two_handed: k >= 1,
+                            laser,
+                            interval: [PISTOL_INTERVAL, RIFLE_INTERVAL, SNIPER_INTERVAL][k],
                         })),
                         _ => None,
                     }
@@ -2821,8 +2846,9 @@ impl Avatar {
                 spinning: std::mem::take(&mut dressed[k].0),
                 flash: dressed[k].1.take(),
                 barrel_chain: std::mem::take(&mut barrel_chains[k]),
-                // The rifle has no aims of its own: the back alone brings it round.
-                aims: (k == 1).then(Aims::by_the_back),
+                // The rifle and the sniper have no aims of their own: the back alone brings them
+                // round.
+                aims: (k >= 1).then(Aims::by_the_back),
             })
         });
         let aims = motions
@@ -2896,7 +2922,7 @@ impl Avatar {
                 "Droid: without aims in {MOTION}, its pistol only points ahead"
             ));
         }
-        let [mut gun, stowed] = loaded;
+        let [mut gun, rifle, sniper] = loaded;
         if let Some(gun) = gun.as_mut() {
             gun.aims = aims;
         }
@@ -2968,8 +2994,8 @@ impl Avatar {
             fade: 1.0,
             heading: 0.0,
             gun,
-            stowed,
-            rifle_in_hand: false,
+            rack: [None, rifle, sniper],
+            in_hand: Weapon::Pistol,
             moving_with: None,
             moving_weight: 0.0,
             arms: Arms::Holstered,
@@ -3264,18 +3290,18 @@ impl Avatar {
         self.travel
     }
 
-    /// The rifle if `rifle`, and otherwise the pistol, whether in hand or not.
-    fn gun_of(&self, rifle: bool) -> Option<&Gun> {
-        if rifle == self.rifle_in_hand {
+    /// The gun `weapon`, whether in hand or not.
+    fn gun_of(&self, weapon: Weapon) -> Option<&Gun> {
+        if weapon == self.in_hand {
             self.gun.as_ref()
         } else {
-            self.stowed.as_ref()
+            self.rack[weapon.index()].as_ref()
         }
     }
 
-    /// Whether the gun in hand, or to be drawn next, is the rifle.
-    pub(crate) fn rifle_in_hand(&self) -> bool {
-        self.rifle_in_hand
+    /// The gun in hand, or to be drawn next.
+    pub(crate) fn in_hand(&self) -> Weapon {
+        self.in_hand
     }
 
     /// How many shots the droid has fired, all told, counted as each is let go.
@@ -3283,20 +3309,25 @@ impl Avatar {
         self.fired
     }
 
-    /// Whether the droid has a rifle.
-    pub(super) fn has_rifle(&self) -> bool {
-        self.gun_of(true).is_some()
+    /// Whether the droid has the gun `weapon`.
+    pub(super) fn has(&self, weapon: Weapon) -> bool {
+        self.gun_of(weapon).is_some()
     }
 
-    /// The rifle if `rifle`, and otherwise the pistol, and its muzzle, if the droid has it.
-    pub(super) fn gun_nodes(&self, rifle: bool) -> Option<(Handle<Node>, Handle<Node>)> {
-        self.gun_of(rifle).map(|gun| (gun.pistol.node, gun.pistol.muzzle))
+    /// The gun `weapon`, and its muzzle, if the droid has it.
+    pub(super) fn gun_nodes(&self, weapon: Weapon) -> Option<(Handle<Node>, Handle<Node>)> {
+        self.gun_of(weapon).map(|gun| (gun.pistol.node, gun.pistol.muzzle))
     }
 
-    /// Whether the rifle if `rifle`, and otherwise the pistol, is in the droid's hand, where it
-    /// can be seen: from partway through drawing it to partway through holstering it.
-    pub(super) fn gun_out(&self, graph: &Graph, rifle: bool) -> bool {
-        self.gun_of(rifle)
+    /// The gun `weapon`'s laser sight, if it has one.
+    pub(super) fn laser_node(&self, weapon: Weapon) -> Option<Handle<Node>> {
+        self.gun_of(weapon).and_then(|gun| gun.pistol.laser)
+    }
+
+    /// Whether the gun `weapon` is in the droid's hand, where it can be seen: from partway
+    /// through drawing it to partway through holstering it.
+    pub(super) fn gun_out(&self, graph: &Graph, weapon: Weapon) -> bool {
+        self.gun_of(weapon)
             .is_some_and(|gun| graph[gun.pistol.node].visibility())
     }
 
@@ -3314,10 +3345,11 @@ impl Avatar {
         self.shot = None;
         // To change guns, the one in hand is put away first, and the other drawn once it is.
         let mut going = going;
-        if going.rifle != self.rifle_in_hand && self.stowed.is_some() {
+        if going.weapon != self.in_hand && self.rack[going.weapon.index()].is_some() {
             if self.arms == Arms::Holstered {
-                std::mem::swap(&mut self.gun, &mut self.stowed);
-                self.rifle_in_hand = going.rifle;
+                self.rack[self.in_hand.index()] = self.gun.take();
+                self.gun = self.rack[going.weapon.index()].take();
+                self.in_hand = going.weapon;
                 self.aim_fix = UnitQuaternion::identity();
             } else {
                 going.armed = false;

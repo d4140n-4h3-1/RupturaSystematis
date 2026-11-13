@@ -2951,7 +2951,7 @@ impl MazeGame {
                 .drones
                 .iter_mut()
                 .enumerate()
-                .find_map(|(n, drone)| Some((n, drone.shot(graph, collider, player)?)));
+                .find_map(|(n, drone)| Some((n, drone.shot(graph, collider, player, strike.power)?)));
             match hit {
                 Some((n, true)) => {
                     self.drone_says.push((n, "down"));
@@ -3291,7 +3291,7 @@ impl MazeGame {
         }
         if let Some(n) = self.drones.iter().position(|d| d.collider() == strike.collider) {
             if self.drones[n].side() != Some(side) {
-                if let Some(true) = self.drones[n].shot(graph, strike.collider, from) {
+                if let Some(true) = self.drones[n].shot(graph, strike.collider, from, strike.power) {
                     self.drone_says.push((n, "down"));
                 }
             }
@@ -5719,7 +5719,7 @@ impl MazeGame {
                 match (self.sided(), side) {
                     // A drone on a side harms whatever of the other side it hits.
                     (true, Some(side)) => {
-                        let strike = Strike { collider: hit.collider, at: hit.at, way: hit.way };
+                        let strike = Strike { collider: hit.collider, at: hit.at, way: hit.way, power: 1 };
                         self.side_strike(ctx, side, strike);
                     }
                     _ if hit.collider == self.player.collider() => {

@@ -13,7 +13,7 @@
 //! as the trigger is pulled. A shot leaves its muzzle, not the droid's, for wherever the middle
 //! of the view is looking: see [`Player::aim_from_view`].
 
-use super::{avatar::Avatar, Player};
+use super::{avatar::Avatar, pistol::Weapon, Player};
 use fyrox::{
     core::{
         algebra::{UnitQuaternion, Vector3},
@@ -56,6 +56,21 @@ const RIFLE: Hold = Hold {
     screen_behind: 0.55,
     sight_distance: 0.3,
 };
+/// The sniper: a meter long, held as the rifle is, and raised to look through its scope's
+/// eyepiece (`SIGHT` in build_cyber_sniper.py) - at which the view zooms in (see [`SCOPE_ZOOM`])
+/// and the gun is put out of sight behind the scope's own view.
+const SNIPER: Hold = Hold {
+    size: 0.1,
+    hip: Vector3::new(-0.12, -0.21, 0.2),
+    screen_above: 1.42,
+    screen_behind: 1.86,
+    sight_distance: 0.12,
+};
+/// How many times the sniper's scope magnifies the view, all the way up.
+pub(super) const SCOPE_ZOOM: f32 = 4.0;
+/// How far up to aim the sniper is, from 0 to 1, by the time the view is through its scope: the
+/// gun out of sight, the scope's own view in its place.
+pub(super) const SCOPE_IN: f32 = 0.85;
 /// How far off the pistol at the hip points to cross the middle of the view, in meters.
 const CONVERGE: f32 = 8.0;
 /// How much lower and nearer it is put away, in meters, and how far its muzzle is dipped, in
@@ -88,14 +103,16 @@ pub(super) const SIGHTED: f32 = 100.0;
 /// The pistol held in first person, or the rifle.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) struct Viewmodel {
-    /// Whether it is the rifle, and how it is held.
-    rifle: bool,
+    /// Which gun it is, and how it is held.
+    weapon: Weapon,
     hold: Hold,
     /// What the camera carries, turned and moved to hold the pistol.
     grip: Handle<Node>,
     /// The copy of the pistol in it, and its muzzle.
     pistol: Handle<Node>,
     muzzle: Handle<Node>,
+    /// The copy's laser sight, if the gun has one.
+    laser: Option<Handle<Node>>,
     /// Every part of the droid's own pistol below the pistol itself, with the part of the copy
     /// that does what it does.
     parts: Vec<(Handle<Node>, Handle<Node>)>,
@@ -160,16 +177,21 @@ fn held(hold: &Hold, aim: f32) -> (Vector3<f32>, UnitQuaternion<f32>) {
 }
 
 impl Viewmodel {
-    /// A copy of `avatar`'s pistol - or its rifle, if `rifle` - carried by `camera`, out of
-    /// sight until it is drawn. None if the droid has no such gun.
-    pub(super) fn new(graph: &mut Graph, avatar: &Avatar, camera: Handle<Node>, rifle: bool) -> Option<Self> {
-        let hold = if rifle { RIFLE } else { PISTOL };
-        let (original, original_muzzle) = avatar.gun_nodes(rifle)?;
+    /// A copy of `avatar`'s gun `weapon` carried by `camera`, out of sight until it is drawn.
+    /// None if the droid has no such gun.
+    pub(super) fn new(graph: &mut Graph, avatar: &Avatar, camera: Handle<Node>, weapon: Weapon) -> Option<Self> {
+        let hold = match weapon {
+            Weapon::Pistol => PISTOL,
+            Weapon::Rifle => RIFLE,
+            Weapon::Sniper => SNIPER,
+        };
+        let (original, original_muzzle) = avatar.gun_nodes(weapon)?;
         let (pistol, map) = graph.copy_node_inplace(original, &mut |_, _| true);
         let mut muzzle = original_muzzle;
         if !map.try_map(&mut muzzle) {
             return None;
         }
+        let laser = avatar.laser_node(weapon).and_then(|mut laser| map.try_map(&mut laser).then_some(laser));
         let parts = graph
             .traverse_handle_iter(original)
             .skip(1)
@@ -192,11 +214,12 @@ impl Viewmodel {
             .set_scale(Vector3::repeat(hold.size));
         let muzzle_at = quarter_turn() * graph[muzzle].local_transform().position().scale(hold.size);
         Some(Self {
-            rifle,
+            weapon,
             hold,
             grip,
             pistol,
             muzzle,
+            laser,
             parts,
             up: 0.0,
             aim: 0.0,
@@ -250,6 +273,11 @@ impl Viewmodel {
             .onto
             .slerp(&onto(&self.hold, self.aim, self.muzzle_at, sighted), ease(ONTO_EASING));
         self.place(graph);
+        // Through the sniper's scope, the gun is out of sight: the scope's own view is in its place.
+        let in_sight = self.scoped() < SCOPE_IN;
+        if graph[self.pistol].visibility() != in_sight {
+            graph[self.pistol].set_visibility(in_sight);
+        }
         // Every part of it as the droid's own: the ball at the muzzle tumbling, and the screen
         // lit.
         for &(part, copy) in &self.parts {
@@ -262,6 +290,15 @@ impl Viewmodel {
             if copy.visibility() != visible {
                 copy.set_visibility(visible);
             }
+        }
+    }
+
+    /// How far up to its eye the sniper is, from 0 to 1; 0 for any other gun.
+    fn scoped(&self) -> f32 {
+        if self.weapon == Weapon::Sniper {
+            self.aim * self.up
+        } else {
+            0.0
         }
     }
 
@@ -296,9 +333,9 @@ impl Player {
     pub(super) fn make_viewmodel(&mut self, graph: &mut Graph) {
         let camera = self.camera.transmute();
         self.viewmodels = match self.avatar.as_ref() {
-            Some(avatar) => [false, true]
+            Some(avatar) => Weapon::ALL
                 .into_iter()
-                .filter_map(|rifle| Viewmodel::new(graph, avatar, camera, rifle))
+                .filter_map(|weapon| Viewmodel::new(graph, avatar, camera, weapon))
                 .collect(),
             None => Vec::new(),
         };
@@ -309,10 +346,21 @@ impl Player {
         self.viewmodels.iter().find(|v| v.shown(graph))
     }
 
-    /// The copy held in first person that can be seen - whether it is the rifle, the copy, and
-    /// its muzzle - if one can.
-    pub(super) fn viewmodel_nodes(&self, graph: &Graph) -> Option<(bool, Handle<Node>, Handle<Node>)> {
-        self.shown_viewmodel(graph).map(|v| (v.rifle, v.pistol, v.muzzle))
+    /// The copy held in first person that can be seen - which gun it is, the copy, and its
+    /// muzzle - if one can.
+    pub(super) fn viewmodel_nodes(&self, graph: &Graph) -> Option<(Weapon, Handle<Node>, Handle<Node>)> {
+        self.shown_viewmodel(graph).map(|v| (v.weapon, v.pistol, v.muzzle))
+    }
+
+    /// The laser sight of the gun held in first person, if one is held and has one.
+    pub(super) fn viewmodel_laser(&self, graph: &Graph) -> Option<Handle<Node>> {
+        self.shown_viewmodel(graph).and_then(|v| v.laser)
+    }
+
+    /// How far the view is through the sniper's scope, from 0 to 1: up to its eye, held in first
+    /// person.
+    pub(super) fn scoped(&self, graph: &Graph) -> f32 {
+        self.shown_viewmodel(graph).map_or(0.0, Viewmodel::scoped)
     }
 
     /// Holds the pistol and the rifle in first person for another `dt`.
@@ -325,7 +373,7 @@ impl Player {
         let sighted = self.distance_to_hit(graph, eye, ahead.normalize(), SIGHTED);
         let (seen, raised) = (self.in_own_eyes, self.keys.strafe);
         for viewmodel in &mut self.viewmodels {
-            let out = avatar.gun_out(graph, viewmodel.rifle);
+            let out = avatar.gun_out(graph, viewmodel.weapon);
             viewmodel.hold(graph, seen, out, raised, sighted, dt);
         }
     }
