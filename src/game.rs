@@ -418,6 +418,11 @@ const BEAT: f32 = 12.0;
 const LOCKER_REACH: f32 = 1.6;
 const ESCAPE_COUNTS: u32 = 2;
 
+/// How long, in seconds, the player has to go with no one after them - chasing, searching or
+/// still wary - for the stars to clear: long enough that a star given as the alarm is raised
+/// stays while the sentries take it up.
+const WANTED_LAPSES: f32 = 3.0;
+
 /// How many drones there are: one patrolling each round, the rest waiting out of sight to be
 /// called in by a failed hack; and how many quadcopters wait with them, the faster drones, which
 /// are called in first.
@@ -497,6 +502,11 @@ pub struct MazeGame {
     #[visit(skip)]
     #[reflect(hidden)]
     wanted: u32,
+    /// How long, in seconds, no one has been after the player, chasing, searching or wary, while
+    /// they are wanted: past [`WANTED_LAPSES`], they are wanted no more.
+    #[visit(skip)]
+    #[reflect(hidden)]
+    unhunted: f32,
     #[visit(skip)]
     #[reflect(hidden)]
     locker: Option<usize>,
@@ -1623,6 +1633,7 @@ impl MazeGame {
         // Free, armed, wanted for nothing, every precinct shut, and its guards to be put down.
         self.custody = None;
         self.wanted = 0;
+        self.unhunted = 0.0;
         self.locker = None;
         self.precinct_guards.clear();
         self.guards_posted = false;
@@ -2769,6 +2780,18 @@ impl MazeGame {
         }
         let graph = &scene.graph;
         let posture = self.player.posture();
+        // The stars are how relentless security is after the player: once no one is after them -
+        // chasing, searching or still wary - for a moment, they are wanted no more.
+        if self.wanted > 0 && self.custody.is_none() && self.inhabitants.alarm().is_none() {
+            self.unhunted += ctx.dt;
+            if self.unhunted >= WANTED_LAPSES {
+                self.wanted = 0;
+                self.hud.show_note("Security gave up on you".to_string());
+                Log::info("Wanted: security gave up, the stars cleared");
+            }
+        } else {
+            self.unhunted = 0.0;
+        }
         // The more stars the player is wanted at, the more relentless security is after them.
         self.inhabitants.set_wanted(self.wanted.min(hud::WANTED_MOST));
         self.inhabitants
