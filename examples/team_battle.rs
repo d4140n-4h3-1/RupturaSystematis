@@ -133,6 +133,9 @@ pub struct Arena {
     /// Where the spectator camera starts, and how far down it looks, in degrees.
     pub camera: [f32; 3],
     pub pitch: f32,
+    /// How many teams fight: two, from either end along x, or up to four, from its corners - red,
+    /// cyan, green and yellow, in that order (see [`Team`]).
+    pub teams: usize,
 }
 
 /// The combat arena, under its roof, lit by its strips.
@@ -147,12 +150,14 @@ pub const COMBAT: Arena = Arena {
     // of one long side, looking across it with a team to either side.
     camera: [0.0, 4.6, -29.0],
     pitch: 22.0,
+    teams: 2,
 };
 
 /// The forest: abandoned buildings among the trees, in the Foggy Forest's fog
 /// (`data/arena/tb_forest.py`). The droids see as far as in the combat arena, but the fog takes
 /// that down: they make out a droid only as well as it shows through it, half as well 20 m off,
 /// and none past about 45 m (see [`Battle::seeing`]). They hear as well as ever.
+#[allow(dead_code)] // not by every example that pulls this in
 pub const FOREST: Arena = Arena {
     title: "Team battle - forest",
     map: "data/arena/tb_forest.glb",
@@ -164,6 +169,7 @@ pub const FOREST: Arena = Arena {
     // Over one long side, looking across with a team to either side.
     camera: [0.0, 14.0, -40.0],
     pitch: 28.0,
+    teams: 2,
 };
 
 impl Default for Arena {
@@ -191,8 +197,9 @@ const HIT_RADIUS: f32 = 0.4;
 const OWN_COVER: f32 = 2.0;
 /// How long, in seconds, a droid keeps its pistol out after it last had a target.
 const HOLSTER_AFTER: f32 = 6.0;
-/// The droids each team is made from: the same droid, in red and in cyan.
-const MODELS: [&str; 2] = ["data/droid_hostile.glb", "data/droid_full_deform.glb"];
+/// The droids each team is made from: the same droid, in red, cyan, green and yellow.
+const MODELS: [&str; TEAMS] =
+    ["data/droid_hostile.glb", "data/droid_full_deform.glb", "data/droid_explorer.glb", "data/droid_yellow.glb"];
 const PER_TEAM: usize = 5;
 const KILL_LIMIT: u32 = 30;
 
@@ -276,13 +283,22 @@ const HEARD_WRONG: f32 = 6.0;
 enum Team {
     Red,
     Cyan,
+    Green,
+    Yellow,
 }
 
+/// As many teams as there can be.
+const TEAMS: usize = 4;
+
 impl Team {
+    const ALL: [Team; TEAMS] = [Team::Red, Team::Cyan, Team::Green, Team::Yellow];
+
     fn color(self) -> Color {
         match self {
             Team::Red => Color::opaque(225, 40, 40),
             Team::Cyan => Color::opaque(0, 225, 235),
+            Team::Green => Color::opaque(40, 225, 60),
+            Team::Yellow => Color::opaque(240, 220, 20),
         }
     }
 
@@ -294,7 +310,19 @@ impl Team {
         match self {
             Team::Red => "RED",
             Team::Cyan => "CYAN",
+            Team::Green => "GREEN",
+            Team::Yellow => "YELLOW",
         }
+    }
+}
+
+/// The score of the first `teams` teams: `RED 3 : 4 CYAN` for two, `RED 3  CYAN 4  GREEN 1 ...`
+/// for more.
+fn score_line(score: &[u32; TEAMS], teams: usize) -> String {
+    if teams <= 2 {
+        format!("RED {} : {} CYAN", score[0], score[1])
+    } else {
+        Team::ALL.iter().take(teams).map(|t| format!("{} {}", t.name(), score[t.index()])).collect::<Vec<_>>().join("  ")
     }
 }
 
@@ -547,7 +575,7 @@ struct Bench {
     started: Option<std::time::Instant>,
     /// The score as it started; how far the droids walked between them, in meters;
     /// how many frames any had a target; and how many bolts were fired.
-    score: [u32; 2],
+    score: [u32; TEAMS],
     walked: f32,
     targeting: usize,
     fired: usize,
@@ -569,7 +597,7 @@ impl Bench {
 
     /// What it found: for each part and the whole frame, its mean, middle, 95th and 99th
     /// percentile and worst, in milliseconds.
-    fn report(&self, title: &str, droids: usize, score: [u32; 2]) -> String {
+    fn report(&self, title: &str, droids: usize, score: [u32; TEAMS], teams: usize) -> String {
         let stats = |mut v: Vec<f32>| {
             v.sort_by(f32::total_cmp);
             let at = |q: f32| v[((v.len() - 1) as f32 * q).round() as usize];
@@ -578,10 +606,10 @@ impl Bench {
         };
         let wall = self.started.map_or(0.0, |s| s.elapsed().as_secs_f32());
         let mut out = format!(
-            "Team battle benchmark: {title}, {droids} droids, {:.0} s of play, {} frames ({:.0} fps), RED {} : {} CYAN\n  \
+            "Team battle benchmark: {title}, {droids} droids, {:.0} s of play, {} frames ({:.0} fps), {}\n  \
              {} shot down, {} bolts fired, {:.0} m walked, a target in {:.0}% of frames\n",
-            self.played, self.frames.len(), self.frames.len() as f32 / wall.max(1.0e-3), score[0], score[1],
-            score[0] + score[1] - self.score[0] - self.score[1], self.fired, self.walked, 100.0 * self.targeting as f32 / self.parts.len().max(1) as f32
+            self.played, self.frames.len(), self.frames.len() as f32 / wall.max(1.0e-3), score_line(&score, teams),
+            score.iter().sum::<u32>() - self.score.iter().sum::<u32>(), self.fired, self.walked, 100.0 * self.targeting as f32 / self.parts.len().max(1) as f32
         );
         out += "  ms per frame     mean      p50      p95      p99      max\n";
         for (k, name) in Self::PARTS.iter().enumerate() {
@@ -602,30 +630,30 @@ struct Battle {
     scene: Handle<Scene>,
     map: Option<ModelResource>,
     /// The droids' models, red's and cyan's.
-    models: [Option<ModelResource>; 2],
+    models: [Option<ModelResource>; TEAMS],
     level: Handle<Collider>,
     grid: Option<(WalkGrid, Vector3<f32>)>,
     /// The walkable floor as polygons, made from the grid: what the droids find their way by.
     mesh: Option<NavMesh>,
     /// Walkable cells at each end of the arena: red's and cyan's.
-    spawns: [Vec<(usize, usize)>; 2],
+    spawns: [Vec<(usize, usize)>; TEAMS],
     covers: Vec<CoverSpot>,
     droids: Vec<Droid>,
     /// Whether each team, red and cyan, fights as a team (see the top), or as it used to.
-    smart: [bool; 2],
+    smart: [bool; TEAMS],
     /// For each team, how many of the enemies it knows of can see each coarse cell of the
     /// ground (see [`Exposure`]) - and how long till it is worked out again.
-    exposure: [Exposure; 2],
+    exposure: [Exposure; TEAMS],
     exposure_in: f32,
     /// The bolts everyone fires, and those on their way to someone they will hit.
     bolts: Option<Bolts>,
     arrivals: Vec<Arrival>,
     /// Where each team last saw each enemy, and how long ago.
-    intel: [Intel; 2],
+    intel: [Intel; TEAMS],
     /// Which way each team has seen each enemy going (see [`Battle::note_going`]): where it was
     /// when last worked out, how long ago, and its way and speed, in meters a second.
-    going: [Vec<Option<(Vector3<f32>, f32, Vector3<f32>)>>; 2],
-    score: [u32; 2],
+    going: [Vec<Option<(Vector3<f32>, f32, Vector3<f32>)>>; TEAMS],
+    score: [u32; TEAMS],
     phase: Phase,
     paused: bool,
     rng: Option<Rng>,
@@ -735,12 +763,16 @@ impl Battle {
         self.scene = ctx.scenes.add(scene);
         self.map = Some(ctx.resource_manager.request::<Model>(self.map_path()));
         let old = std::env::var("BATTLE_OLD").unwrap_or_default();
-        self.smart = [
-            !matches!(old.as_str(), "red" | "both"),
-            !matches!(old.as_str(), "cyan" | "both"),
-        ];
-        Log::info(format!("Team battle: fighting as a team - red {}, cyan {}", self.smart[0], self.smart[1]));
-        self.models = MODELS.map(|path| Some(ctx.resource_manager.request::<Model>(path)));
+        let old = old.to_lowercase();
+        self.smart = Team::ALL.map(|team| !(old == team.name().to_lowercase() || old == "both" || old == "all"));
+        let teams = self.teams();
+        Log::info(format!(
+            "Team battle: fighting as a team - {}",
+            teams.iter().map(|t| format!("{} {}", t.name().to_lowercase(), self.smart[t.index()])).collect::<Vec<_>>().join(", ")
+        ));
+        for team in teams {
+            self.models[team.index()] = Some(ctx.resource_manager.request::<Model>(MODELS[team.index()]));
+        }
 
         ctx.user_interfaces.add(UserInterface::new(Vector2::new(1280.0, 720.0)));
         let ui = ctx.user_interfaces.first_mut();
@@ -789,6 +821,11 @@ impl Battle {
         std::env::var("BATTLE_MAP").unwrap_or_else(|_| self.arena.map.to_string())
     }
 
+    /// The teams fighting, as many as the arena says.
+    fn teams(&self) -> Vec<Team> {
+        Team::ALL.into_iter().take(self.arena.teams.clamp(2, TEAMS)).collect()
+    }
+
     fn rng(&mut self) -> &mut Rng {
         self.rng.get_or_insert_with(|| {
             if let Some(seed) = std::env::var("BATTLE_SEED").ok().and_then(|s| s.parse().ok()) {
@@ -810,7 +847,9 @@ impl Battle {
         match self.phase {
             Phase::Loading => {
                 let Some(map) = self.map.clone() else { return };
-                let models = self.models.clone().map(|model| model.filter(|m| !m.is_failed_to_load()));
+                // The models of the teams that fight: the rest are never asked for.
+                let models: Vec<Option<ModelResource>> =
+                    self.teams().iter().map(|t| self.models[t.index()].clone().filter(|m| !m.is_failed_to_load())).collect();
                 if map.is_failed_to_load() {
                     self.set_text(ctx, self.scoreboard, format!("Could not load {}", self.map_path()));
                     self.map = None;
@@ -855,14 +894,12 @@ impl Battle {
                     bench.walked += self.droids.iter().zip(&were).filter(|(d, _)| d.alive()).map(|(d, w)| flat(d.position - w).norm().min(1.0)).sum::<f32>();
                     bench.targeting += usize::from(self.droids.iter().any(|d| d.alive() && d.target.is_some()));
                 }
-                if let Some(team) = [Team::Red, Team::Cyan]
-                    .into_iter()
-                    .find(|team| self.score[team.index()] >= KILL_LIMIT)
-                {
+                if let Some(&team) = self.teams().iter().find(|team| self.score[team.index()] >= KILL_LIMIT) {
                     self.phase = Phase::Won(team, 6.0);
                     Log::info(format!(
-                        "Team battle: match over, {} wins, RED {} : {} CYAN (as a team: red {}, cyan {})",
-                        team.name(), self.score[0], self.score[1], self.smart[0], self.smart[1]
+                        "Team battle: match over, {} wins, {}",
+                        team.name(),
+                        score_line(&self.score, self.arena.teams)
                     ));
                 }
             }
@@ -904,7 +941,7 @@ impl Battle {
                 part[3] = bolts;
             }
             if bench.played >= bench.length && bench.frames.len() > 1 {
-                let report = bench.report(self.arena.title, self.droids.len(), self.score);
+                let report = bench.report(self.arena.title, self.droids.len(), self.score, self.arena.teams);
                 println!("{report}");
                 Log::info(report);
                 ctx.loop_controller.exit();
@@ -1059,14 +1096,36 @@ impl Battle {
         // On the ground, not up a barracks' stairs.
         let ground: Vec<(usize, usize)> = best.iter().copied().filter(|&cell| grid.storey(cell) == 0).collect();
         let (min_x, max_x) = ground.iter().fold((usize::MAX, 0), |(lo, hi), &(x, _)| (lo.min(x), hi.max(x)));
-        let band = (max_x - min_x) / 10;
-        self.spawns[Team::Red.index()] = ground.iter().copied().filter(|&(x, _)| x <= min_x + band).collect();
-        self.spawns[Team::Cyan.index()] = ground.iter().copied().filter(|&(x, _)| x >= max_x - band).collect();
+        let (min_z, max_z) = ground.iter().fold((usize::MAX, 0), |(lo, hi), &(_, z)| (lo.min(z), hi.max(z)));
+        if self.arena.teams <= 2 {
+            // From either end along x: the tenth of it at each.
+            let band = (max_x - min_x) / 10;
+            self.spawns[Team::Red.index()] = ground.iter().copied().filter(|&(x, _)| x <= min_x + band).collect();
+            self.spawns[Team::Cyan.index()] = ground.iter().copied().filter(|&(x, _)| x >= max_x - band).collect();
+        } else {
+            // From its corners, each a fifth of the way along either side - red's and cyan's
+            // across from each other, as green's and yellow's are.
+            let (band_x, band_z) = ((max_x - min_x) / 5, (max_z - min_z) / 5);
+            let corner = |low_x: bool, low_z: bool| -> Vec<(usize, usize)> {
+                ground
+                    .iter()
+                    .copied()
+                    .filter(|&(x, row)| {
+                        let z = row % depth;
+                        (if low_x { x <= min_x + band_x } else { x >= max_x - band_x })
+                            && (if low_z { z <= min_z % depth + band_z } else { z >= max_z % depth - band_z })
+                    })
+                    .collect()
+            };
+            let corners = [(true, true), (false, false), (true, false), (false, true)];
+            for (team, (low_x, low_z)) in Team::ALL.iter().zip(corners).take(self.arena.teams) {
+                self.spawns[team.index()] = corner(low_x, low_z);
+            }
+        }
         Log::info(format!(
-            "Team battle: {} walkable cells, {} and {} spawn cells",
+            "Team battle: {} walkable cells, spawn cells {}",
             best.len(),
-            self.spawns[0].len(),
-            self.spawns[1].len()
+            self.teams().iter().map(|t| format!("{} {}", t.name().to_lowercase(), self.spawns[t.index()].len())).collect::<Vec<_>>().join(", ")
         ));
         let mut mesh = NavMesh::build_with(&kept, origin, |_, _| 0, AI.navmesh);
         mesh.walk = AI.walk;
@@ -1114,9 +1173,9 @@ impl Battle {
         for mut droid in self.droids.drain(..) {
             Self::clear_body(&mut scene.graph, &mut droid);
         }
-        self.score = [0, 0];
+        self.score = [0; TEAMS];
         self.following = None;
-        for team in [Team::Red, Team::Cyan] {
+        for team in self.teams() {
             for _ in 0..PER_TEAM {
                 if let Some(droid) = self.make_droid(scene, team) {
                     self.droids.push(droid);
@@ -1126,8 +1185,8 @@ impl Battle {
         for i in 0..self.droids.len() {
             self.respawn(i);
         }
-        self.intel = [Intel::new(self.droids.len()), Intel::new(self.droids.len())];
-        self.going = [vec![None; self.droids.len()], vec![None; self.droids.len()]];
+        self.intel = std::array::from_fn(|_| Intel::new(self.droids.len()));
+        self.going = std::array::from_fn(|_| vec![None; self.droids.len()]);
     }
 
     /// One of the team's droids, made from its model, standing where it is put. None if the
@@ -1212,10 +1271,12 @@ impl Battle {
         let count_all = self.droids.len();
         let Some((grid, origin)) = &self.grid else { return };
         let position = grid.on_floor(*origin, cell);
+        let middle = grid.center(*origin, (grid.width / 2, grid.depth / 2));
         let droid = &mut self.droids[i];
         droid.position = position;
-        // Facing the other end.
-        droid.heading = if droid.team == Team::Red { std::f32::consts::FRAC_PI_2 } else { -std::f32::consts::FRAC_PI_2 };
+        // Facing the middle of the arena.
+        let way = flat(middle - position);
+        droid.heading = if way.norm() > 1.0e-3 { way.x.atan2(way.z) } else { 0.0 };
         droid.health = HEALTH;
         droid.dead_for = None;
         droid.route.clear();
@@ -1471,7 +1532,7 @@ impl Battle {
     /// cell of the ground, how many of them could see a droid standing there.
     fn survey_exposure(&mut self, graph: &Graph) {
         let Some(mesh) = &self.mesh else { return };
-        for t in 0..2 {
+        for t in 0..self.arena.teams {
             self.exposure[t] = if self.smart[t] {
                 let alive = |j: usize| self.droids.get(j).is_some_and(|d| d.alive());
                 let seen = self.intel[t].known(&AI.team, alive);
@@ -1789,10 +1850,12 @@ impl Battle {
         if let Some(high) = self.high_ground(i) {
             return high;
         }
-        let enemy = match self.droids[i].team {
-            Team::Red => Team::Cyan,
-            Team::Cyan => Team::Red,
-        };
+        // One of the other teams, picked anew each time.
+        let others: Vec<Team> = self.teams().into_iter().filter(|&t| t != self.droids[i].team).collect();
+        if others.is_empty() {
+            return self.droids[i].position;
+        }
+        let enemy = { let n = others.len(); others[self.rng().below(n)] };
         let (theirs, own) = (enemy.index(), self.droids[i].team.index());
         if self.spawns[theirs].is_empty() || self.spawns[own].is_empty() {
             return self.droids[i].position;
@@ -2300,15 +2363,14 @@ impl Battle {
             self.droids[i].target = None;
             self.score[self.droids[i].team.index()] += 1;
             Log::info(format!(
-                "Team battle: {} {} downs {} {} from {:.0} m, {} - {} : {}",
+                "Team battle: {} {} downs {} {} from {:.0} m, {} - {}",
                 self.droids[i].team.name(),
                 i % PER_TEAM + 1,
                 self.droids[j].team.name(),
                 j % PER_TEAM + 1,
                 distance,
                 self.droids[i].task.label(),
-                self.score[0],
-                self.score[1]
+                score_line(&self.score, self.arena.teams)
             ));
             for intel in &mut self.intel {
                 intel.forget(j);
@@ -2595,9 +2657,8 @@ impl Battle {
             return;
         }
         let alive = |team: Team| self.droids.iter().filter(|d| d.team == team && d.alive()).count();
-        self.set_text(
-            ctx,
-            self.scoreboard,
+        let teams = self.teams();
+        let board = if teams.len() == 2 {
             format!(
                 "RED {}   —   {} CYAN\n{} / {} alive   first to {}",
                 self.score[0],
@@ -2605,8 +2666,16 @@ impl Battle {
                 alive(Team::Red),
                 alive(Team::Cyan),
                 KILL_LIMIT
-            ),
-        );
+            )
+        } else {
+            format!(
+                "{}\n{} alive   first to {}",
+                teams.iter().map(|t| format!("{} {}", t.name(), self.score[t.index()])).collect::<Vec<_>>().join("   "),
+                teams.iter().map(|&t| alive(t).to_string()).collect::<Vec<_>>().join(" / "),
+                KILL_LIMIT
+            )
+        };
+        self.set_text(ctx, self.scoreboard, board);
         let banner = match self.phase {
             Phase::Won(team, _) => format!("{} TEAM WINS", team.name()),
             _ if self.paused => "PAUSED".to_string(),
