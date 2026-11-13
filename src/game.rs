@@ -1278,7 +1278,7 @@ impl MazeGame {
     /// says, and through the level's fog, if any, which they see only so far into, and less well
     /// the further, as the player does (see [`ctf::sight_fog`]). Hearing goes through it.
     fn seeing(&self, dark: bool) -> Seeing {
-        Seeing { dark, fog: self.foggy().then(|| ctf::sight_fog(&ctf::FOG)) }
+        Seeing { dark, fog: self.foggy().then(|| ctf::sight_fog(&ctf::FOG)), looking_up: false }
     }
 
     /// Whether it is night in the level (see [`ctf::Map::night`]).
@@ -6935,7 +6935,7 @@ const NOBODY: Target = Target {
     middle: Vector3::new(0.0, -1000.0, 0.0),
     collider: Handle::NONE,
     posture: Posture::Standing,
-    seeing: Seeing { dark: true, fog: None },
+    seeing: Seeing { dark: true, fog: None, looking_up: false },
     armed: false,
 };
 

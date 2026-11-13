@@ -102,6 +102,7 @@ use hydroxus_ai::{
         blind::{self, BlindFire},
         roles::{self, Chaser, Part},
         team::{self, Exposure, Intel, Stuck},
+        vantage,
     },
 };
 use maze::{
@@ -195,11 +196,8 @@ const MODELS: [&str; 2] = ["data/droid_hostile.glb", "data/droid_full_deform.glb
 const PER_TEAM: usize = 5;
 const KILL_LIMIT: u32 = 30;
 
-/// Walk grid spacing, and how far from any wall a droid's middle keeps.
+/// Walk grid spacing: the game's survey's (see `maze::survey`).
 const CELL: f32 = 0.5;
-const BODY_RADIUS: f32 = 0.4;
-/// How much room a floor up above needs over it to be stood on.
-const HEADROOM: f32 = 2.0;
 
 /// How fast a droid goes advancing and running for cover, in meters per second, if its model has
 /// no jog or run to go by; with them it goes at their own pace, so its feet keep to the floor.
@@ -253,6 +251,15 @@ const COVER_REACH: f32 = 15.0;
 /// How often, in seconds, a droid looks about it, and how it sees: in a cone in front of it, and
 /// out of the corner of its eye near by (hydroxus-ai's [`Sight`]), as far as its arena says.
 const LOOK_EVERY: f32 = 0.15;
+/// How long a droid shot at from above goes on looking up, in seconds; and how high over a
+/// droid's feet its shots leave its gun, in meters, for where it stands.
+const LOOKING_UP: f32 = 20.0;
+/// How many of a team at most hold the high ground; and how far from the middle of the arena, in
+/// meters, and how far a walk, it may be (see [`Battle::high_ground`]).
+const MOST_HIGH: usize = 1;
+const HIGH_NEAR: f32 = 60.0;
+const HIGH_REACH: f32 = 160.0;
+const HELD_AT: f32 = 1.3;
 fn sight(range: f32) -> Sight {
     Sight { range, cone: 70f32.to_radians(), ..Sight::DEFAULT }
 }
@@ -386,6 +393,10 @@ struct Droid {
     target: Option<usize>,
     /// Where it heads when there is nothing better to do.
     objective: Option<Vector3<f32>>,
+    /// The high ground it holds this life, holding the line with the rifle (see
+    /// [`Battle::high_ground`]): it makes for it, and holds it rather than going after an enemy
+    /// it only knows of.
+    high: Option<Vector3<f32>>,
     reload: f32,
     look_timer: f32,
     /// A moment of red after a hit.
@@ -394,6 +405,9 @@ struct Droid {
     deaths: u32,
     /// How much longer it keeps its head down, shot at, in seconds.
     suppressed: f32,
+    /// How much longer it looks up, shot at from above, in seconds: it sees those up above it
+    /// only so, or the one it is already fighting (see [`Sight::overhead`]).
+    looking_up: f32,
     /// Which enemy it fires at to keep their head down, and where, while it does.
     suppress_at: Option<(usize, Vector3<f32>)>,
     /// Whether it goes round the side, and which side: 1 or -1.
@@ -994,25 +1008,8 @@ impl Battle {
         Self::blocked(graph, from, to).is_none()
     }
 
-    /// How high the highest floor at `spot` is with [`HEADROOM`] over it, looking down from
-    /// `top`, over everything: a ray dropped through the arena surface by surface, since a cast
-    /// meets only the first surface of the arena's one collider.
-    fn top_floor(graph: &Graph, spot: Vector3<f32>, top: f32) -> Option<f32> {
-        let mut above: Option<f32> = None;
-        let mut from = top;
-        loop {
-            let start = Vector3::new(spot.x, from, spot.z);
-            let hit = from - Self::blocked(graph, start, Vector3::new(spot.x, -1.0, spot.z))?;
-            if above.is_some_and(|above| above - hit >= HEADROOM) {
-                return Some(hit);
-            }
-            above = Some(hit);
-            from = hit - 0.01;
-        }
-    }
-
     /// Samples the arena for floor a droid can stand on, with room round it: the arena's floor,
-    /// and whatever stairs lead up from it to, a step at a time.
+    /// and whatever stairs lead up from it to, storey over storey.
     fn survey(&mut self, graph: &Graph) {
         let mut bounds = AxisAlignedBoundingBox::default();
         for node in graph.linear_iter() {
@@ -1022,61 +1019,17 @@ impl Battle {
         }
         // Keep the camera inside a narrower arena than the combat map, by its long side.
         self.camera_position.z = self.camera_position.z.max(bounds.min.z + 1.5);
-        let width = ((bounds.max.x - bounds.min.x) / CELL).ceil() as usize;
-        let depth = ((bounds.max.z - bounds.min.z) / CELL).ceil() as usize;
-        let origin = Vector3::new(bounds.min.x, 0.0, bounds.min.z);
-        let mut grid = WalkGrid::new(width, depth, CELL).with_tuning(AI.grid);
-        let roomy = |spot: Vector3<f32>, floor: f32| {
-            let waist = Vector3::new(spot.x, floor + 0.5, spot.z);
-            let head = Vector3::new(spot.x, floor + 1.6, spot.z);
-            [Vector3::x(), -Vector3::x(), Vector3::z(), -Vector3::z()]
-                .iter()
-                .all(|dir| {
-                    Self::clear(graph, waist, waist + dir * BODY_RADIUS)
-                        && Self::clear(graph, head, head + dir * BODY_RADIUS)
-                })
-                && Self::clear(graph, waist, head)
+        // Floor a droid can stand on, with room round it, as the game finds it: the arena's floor
+        // and whatever stairs lead up from it to, storey over storey - a watchtower's platform
+        // over the ground under it, a barracks' upper floor over its lower.
+        let Some((grid, origin)) = maze::survey::survey(graph, self.level, Handle::NONE, self.arena.sun.is_some()) else {
+            return;
         };
-        for z in 0..depth {
-            for x in 0..width {
-                let spot = grid.center(origin, (x, z));
-                let probe = spot + Vector3::y() * 1.0;
-                let Some(down) = Self::blocked(graph, probe, probe - Vector3::y() * 1.5) else {
-                    continue;
-                };
-                let floor = 1.0 - down;
-                // The arena floor is flat: anything higher is the top of a block.
-                if floor > 0.3 {
-                    continue;
-                }
-                if roomy(spot, floor) {
-                    grid.set(x, z, true);
-                    grid.set_floor(x, z, floor);
-                }
-            }
-        }
-        // Then up any stairs: out from the floor, onto floor a step higher or lower, with room.
-        let mut queue: std::collections::VecDeque<(usize, usize)> = grid.walkable_cells().collect();
-        while let Some((x, z)) = queue.pop_front() {
-            for (nx, nz) in [(x.wrapping_sub(1), z), (x + 1, z), (x, z.wrapping_sub(1)), (x, z + 1)] {
-                if nx >= width || nz >= depth || grid.is_walkable(nx, nz) {
-                    continue;
-                }
-                let spot = grid.center(origin, (nx, nz));
-                let Some(floor) = Self::top_floor(graph, spot, bounds.max.y + 1.0) else {
-                    continue;
-                };
-                if (floor - grid.floor(x, z)).abs() <= AI.grid.max_climb && roomy(spot, floor) {
-                    grid.set(nx, nz, true);
-                    grid.set_floor(nx, nz, floor);
-                    queue.push_back((nx, nz));
-                }
-            }
-        }
+        let (width, depth, storeys) = (grid.width, grid.depth, grid.storeys);
 
         // Keep only the biggest connected area: anything else is outside the walls.
         let mut best: Vec<(usize, usize)> = Vec::new();
-        let mut seen = vec![false; width * depth];
+        let mut seen = vec![false; width * grid.rows()];
         let cells: Vec<_> = grid.walkable_cells().collect();
         for (x, z) in cells {
             if seen[z * width + x] {
@@ -1096,17 +1049,19 @@ impl Battle {
                 best = area;
             }
         }
-        let mut kept = WalkGrid::new(width, depth, CELL).with_tuning(AI.grid);
+        let mut kept = WalkGrid::with_storeys(width, depth, storeys, CELL).with_tuning(AI.grid);
         for &(x, z) in &best {
             kept.set(x, z, true);
             kept.set_floor(x, z, grid.floor(x, z));
         }
 
         // Each team starts in the tenth of the arena at its own end.
-        let (min_x, max_x) = best.iter().fold((usize::MAX, 0), |(lo, hi), &(x, _)| (lo.min(x), hi.max(x)));
+        // On the ground, not up a barracks' stairs.
+        let ground: Vec<(usize, usize)> = best.iter().copied().filter(|&cell| grid.storey(cell) == 0).collect();
+        let (min_x, max_x) = ground.iter().fold((usize::MAX, 0), |(lo, hi), &(x, _)| (lo.min(x), hi.max(x)));
         let band = (max_x - min_x) / 10;
-        self.spawns[Team::Red.index()] = best.iter().copied().filter(|&(x, _)| x <= min_x + band).collect();
-        self.spawns[Team::Cyan.index()] = best.iter().copied().filter(|&(x, _)| x >= max_x - band).collect();
+        self.spawns[Team::Red.index()] = ground.iter().copied().filter(|&(x, _)| x <= min_x + band).collect();
+        self.spawns[Team::Cyan.index()] = ground.iter().copied().filter(|&(x, _)| x >= max_x - band).collect();
         Log::info(format!(
             "Team battle: {} walkable cells, {} and {} spawn cells",
             best.len(),
@@ -1141,7 +1096,9 @@ impl Battle {
                 covers.push(CoverSpot { position, shields });
             }
         }
-        Log::info(format!("Team battle: {} cover spots", covers.len()));
+        let ground = covers.iter().map(|c| c.position.y).fold(f32::MAX, f32::min);
+        let high = covers.iter().filter(|c| c.position.y - ground > AI.vantage.rise).count();
+        Log::info(format!("Team battle: {} cover spots, {high} of them up high", covers.len()));
         self.covers = covers;
     }
 
@@ -1224,12 +1181,14 @@ impl Battle {
             cover_prone: false,
             target: None,
             objective: None,
+            high: None,
             reload: 0.0,
             look_timer: 0.0,
             hurt_flash: 0.0,
             kills: 0,
             deaths: 0,
             suppressed: 0.0,
+            looking_up: 0.0,
             suppress_at: None,
             flank: None,
             part: None,
@@ -1267,6 +1226,7 @@ impl Battle {
         droid.cover_prone = false;
         droid.target = None;
         droid.objective = None;
+        droid.high = None;
         droid.suppressed = 0.0;
         droid.suppress_at = None;
         droid.stuck_from = Stuck::at(droid.position);
@@ -1310,7 +1270,7 @@ impl Battle {
     /// What there is to see by in the arena: light, and its fog, if any - which droids see
     /// through only so far, and less well the further, as the player does; hearing goes through.
     fn seeing(&self) -> Seeing {
-        Seeing { dark: false, fog: self.arena.fog.as_ref().map(sight_fog) }
+        Seeing { dark: false, fog: self.arena.fog.as_ref().map(sight_fog), looking_up: false }
     }
 
     /// How visible droid `j` is to droid `i`, from 0 to 1 (see [`Sight::visibility`]): in
@@ -1323,7 +1283,14 @@ impl Battle {
             Posture::Crouching => Stance::Crouching,
             Posture::Standing => Stance::Standing,
         };
-        let seen = sight(self.arena.sight).visibility(self.alert(i), me.position, me.heading, them.position, stance, self.seeing());
+        let sight = sight(self.arena.sight);
+        // Up above it, it does not look, unless shot at from up there - or it is the one it is
+        // fighting, followed up with its eyes.
+        let up = me.looking_up > 0.0;
+        if !up && me.target != Some(j) && sight.overhead(me.position, them.position) {
+            return 0.0;
+        }
+        let seen = sight.visibility(self.alert(i), me.position, me.heading, them.position, stance, self.seeing().looking_up(up));
         if seen > 0.0 && (Self::clear(graph, me.eyes(), them.eyes()) || Self::clear(graph, me.eyes(), them.chest())) {
             seen
         } else {
@@ -1362,6 +1329,7 @@ impl Battle {
         }
         for droid in &mut self.droids {
             droid.suppressed = (droid.suppressed - dt).max(0.0);
+            droid.looking_up = (droid.looking_up - dt).max(0.0);
             // Shooting heard is gone to a while, and given up once there.
             if let Some((at, age)) = droid.heard {
                 let there = flat(at - droid.position).norm() < HEARD_REACHED;
@@ -1577,6 +1545,8 @@ impl Battle {
                     Some(threat) if self.smart(i) && self.droids[i].flank.is_some() => {
                         self.flank_point(i, threat).unwrap_or(threat)
                     }
+                    // Holding the high ground: it stays up there.
+                    Some(_) if self.droids[i].high.is_some() => self.droids[i].high.unwrap(),
                     Some(threat) => threat,
                     // Shooting heard, or shot at by someone unseen: that way.
                     None => match self.droids[i].blind.at().or(self.droids[i].heard.map(|(at, _)| at)) {
@@ -1778,10 +1748,46 @@ impl Battle {
         Self::clear(graph, eyes, spot + Vector3::y() * height)
     }
 
-    /// Somewhere to head for in the enemy's half, kept until it is reached.
+    /// High ground for droid `i` to hold, if it is one to (see [`Droid::high`]): fighting as a
+    /// team, holding the line with the rifle, and no more than [`MOST_HIGH`] of its team up
+    /// there already - the best it can get to looking out over the middle of the arena.
+    fn high_ground(&mut self, i: usize) -> Option<Vector3<f32>> {
+        if let Some(high) = self.droids[i].high {
+            return Some(high);
+        }
+        let me = &self.droids[i];
+        if !self.smart(i) || me.flank.is_some() || !me.rifle {
+            return None;
+        }
+        let team = me.team;
+        let held: Vec<Vector3<f32>> = self
+            .droids
+            .iter()
+            .enumerate()
+            .filter(|&(j, d)| j != i && d.team == team && d.alive())
+            .filter_map(|(_, d)| d.high)
+            .collect();
+        if held.len() >= MOST_HIGH {
+            return None;
+        }
+        let mesh = self.mesh.as_ref()?;
+        let (low, top) = mesh.bounds();
+        let middle = Vector3::new(0.5 * (low.x + top.x), low.y, 0.5 * (low.z + top.z));
+        let tuning = vantage::Tuning { near: HIGH_NEAR, reach: HIGH_REACH, ..AI.vantage };
+        let high = vantage::high_ground(&tuning, mesh, me.position, middle, &held)?;
+        Log::info(format!("Team battle: {} droid {i} takes the high ground, {:.0} m up", team.name(), high.y - middle.y));
+        self.droids[i].high = Some(high);
+        Some(high)
+    }
+
+    /// Somewhere to head for in the enemy's half, kept until it is reached - or, holding the
+    /// line, the high ground (see [`Battle::high_ground`]).
     fn objective(&mut self, i: usize) -> Vector3<f32> {
         if let Some(objective) = self.droids[i].objective {
             return objective;
+        }
+        if let Some(high) = self.high_ground(i) {
+            return high;
         }
         let enemy = match self.droids[i].team {
             Team::Red => Team::Cyan,
@@ -1836,7 +1842,8 @@ impl Battle {
                 let cost = cost + (cover.position.x - entry[0]).hypot(cover.position.z - entry[1]);
                 let to_threat = flat(threat - cover.position);
                 let distance = to_threat.norm();
-                let rank = team::cover_rank(cost, distance, retreat)?;
+                // Up over the threat, the better: it shoots down, and sees over what is between.
+                let rank = team::cover_rank(cost, distance, retreat)? - vantage::cover_lift(&AI.vantage, cover.position.y - threat.y);
                 team::shields_from(&cover.shields, to_threat / distance).then_some((rank, s))
             })
             .collect();
@@ -2094,6 +2101,10 @@ impl Battle {
     /// [`BlindFire`]).
     fn shot_at_by(them: &mut Droid, i: usize, from: Vector3<f32>, eagerness: f32) {
         them.aware[i].hear(&AI.detection, 1.0, eagerness);
+        // Shot at from up above: it looks up.
+        if AI.sight.overhead(them.position, from - Vector3::y() * HELD_AT) {
+            them.looking_up = LOOKING_UP;
+        }
         if them.target != Some(i) {
             them.blind.unseen_bolt(&AI.blind, from);
             if them.blind.at().is_some() {

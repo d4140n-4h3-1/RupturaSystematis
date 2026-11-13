@@ -97,6 +97,7 @@ pub use hydroxus_ai::alert::Alert;
 use hydroxus_ai::alert::{Incident, Wariness};
 pub use hydroxus_ai::tactics::threat::{Threat, Uneasy};
 use hydroxus_ai::tactics::threat::Unease;
+use hydroxus_ai::tactics::vantage;
 pub(crate) use hydroxus_ai::navigation::route::between;
 use hydroxus_ai::navigation::walk::route_to;
 use crate::{ferry::Crossing, train::Doors};
@@ -316,6 +317,14 @@ const POST_REACH: f32 = 3.0;
 const SHOP_REACH: f32 = 0.6;
 const SPAWN_REACH: f32 = 1.5;
 const FOE_MEMORY: f32 = 6.0;
+/// How long a droid shot at from above goes on looking up, in seconds (see
+/// [`hydroxus_ai::perception::sight::Sight::overhead`]); and how high over the shooter's feet a
+/// shot leaves their gun, in meters, for where they stand.
+const LOOKING_UP: f32 = 20.0;
+const HELD_AT: f32 = 1.3;
+/// How many searchers at once go up to high ground to look out (see
+/// [`hydroxus_ai::tactics::vantage`]).
+const MOST_CLIMBING: usize = 2;
 /// In capture the flag, how near one of the other side has to be for a droid to notice it even
 /// out of sight of its eyes, in meters: a droid's footsteps, and a drone's hum, which carries.
 const NOTICE_DROID: f32 = 3.0;
@@ -584,6 +593,14 @@ struct Inhabitant {
     foe: Option<Foe>,
     foe_unseen: f32,
     shot_from: Option<(Vector3<f32>, f32)>,
+    /// How long it goes on looking up, in seconds, having been shot at from above: it sees those
+    /// up above it only so (see [`hydroxus_ai::perception::sight::Sight::overhead`]).
+    looking_up: f32,
+    /// Whether, searching, it has gone up to high ground to look out over where the player was
+    /// lost, this search: once a search (see [`hydroxus_ai::tactics::vantage`]); and where, if it
+    /// found any to go to.
+    climbed: bool,
+    up_at: Option<Vector3<f32>>,
     /// Bolts it has noticed lately, flying at it from someone it does not see; and firing blind
     /// back, where they came from (see [`hydroxus_ai::tactics::blind`]).
     blind: BlindFire,
@@ -1333,6 +1350,8 @@ impl Inhabitant {
 
     /// Starts searching from where it last saw the player.
     fn search_afresh(&mut self) {
+        self.climbed = false;
+        self.up_at = None;
         self.route.clear();
         self.looking = None;
         self.searched = 0;
@@ -2308,6 +2327,9 @@ impl Inhabitants {
             foe: None,
             foe_unseen: 0.0,
             shot_from: None,
+            looking_up: 0.0,
+            climbed: false,
+            up_at: None,
             blind: BlindFire::default(),
             speaking: 0.0,
             heeding: 0.0,
@@ -2796,6 +2818,11 @@ impl Inhabitants {
         // up for somewhere else (see `orchestrate::Tuning::covered_within`).
         let searchers: Vec<Option<Vector3<f32>>> =
             self.droids.iter().map(|d| (d.alert == Some(Alert::Evasion) && !d.down).then_some(d.feet)).collect();
+        // The high ground searchers have gone up to (see `vantage`): no more than so many at once,
+        // each on its own.
+        let mut heights: Vec<Vector3<f32>> =
+            self.droids.iter().filter(|d| d.alert == Some(Alert::Evasion) && !d.down).filter_map(|d| d.up_at).collect();
+        let mut climbing = heights.len();
 
         // Which of those leading have one of their pair or group to wait for: kept talking, or
         // fallen behind.
@@ -2990,6 +3017,7 @@ impl Inhabitants {
             droid.wariness.step(&AI.alert, dt);
             droid.windup = (droid.windup - dt).max(0.0);
             droid.deaf = (droid.deaf - dt).max(0.0);
+            droid.looking_up = (droid.looking_up - dt).max(0.0);
             if droid.sees_player {
                 // Where the player is, and roughly which way they are going, from how they have
                 // moved lately.
@@ -3351,6 +3379,23 @@ impl Inhabitants {
                         // Done looking: on to where the player is likeliest to be, of where it
                         // can get to, clear of where the others are going - or, with nowhere
                         // likelier than anywhere else, another spot nearby.
+                        // Done looking about where it last saw them, a sentry goes up to high
+                        // ground near there to look out over it - unless enough others have.
+                        Some(_) if droid.sentry && !droid.climbed && climbing < MOST_CLIMBING => {
+                            droid.looking = None;
+                            droid.climbed = true;
+                            droid.searched += 1;
+                            let up = vantage::high_ground(&AI.vantage, mesh, droid.feet, droid.lost_at, &heights);
+                            if let Some(up) = up {
+                                (droid.route, droid.trip) = go_to(droid.feet, up);
+                            }
+                            if !droid.route.is_empty() {
+                                droid.up_at = up;
+                                climbing += 1;
+                                heights.extend(up);
+                                Log::info(format!("Search: droid {me} goes up to look out, {:.0} m over where it lost them", up.map_or(0.0, |u| u.y - droid.lost_at.y)));
+                            }
+                        }
                         Some(_) => {
                             droid.looking = None;
                             droid.searched += 1;
@@ -4089,12 +4134,13 @@ impl Inhabitants {
         let mut after = self.droids.iter().filter(|droid| droid.on_the_chase()).count();
         for droid in &mut self.droids {
             // Anyone near enough that sees them notes it, to suspect them of trouble later.
-            if !droid.down && flat(player - droid.feet).norm() < SUSPECT_SIGHT && seen_by(droid.alert, droid.feet, droid.heading, player, posture, seeing, &in_sight) > 0.0 {
+            if !droid.down && flat(player - droid.feet).norm() < SUSPECT_SIGHT && seen_by(droid.alert, droid.feet, droid.heading, player, posture, seeing.looking_up(droid.looking_up > 0.0), &in_sight) > 0.0 {
                 droid.suspicions.saw_player(&AI.suspicion, player, clock);
             }
             // Whether it has them in view, as it looks now - calm or not, and whatever it makes of
             // it: only one hostile and watching becomes aware of them for it.
             let looking = !droid.down && droid.hunts_player();
+            let seeing = seeing.looking_up(droid.looking_up > 0.0);
             let seen = match looking {
                 true => seen_by(droid.alert, droid.feet, droid.heading, player, posture, seeing, &in_sight),
                 false => 0.0,
@@ -4258,7 +4304,7 @@ impl Inhabitants {
             let distance = flat(player - droid.feet).norm();
             let sees = armed
                 && distance <= AI.threat.unease_range
-                && Sight::default().could_see(None, droid.feet, droid.heading, player, posture.into(), seeing)
+                && Sight::default().could_see(None, droid.feet, droid.heading, player, posture.into(), Seeing::from(seeing).looking_up(droid.looking_up > 0.0))
                 && in_sight(droid.feet);
             if let Some(stage) = droid.unease.step(&AI.threat, sees, distance, dt) {
                 if stage == Uneasy::Settled {
@@ -4317,7 +4363,7 @@ impl Inhabitants {
             let chest = droid.feet + Vector3::new(0.0, CHEST, 0.0);
             let aimed = minding
                 && aim.is_some_and(|(eye, ahead)| pointed_at(&AI.threat, eye, ahead, chest))
-                && Sight::default().could_see(None, droid.feet, droid.heading, player, posture.into(), seeing)
+                && Sight::default().could_see(None, droid.feet, droid.heading, player, posture.into(), Seeing::from(seeing).looking_up(droid.looking_up > 0.0))
                 && in_sight(droid.feet);
             let aimed = aimed || (minding && crowding[n]);
             if !minding {
@@ -5091,7 +5137,7 @@ impl Inhabitants {
             !droid.down
                 && droid.side.is_none()
                 && sentry(droid.character)
-                && Sight::default().could_see(droid.alert, droid.feet, droid.heading, at, posture.into(), seeing)
+                && Sight::default().could_see(droid.alert, droid.feet, droid.heading, at, posture.into(), seeing.looking_up(droid.looking_up > 0.0))
                 && clear_between(
                     graph,
                     droid.feet + Vector3::new(0.0, FACE_HEIGHT, 0.0),
@@ -5268,6 +5314,10 @@ impl Inhabitants {
             let Some(pass) = near.or(noticed.filter(|_| droid.alert.is_some() || droid.side.is_some())) else {
                 continue;
             };
+            // Shot at from up above: it looks up.
+            if AI.sight.overhead(droid.feet, pass.fired_at - Vector3::new(0.0, HELD_AT, 0.0)) {
+                droid.looking_up = LOOKING_UP;
+            }
             if droid.alert == Some(Alert::Alert) {
                 continue;
             }
@@ -5428,6 +5478,9 @@ impl Inhabitants {
         let headshot = droid.headshot(graph, strike.at, strike.way);
         droid.hits += strike.power.max(1);
         droid.note(Incident::Hurt);
+        if AI.sight.overhead(droid.feet, player) {
+            droid.looking_up = LOOKING_UP;
+        }
         if droid.hits < droid.stopped_by() && headshot.is_none() {
             if droid.side.is_some() {
                 // In capture the flag, it turns to whoever it was, to see them, and goes after
@@ -5852,7 +5905,7 @@ mod tests {
     fn in_the_foggy_maps_fog_the_player_is_harder_to_see_far_off() {
         let feet = Vector3::zeros();
         let clear = |_: Vector3<f32>| true;
-        let fog = Seeing { dark: false, fog: Some(crate::ctf::sight_fog(&crate::ctf::FOG)) };
+        let fog = Seeing { dark: false, fog: Some(crate::ctf::sight_fog(&crate::ctf::FOG)), looking_up: false };
         let (near, far) = (Vector3::new(0.0, 0.0, 2.5), Vector3::new(0.0, 0.0, 20.0));
         let seen = |at, seeing| seen_by(Some(Alert::Alert), feet, 0.0, at, Posture::Standing, seeing, &clear);
         assert_eq!(seen(near, fog), seen(near, false.into()), "right in front of it, the fog has yet to start");

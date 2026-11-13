@@ -78,7 +78,7 @@ pub mod player;
 pub mod ragdoll;
 mod roads;
 mod royale;
-mod survey;
+pub mod survey;
 mod tiles;
 mod traffic;
 mod train;
