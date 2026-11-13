@@ -56,6 +56,11 @@ pub fn survey(
     for node in graph.linear_iter() {
         if node.is_mesh() && node.handle() != ignore {
             let aabb = node.world_bounding_box();
+            // One with no bounds of its own - no surfaces - has none to add.
+            let real = |v: &Vector3<f32>| v.iter().all(|c| c.is_finite() && c.abs() < 1.0e7);
+            if !real(&aabb.min) || !real(&aabb.max) || aabb.min.x > aabb.max.x {
+                continue;
+            }
             min = min.inf(&aabb.min);
             max = max.sup(&aabb.max);
         }
