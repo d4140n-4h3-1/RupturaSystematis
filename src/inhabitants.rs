@@ -3895,6 +3895,25 @@ impl Inhabitants {
         true
     }
 
+    /// Whether any sentry after the player has them in sight (see [`Inhabitant::on_the_chase`]).
+    pub fn chase_in_sight(&self) -> bool {
+        self.droids.iter().any(|droid| droid.on_the_chase() && droid.alert == Some(Alert::Alert) && droid.sees_player)
+    }
+
+    /// With no sentry after the player seeing them, but some searching: the one that lost them
+    /// last, and where it last saw them. None otherwise.
+    pub fn chase_lost(&self) -> Option<(usize, Vector3<f32>)> {
+        if self.chase_in_sight() {
+            return None;
+        }
+        self.droids
+            .iter()
+            .enumerate()
+            .filter(|(_, droid)| droid.on_the_chase() && droid.alert == Some(Alert::Evasion))
+            .max_by(|(_, a), (_, b)| a.lost_when.total_cmp(&b.lost_when))
+            .map(|(n, droid)| (n, droid.lost_at))
+    }
+
     /// The player just wanted at [`RADIO_STARS`]: the nearest sentry with a radio that is after them
     /// and sees them, at `at`, if any, starts calling for help (see
     /// [`Inhabitants::start_radio_call`]). Which one.

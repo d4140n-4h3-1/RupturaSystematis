@@ -833,6 +833,11 @@ pub struct MazeGame {
     #[visit(skip)]
     #[reflect(hidden)]
     pursuit_called: Option<Vector3<f32>>,
+    /// Whether, last frame, any sentry after the player had them in sight: losing them all at
+    /// [`HELICOPTER_STARS`] or more brings the helicopter in (see [`Game::call_helicopter_on_losing`]).
+    #[visit(skip)]
+    #[reflect(hidden)]
+    chase_in_sight: bool,
     #[visit(skip)]
     #[reflect(hidden)]
     pursuit_saw: Option<Vector3<f32>>,
@@ -1368,6 +1373,7 @@ impl MazeGame {
             pursuit.remove(&mut ctx.scenes[self.scene].graph);
         }
         self.pursuit_called = None;
+        self.chase_in_sight = false;
         self.player.set_riding(&mut ctx.scenes[self.scene].graph, false);
         self.ctf = None;
         self.royale = None;
@@ -1451,6 +1457,7 @@ impl MazeGame {
             pursuit.remove(&mut ctx.scenes[self.scene].graph);
         }
         self.pursuit_called = None;
+        self.chase_in_sight = false;
         self.player.set_riding(&mut ctx.scenes[self.scene].graph, false);
         if let Ok(exit) = ctx.scenes[self.scene].graph.try_get_mut(self.exit) {
             exit.set_visibility(true);
@@ -3700,6 +3707,7 @@ impl MazeGame {
         } = self.update_inhabitants(ctx);
         self.radio_calls(radioed, cut_off);
         self.send_after_new_star(ctx);
+        self.call_helicopter_on_losing();
         // A foot chase, or a shootout, is called out by whichever of those in it says so.
         for (n, name, mood) in std::mem::take(&mut self.chase_barks) {
             self.bark_anyway(n, name, mood);
@@ -3815,6 +3823,25 @@ impl MazeGame {
             let name = self.name_of(n).unwrap_or_else(|| "The sentry".into());
             self.hud.show_note(format!("{name} went down before it could radio for help"));
         }
+    }
+
+    /// Wanted at [`HELICOPTER_STARS`] or more, the sentries after the player losing sight of them -
+    /// the last that had them in view losing them, the rest searching - call the helicopter in to
+    /// expose them, to where they were last seen, unless one is out already (see
+    /// [`Game::chase_by_air`]).
+    fn call_helicopter_on_losing(&mut self) {
+        let in_sight = self.inhabitants.chase_in_sight();
+        let lost = std::mem::replace(&mut self.chase_in_sight, in_sight) && !in_sight;
+        if !lost || self.stars() < HELICOPTER_STARS || self.pursuit.is_some() || self.pursuit_called.is_some() || self.phase != Phase::Playing {
+            return;
+        }
+        let Some((n, at)) = self.inhabitants.chase_lost() else {
+            return;
+        };
+        self.pursuit_called = Some(at);
+        let name = self.name_of(n).unwrap_or_else(|| "A sentry".into());
+        self.hud.show_note(format!("{name} lost you and called for the helicopter"));
+        Log::info(format!("Helicopter: called by droid {n}, having lost the player"));
     }
 
     /// Now and then has a pair or group near the player that has things to say among itself talk:
