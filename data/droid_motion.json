@@ -11422,6 +11422,10 @@
    "prone": {
     "aim": "droid_pistol_prone_aim",
     "fire": "droid_pistol_prone_fire"
+   },
+   "crawl": {
+    "cycle": "droid_pistol_crawl",
+    "idle": "droid_pistol_crawl_idle"
    }
   },
   "show_frame": 6,
@@ -13778,6 +13782,10 @@
    "prone": {
     "aim": "droid_rifle_prone_aim",
     "fire": "droid_rifle_prone_fire"
+   },
+   "crawl": {
+    "cycle": "droid_rifle_crawl",
+    "idle": "droid_rifle_crawl_idle"
    }
   },
   "moving": {

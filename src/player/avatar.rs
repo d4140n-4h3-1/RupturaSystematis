@@ -1322,6 +1322,24 @@ struct PistolClips {
     /// Aiming and firing lying on the floor, up on the elbows, if it has them.
     #[serde(default)]
     prone: Option<ProneClips>,
+    /// Crawling with it in hand, and lying still with it, if it has them.
+    #[serde(default)]
+    crawl: Option<CrawlClips>,
+}
+
+/// A gun's clips for crawling with it in the right fist: the crawl, made from the droid's own
+/// crawl frame for frame (so the same pace and the same limbs down), and its idle lying still.
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+struct CrawlClips {
+    cycle: String,
+    idle: String,
+}
+
+/// A gun's animations for crawling with it (see [`CrawlClips`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct ArmedCrawl {
+    cycle: Handle<Animation>,
+    idle: Handle<Animation>,
 }
 
 /// A gun's clips for aiming it lying down: the whole body as it lies aiming, and the shot.
@@ -1356,6 +1374,8 @@ struct Pistol {
     ready: Option<Ready>,
     /// Aimed and fired lying down, if it has them.
     prone: Option<Prone>,
+    /// Crawled with, and held lying still, if it has them.
+    crawl: Option<ArmedCrawl>,
     /// How far into the draw it shows, into the holster it goes, and into firing the shot
     /// leaves, in seconds.
     show_at: f32,
@@ -1893,6 +1913,9 @@ pub struct Avatar {
     /// and the little way it turns its back to aim from there.
     lying_aimed: bool,
     prone_aims: Aims,
+    /// Whether it crawls (or lies still) with the gun in its fist at the ready, its gun's own crawl
+    /// played on the whole body in place of the droid's (see [`ArmedCrawl`]).
+    armed_crawl: bool,
     reach_weight: f32,
     /// How far over it has gone to keeping its body square to the wall it has its back against,
     /// from 0 to 1: in cover, but for leaning out round the corner.
@@ -2745,6 +2768,15 @@ impl Avatar {
                     if prone.is_none() {
                         info(format!("Droid: without prone clips, its {what} aims lying down as standing"));
                     }
+                    let crawl = clips.crawl.as_ref().and_then(|crawl| {
+                        Some(ArmedCrawl {
+                            cycle: find(&crawl.cycle, true)?,
+                            idle: find(&crawl.idle, true)?,
+                        })
+                    });
+                    if crawl.is_none() {
+                        info(format!("Droid: without crawl clips, its {what} is put out of sight crawling"));
+                    }
                     let moving: Vec<(Handle<Animation>, Handle<Animation>)> = motion
                         .moving
                         .as_ref()
@@ -2766,6 +2798,7 @@ impl Avatar {
                             holster,
                             ready,
                             prone,
+                            crawl,
                             show_at: frame_time(motion.show_frame),
                             hide_after: frame_time(motion.hide_after_frame),
                             shot_at: frame_time(motion.shot_frame),
@@ -2902,6 +2935,7 @@ impl Avatar {
             crouched: false,
             crawling: false,
             lying_aimed: false,
+            armed_crawl: false,
             prone_aims: Aims::by_the_back_within(PRONE_AIM_PITCH, PRONE_AIM_YAW),
             skids,
             skidding: None,
@@ -3396,7 +3430,7 @@ impl Avatar {
             Arms::Drawing => into >= pistol.show_at,
             Arms::Ready | Arms::Raising | Arms::Lowering | Arms::Aiming | Arms::Firing(_) => true,
             Arms::Holstering => into <= pistol.hide_after,
-        } && self.crawl_stow < 0.5;
+        } && (self.crawl_stow < 0.5 || self.in_fist_crawling());
         if show != shown {
             graph[pistol.node].set_visibility(show);
         }
@@ -4085,20 +4119,41 @@ impl Avatar {
             && wanted.is_none()
             && self.gun.as_ref().is_some_and(|gun| gun.pistol.prone.is_some())
             && matches!(self.arms, Arms::Raising | Arms::Aiming | Arms::Firing(_) | Arms::Lowering);
+        // Crawling or lying still with the gun at the ready, it keeps it in its fist, if the gun has
+        // a crawl of its own; drawing it or putting it away there, the gun is out of sight.
+        let armed_crawl = crawling && self.arms == Arms::Ready && self.armed().is_some();
         if wanted.is_none()
             && self.playing.is_none()
             && (going.cover != self.covered
                 || cornered != self.cornered
                 || crouched != self.crouched
                 || crawling != self.crawling
-                || lying_aimed != self.lying_aimed)
+                || lying_aimed != self.lying_aimed
+                || armed_crawl != self.armed_crawl)
         {
             self.covered = going.cover;
             self.cornered = cornered;
             self.crouched = crouched;
             self.crawling = crawling;
             self.lying_aimed = lying_aimed;
+            self.armed_crawl = armed_crawl;
             self.rewind_idle(graph);
+            self.fade_from_here(graph);
+        }
+        // Crawling on as the gun comes to the ready, or leaves it: the other crawl picks up where
+        // this one is, the same frame of the same stroke.
+        if armed_crawl != self.armed_crawl && wanted == self.playing && self.playing.is_some() && self.playing == self.crawl {
+            let old = self.playing.map(|index| self.cycle_animation(index));
+            self.armed_crawl = armed_crawl;
+            let new = self.playing.map(|index| self.cycle_animation(index));
+            if let (Some(old), Some(new), Some(container)) = (old, new, self.container(graph)) {
+                let through = {
+                    let old = &container[old];
+                    (old.time_position() - old.time_slice().start) / old.length()
+                };
+                let new = &mut container[new];
+                new.set_time_position(new.time_slice().start + through * new.length());
+            }
             self.fade_from_here(graph);
         }
         self.covered = going.cover;
@@ -4106,13 +4161,13 @@ impl Avatar {
         self.crouched = crouched;
         self.crawling = crawling;
         self.lying_aimed = lying_aimed;
+        self.armed_crawl = armed_crawl;
         if wanted != self.playing {
             // The new cycle picks up at the same point in the stride, with the same foot down, so
             // the feet carry on.
             if let (Some(old), Some(new)) = (self.playing, wanted) {
-                let (old, new) = (&self.cycles[old], &self.cycles[new]);
-                let (from, to) = (old.phase, new.phase);
-                let (old, new) = (old.animation, new.animation);
+                let (from, to) = (self.cycles[old].phase, self.cycles[new].phase);
+                let (old, new) = (self.cycle_animation(old), self.cycle_animation(new));
                 if let Some(container) = self.container(graph) {
                     let old = &container[old];
                     let through = (old.time_position() - old.time_slice().start) / old.length();
@@ -4137,14 +4192,15 @@ impl Avatar {
         let mut target = self.rest.clone();
         if let Some(index) = self.playing {
             let cycle = &self.cycles[index];
+            let (animation, way, speed) = (self.cycle_animation(index), cycle.way, cycle.speed);
             let Some(container) = self.container(graph) else {
                 return;
             };
-            let (animation, way) = (&mut container[cycle.animation], cycle.way);
+            let animation = &mut container[animation];
             // As fast as the floor goes by, so the feet stay on it. In the air, or crouched and
             // still, it is held where it is.
             let rate = if going.grounded {
-                going.speed / cycle.speed
+                going.speed / speed
             } else {
                 0.0
             };
@@ -4231,11 +4287,36 @@ impl Avatar {
         }
     }
 
+    /// The gun in hand's own crawl and idle crawling, if it has them.
+    fn armed(&self) -> Option<ArmedCrawl> {
+        self.gun.as_ref().and_then(|gun| gun.pistol.crawl)
+    }
+
+    /// Whether the gun's own crawl or its idle is what plays: not while the droid goes down onto
+    /// the floor or gets up, nor shuffles round on it, which have their hands flat on the floor.
+    fn in_fist_crawling(&self) -> bool {
+        self.armed_crawl
+            && self.changing.is_none()
+            && !self.pivoting.is_some_and(|pivoting| pivoting.posture == Posture::Crawling)
+    }
+
+    /// The animation that plays for cycle `index`: crawling with the gun at the ready, the gun's
+    /// own crawl in place of the droid's.
+    fn cycle_animation(&self, index: usize) -> Handle<Animation> {
+        match self.armed().filter(|_| self.armed_crawl && Some(index) == self.crawl) {
+            Some(armed) => armed.cycle,
+            None => self.cycles[index].animation,
+        }
+    }
+
     /// The idle to play still: crouched, the crouch's; standing, the one for cover, in cover, if
     /// the droid has it.
     fn idle_now(&self) -> Option<Handle<Animation>> {
         if let Some(prone) = self.gun.as_ref().and_then(|gun| gun.pistol.prone).filter(|_| self.lying_aimed) {
             return Some(prone.aim);
+        }
+        if let Some(armed) = self.armed().filter(|_| self.armed_crawl) {
+            return Some(armed.idle);
         }
         if self.crawling && self.crawl_idle.is_some() {
             return self.crawl_idle;
