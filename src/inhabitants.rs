@@ -639,6 +639,12 @@ impl Inhabitant {
         self.side.is_none_or(|side| !side.is_players())
     }
 
+    /// Whether it is a sentry after the player, chasing them or searching for them (see
+    /// [`most_after`]).
+    fn on_the_chase(&self) -> bool {
+        self.sentry && self.side.is_none() && !self.down && matches!(self.alert, Some(Alert::Alert | Alert::Evasion))
+    }
+
     /// Puts it down afresh as another droid of its kind, as a crowd's droids turn up again (see
     /// [`Crowd`]): with its feet at `feet`, facing `heading`, to stand `resting` seconds before
     /// it sets off, under a code of its own, and with nothing of where it was or of the player.
@@ -4057,6 +4063,10 @@ impl Inhabitants {
         // A weapon drawn catches the eye.
         let conspicuous = if armed { AI.detection.armed } else { 1.0 };
         let clock = self.clock;
+        // No more sentries on the chase than the stars call for (see [`most_after`]): one that
+        // spots the player with the chase full only keeps watching them.
+        let most = most_after(self.wanted);
+        let mut after = self.droids.iter().filter(|droid| droid.on_the_chase()).count();
         for droid in &mut self.droids {
             // Anyone near enough that sees them notes it, to suspect them of trouble later.
             if !droid.down && flat(player - droid.feet).norm() < SUSPECT_SIGHT && seen_by(droid.alert, droid.feet, droid.heading, player, posture, seeing, &in_sight) > 0.0 {
@@ -4093,7 +4103,16 @@ impl Inhabitants {
                         (_, Some(look)) if visible > 0.0 => look.saw_again(&AI.investigate, player),
                         _ => (),
                     }
-                    droid.detection.spotted() && visible > 0.0
+                    let sees = droid.detection.spotted() && visible > 0.0;
+                    let joins = alert == Some(Alert::Caution) && droid.sentry && droid.side.is_none();
+                    match sees && joins {
+                        true if after >= most => false,
+                        true => {
+                            after += 1;
+                            true
+                        }
+                        false => sees,
+                    }
                 }
                 None => {
                     droid.detection.step(&AI.detection, 0.0, 1.0, dt);
@@ -4356,17 +4375,27 @@ impl Inhabitants {
             .filter(|&m| !self.droids[m].down && self.droids[m].side.is_none() && hears_alarm(&AI.report, from, self.droids[m].feet))
             .collect();
         self.minds.came_across(&heard, Kind::Alarm, from);
-        for (m, droid) in self.droids.iter_mut().enumerate() {
-            let answering = m != n
-                && droid.hunts_player()
-                && answers(droid.character)
-                && !droid.down
-                && matches!(droid.alert, None | Some(Alert::Caution))
-                && hears_alarm(&AI.report, from, droid.feet);
-            if !answering {
-                continue;
-            }
-
+        // Only as many as the stars call for - an alarm is a star at least (see [`most_after`]):
+        // the nearest that hear it.
+        let after = self.after_player(&answers);
+        let room = most_after(self.wanted.max(1)).saturating_sub(after);
+        let mut answering: Vec<(f32, usize)> = self
+            .droids
+            .iter()
+            .enumerate()
+            .filter(|&(m, droid)| {
+                m != n
+                    && droid.hunts_player()
+                    && answers(droid.character)
+                    && !droid.down
+                    && matches!(droid.alert, None | Some(Alert::Caution))
+                    && hears_alarm(&AI.report, from, droid.feet)
+            })
+            .map(|(m, droid)| (flat(droid.feet - from).norm(), m))
+            .collect();
+        answering.sort_by(|a, b| a.0.total_cmp(&b.0));
+        for (_, m) in answering.into_iter().take(room) {
+            let droid = &mut self.droids[m];
             droid.talking = false;
             droid.warned = 0;
             droid.threat = 0.0;
@@ -5587,9 +5616,9 @@ fn keener(stars: u32) -> f32 {
     1.0 + KEENER_PER_STAR * beyond_the_first(stars)
 }
 
-/// How many sentries, at most, go after a player wanted at `stars` stars of their own accord - not
-/// counting any that see them for themselves: joining in on a chase they see. At one star a
-/// sentry or two is enough, and the rest leave it to them; two stars call for more; from three,
+/// How many sentries, at most, are after a player wanted at `stars` stars, chasing or searching:
+/// whether they spot them for themselves, answer an alarm, or join in on a chase they see. At one
+/// star two is enough, and the rest leave it to them; two stars call for more; from three,
 /// every one that can - and those with radios call in more still, and the helicopter (see
 /// [`RADIO_STARS`]). Wanted for nothing, as many as ever.
 pub(crate) fn most_after(stars: u32) -> usize {
@@ -5601,6 +5630,14 @@ pub(crate) fn most_after(stars: u32) -> usize {
         2 => 4,
         _ => usize::MAX,
     }
+}
+
+/// How many sentries are called in after a player just wanted at `stars` stars, those after them
+/// already counting (see [`Inhabitants::send_after`]): as many as the stars allow - two at the
+/// first, four at the second - and from the third, four, as at the second, before the radios
+/// bring in the rest.
+pub(crate) fn called_after(stars: u32) -> usize {
+    most_after(stars).min(most_after(2))
 }
 
 /// How many stars the player has to be wanted at for a sentry with a radio to call for help on it.
@@ -5774,6 +5811,7 @@ mod tests {
         assert_eq!((most_after(1), most_after(2)), (2, 4), "a sentry or two at one star, more at two");
         assert_eq!(most_after(3), usize::MAX);
         assert_eq!(most_after(0), usize::MAX, "wanted for nothing, as ever");
+        assert_eq!((called_after(1), called_after(2), called_after(3)), (2, 4, 4), "two called in at one star, four at two");
         assert!((keener(5) - 1.75).abs() < 1e-6 && keener(2) > 1.0);
     }
 

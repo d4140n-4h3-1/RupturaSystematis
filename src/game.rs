@@ -143,9 +143,8 @@ const TALK_RETRY: f32 = 5.0;
 /// they are, and how far round them those it tells are, in seconds and meters; and how long out of
 /// its sight before it gives up and flies off, in seconds.
 const HELICOPTER_STARS: u32 = crate::inhabitants::RADIO_STARS;
-/// How many sentries, at least, go after the player each time they are wanted at another star -
-/// the first too - and from how far off, in meters.
-const SENT_AFTER_A_STAR: usize = 2;
+/// How far off, in meters, sentries are sent after the player from each time they are wanted at
+/// another star (see [`crate::inhabitants::called_after`]).
 const SENT_FROM: f32 = crate::inhabitants::RADIO_REACH;
 const HELICOPTER_SIGHT: f32 = 170.0;
 const HELICOPTER_TELLS_EVERY: f32 = 3.0;
@@ -1737,7 +1736,8 @@ impl MazeGame {
     }
 
     /// Each time the player is wanted at another star - the first too - sees that at least
-    /// [`SENT_AFTER_A_STAR`] sentries are after them, sending the nearest of those that are not to
+    /// as many sentries as the stars call for are after them - two at the first, four at the
+    /// second (see [`crate::inhabitants::called_after`]) - sending the nearest of those that are not to
     /// where they are (see [`Inhabitants::send_after`]).
     fn send_after_new_star(&mut self, ctx: &mut PluginContext) {
         let stars = self.stars();
@@ -1750,7 +1750,9 @@ impl MazeGame {
             return;
         };
         let at = self.player.feet(&ctx.scenes[self.scene].graph);
-        let sent = self.inhabitants.send_after(at, SENT_AFTER_A_STAR, SENT_FROM, |character| is_sentry(script, character));
+        // The star just gained, for how many may be after them (see [`crate::inhabitants::most_after`]).
+        self.inhabitants.set_wanted(stars);
+        let sent = self.inhabitants.send_after(at, crate::inhabitants::called_after(stars), SENT_FROM, |character| is_sentry(script, character));
         // Wanted at the third star, one after them with a radio calls for more - and the
         // helicopter (see [`Game::radio_calls`]).
         if stars >= crate::inhabitants::RADIO_STARS {
