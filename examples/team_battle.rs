@@ -84,7 +84,12 @@ use fyrox::{
         camera::CameraBuilder,
         collider::{Collider, ColliderBuilder, ColliderShape, GeometrySource},
         graph::{physics::RayCastOptions, Graph},
-        light::{directional::DirectionalLightBuilder, point::PointLightBuilder, BaseLightBuilder},
+        light::{
+            directional::{DirectionalLight, DirectionalLightBuilder},
+            point::{PointLight, PointLightBuilder},
+            spot::SpotLight,
+            BaseLightBuilder,
+        },
         mesh::Mesh,
         node::Node,
         pivot::PivotBuilder,
@@ -138,6 +143,9 @@ pub struct Arena {
     pub teams: usize,
     /// How many droids each team has.
     pub per_team: usize,
+    /// Whether anything casts shadows: not in a city traced in light at night, as the game has it -
+    /// the map's own lamps would draw every droid near them six times over, a shadow map a side.
+    pub shadows: bool,
 }
 
 /// The combat arena, under its roof, lit by its strips.
@@ -154,6 +162,7 @@ pub const COMBAT: Arena = Arena {
     pitch: 22.0,
     teams: 2,
     per_team: 5,
+    shadows: true,
 };
 
 /// Nexus: the battle royale's city of light round a soaring spire, on a platform in the void
@@ -175,6 +184,7 @@ pub const NEXUS: Arena = Arena {
     pitch: 14.0,
     teams: 4,
     per_team: 40,
+    shadows: false,
 };
 
 /// The forest: abandoned buildings among the trees, in the Foggy Forest's fog
@@ -195,6 +205,7 @@ pub const FOREST: Arena = Arena {
     pitch: 28.0,
     teams: 2,
     per_team: 5,
+    shadows: true,
 };
 
 impl Default for Arena {
@@ -287,6 +298,16 @@ const LOOK_EVERY: f32 = 0.15;
 /// How long a droid shot at from above goes on looking up, in seconds; and how high over a
 /// droid's feet its shots leave its gun, in meters, for where it stands.
 const LOOKING_UP: f32 = 20.0;
+/// How often at most a droid works out its route afresh to a goal that drifts, in seconds, unless
+/// it has drifted this far, in meters (see [`Battle::walk_to`]).
+const REPLAN_EVERY: f32 = 0.5;
+const REPLAN_FAR: f32 = 6.0;
+/// How many routes droids that have one to follow may work out afresh in a frame: the rest keep
+/// theirs till a later one. A droid with none always gets one.
+const ROUTES_A_FRAME: usize = 12;
+/// The most of a frame's time, in seconds, the droids' looking about and their team's survey of
+/// the ground take in at once.
+const MOST_THINKING_DT: f32 = 0.05;
 /// How many of a team at most hold the high ground; and how far from the middle of the arena, in
 /// meters, and how far a walk, it may be (see [`Battle::high_ground`]).
 const MOST_HIGH: usize = 1;
@@ -447,6 +468,8 @@ struct Droid {
     target: Option<usize>,
     /// Where it heads when there is nothing better to do.
     objective: Option<Vector3<f32>>,
+    /// How long since it last worked out its route, in seconds (see [`Battle::walk_to`]).
+    planned: f32,
     /// The high ground it holds this life, holding the line with the rifle (see
     /// [`Battle::high_ground`]): it makes for it, and holds it rather than going after an enemy
     /// it only knows of.
@@ -605,6 +628,14 @@ struct Bench {
     walked: f32,
     targeting: usize,
     fired: usize,
+    /// The engine's own count of each frame: the time it took to draw, in milliseconds, its
+    /// draw calls and its triangles.
+    render: Vec<f32>,
+    draws: Vec<f32>,
+    triangles: Vec<f32>,
+    /// The lights it drew, and the shadow maps: point, spot and cascaded, and traced shadows.
+    lights: Vec<f32>,
+    shadow_maps: Vec<f32>,
 }
 
 impl Bench {
@@ -643,7 +674,14 @@ impl Bench {
         }
         let ai: Vec<f32> = self.parts.iter().map(|p| p[0] + p[1]).collect();
         out += &format!("  {:<12} {}\n", "think+move", stats(ai));
-        out += &format!("  {:<12} {}", "whole frame", stats(self.frames.clone()));
+        out += &format!("  {:<12} {}\n", "whole frame", stats(self.frames.clone()));
+        if !self.render.is_empty() {
+            out += &format!("  {:<12} {}\n", "engine draw", stats(self.render.clone()));
+            out += &format!("  {:<12} {}\n", "draw calls", stats(self.draws.clone()));
+            out += &format!("  {:<12} {}\n", "kilotris", stats(self.triangles.clone()));
+            out += &format!("  {:<12} {}\n", "lights", stats(self.lights.clone()));
+            out += &format!("  {:<12} {}", "shadow maps", stats(self.shadow_maps.clone()));
+        }
         out
     }
 }
@@ -658,6 +696,8 @@ struct Battle {
     /// The droids' models, red's and cyan's.
     models: [Option<ModelResource>; TEAMS],
     level: Handle<Collider>,
+    /// The map as placed in the scene: its own lights are the arena's to shadow or not.
+    map_root: Handle<Node>,
     grid: Option<(WalkGrid, Vector3<f32>)>,
     /// The walkable floor as polygons, made from the grid: what the droids find their way by.
     mesh: Option<NavMesh>,
@@ -670,7 +710,11 @@ struct Battle {
     /// For each team, how many of the enemies it knows of can see each coarse cell of the
     /// ground (see [`Exposure`]) - and how long till it is worked out again.
     exposure: [Exposure; TEAMS],
-    exposure_in: f32,
+    /// Where each team's survey of it is up to, as a polygon's number (see
+    /// [`Battle::survey_exposure`]).
+    exposure_at: [usize; TEAMS],
+    /// How many more routes may be worked out this frame (see [`ROUTES_A_FRAME`]).
+    routes_left: usize,
     /// The bolts everyone fires, and those on their way to someone they will hit.
     bolts: Option<Bolts>,
     arrivals: Vec<Arrival>,
@@ -770,7 +814,7 @@ impl Battle {
             // Behind the cloud, high up: soft light from above, a little from one side.
             DirectionalLightBuilder::new(
                 BaseLightBuilder::new(
-                    BaseBuilder::new().with_local_transform(
+                    BaseBuilder::new().with_cast_shadows(self.arena.shadows).with_local_transform(
                         TransformBuilder::new()
                             .with_local_rotation(
                                 UnitQuaternion::from_axis_angle(&Vector3::y_axis(), 35f32.to_radians())
@@ -922,6 +966,15 @@ impl Battle {
                     bench.last = Some(now);
                     bench.played += dt;
                     bench.parts.push([thought, moved, 0.0, 0.0]);
+                    if let fyrox::engine::GraphicsContext::Initialized(graphics) = &*ctx.graphics_context {
+                        let stats = graphics.renderer.get_statistics();
+                        bench.render.push(stats.pure_frame_time * 1000.0);
+                        bench.draws.push(stats.geometry.draw_calls as f32);
+                        bench.triangles.push(stats.geometry.triangles_rendered as f32 / 1000.0);
+                        let l = &stats.lighting;
+                        bench.lights.push((l.point_lights_rendered + l.spot_lights_rendered + l.directional_lights_rendered) as f32);
+                        bench.shadow_maps.push((l.point_shadow_maps_rendered + l.spot_shadow_maps_rendered + l.csm_rendered) as f32);
+                    }
                     bench.walked += self.droids.iter().zip(&were).filter(|(d, _)| d.alive()).map(|(d, w)| flat(d.position - w).norm().min(1.0)).sum::<f32>();
                     bench.targeting += usize::from(self.droids.iter().any(|d| d.alive() && d.target.is_some()));
                 }
@@ -984,7 +1037,21 @@ impl Battle {
 
     fn place_level(&mut self, scene: &mut Scene, map: &ModelResource) {
         let root = map.instantiate(scene);
+        self.map_root = root;
         scene.graph.update_hierarchical_data();
+        if !self.arena.shadows {
+            let lights: Vec<Handle<Node>> = scene
+                .graph
+                .traverse_handle_iter(root)
+                .filter(|&h| {
+                    let node = &scene.graph[h];
+                    node.cast::<PointLight>().is_some() || node.cast::<SpotLight>().is_some() || node.cast::<DirectionalLight>().is_some()
+                })
+                .collect();
+            for light in lights {
+                scene.graph[light].set_cast_shadows(false);
+            }
+        }
 
         // The map marks its light strips pure magenta: they glow, and each gets a lamp.
         let mut glass = Material::standard();
@@ -1175,6 +1242,17 @@ impl Battle {
             best.len(),
             self.teams().iter().map(|t| format!("{} {}", t.name().to_lowercase(), self.spawns[t.index()].len())).collect::<Vec<_>>().join(", ")
         ));
+        // BATTLE_DUMP_GRID=<file> saves the arena's walk grid as hydroxus-ai's navmesh_bench reads
+        // it, to time its routes on this arena.
+        if let Ok(path) = std::env::var("BATTLE_DUMP_GRID") {
+            let mut out = Vec::new();
+            for v in [kept.width as u32, kept.depth as u32, kept.storeys as u32] { out.extend(v.to_le_bytes()); }
+            for v in [CELL, origin.x, origin.y, origin.z] { out.extend(v.to_le_bytes()); }
+            for row in 0..kept.rows() { for x in 0..kept.width {
+                out.push(kept.is_walkable(x, row) as u8); out.extend(kept.floor(x, row).to_le_bytes());
+            } }
+            let _ = std::fs::write(path, out);
+        }
         let mut mesh = NavMesh::build_with(&kept, origin, |_, _| 0, AI.navmesh);
         mesh.walk = AI.walk;
         self.mesh = Some(mesh);
@@ -1211,6 +1289,26 @@ impl Battle {
 
     // ------------------------------------------------------------------ the match
 
+    /// Has every light that is not the map's - each droid's eyes, its gun's muzzle, each bolt's
+    /// flash - cast no shadows. Small and many, they lit only what is right by them; but each one
+    /// in view drew a shadow map a side of everything round it, which with a hundred droids was
+    /// most of every frame.
+    fn quiet_droid_lights(&self, graph: &mut Graph) {
+        let map: std::collections::HashSet<Handle<Node>> = graph.traverse_handle_iter(self.map_root).collect();
+        let lights: Vec<Handle<Node>> = graph
+            .pair_iter()
+            .filter(|(h, node)| {
+                !map.contains(h)
+                    && node.cast_shadows()
+                    && (node.cast::<PointLight>().is_some() || node.cast::<SpotLight>().is_some())
+            })
+            .map(|(h, _)| h)
+            .collect();
+        for light in lights {
+            graph[light].set_cast_shadows(false);
+        }
+    }
+
     fn start_match(&mut self, scene: &mut Scene) {
         ragdoll::prepare(&mut scene.graph);
         match self.bolts.as_mut() {
@@ -1233,6 +1331,7 @@ impl Battle {
         for i in 0..self.droids.len() {
             self.respawn(i);
         }
+        self.quiet_droid_lights(&mut scene.graph);
         self.intel = std::array::from_fn(|_| Intel::new(self.droids.len()));
         self.going = std::array::from_fn(|_| vec![None; self.droids.len()]);
     }
@@ -1288,6 +1387,7 @@ impl Battle {
             cover_prone: false,
             target: None,
             objective: None,
+            planned: 0.0,
             high: None,
             reload: 0.0,
             look_timer: 0.0,
@@ -1372,6 +1472,9 @@ impl Battle {
         droid.fire_mode = if auto { FireMode::Auto } else { FireMode::Burst };
         droid.burst_left = 0;
         droid.rounds = pistol::MAGAZINE;
+        // Each looks about in its own time, not all on the same frame.
+        let first_look = self.random((0.0, LOOK_EVERY));
+        self.droids[i].look_timer = first_look;
     }
 
     // ------------------------------------------------------------------ the AI
@@ -1436,14 +1539,15 @@ impl Battle {
             *since += dt;
         }
         self.assign_parts();
-        self.exposure_in -= dt;
-        if self.exposure_in <= 0.0 {
-            self.exposure_in = AI.team.exposure_every;
-            self.survey_exposure(graph);
-        }
+        // After a long frame, no more of the survey, and no more looking about, than after a
+        // short one: it all came due at once, and made the next frame long too.
+        let steady = dt.min(MOST_THINKING_DT);
+        self.routes_left = ROUTES_A_FRAME;
+        self.survey_exposure(graph, steady);
         for droid in &mut self.droids {
             droid.suppressed = (droid.suppressed - dt).max(0.0);
             droid.looking_up = (droid.looking_up - dt).max(0.0);
+            droid.planned += dt;
             // Shooting heard is gone to a while, and given up once there.
             if let Some((at, age)) = droid.heard {
                 let there = flat(at - droid.position).norm() < HEARD_REACHED;
@@ -1466,9 +1570,9 @@ impl Battle {
                 continue;
             }
             self.droids[i].reload -= dt;
-            self.droids[i].look_timer -= dt;
+            self.droids[i].look_timer -= steady;
             if self.droids[i].look_timer <= 0.0 {
-                self.droids[i].look_timer = LOOK_EVERY;
+                self.droids[i].look_timer += LOOK_EVERY;
                 self.look(graph, i);
             }
             self.decide(graph, i, dt);
@@ -1583,18 +1687,29 @@ impl Battle {
 
     /// Where each team's enemies, as it knows of them, can see: works out anew, for every coarse
     /// cell of the ground, how many of them could see a droid standing there.
-    fn survey_exposure(&mut self, graph: &Graph) {
+    ///
+    /// A slice of the ground each frame, for `dt` of the survey's time, so that each team's is
+    /// worked out anew every [`AI`]'s `exposure_every` seconds as a whole, but never all at once:
+    /// with many enemies on a big arena, all of it in one frame took tens of milliseconds.
+    fn survey_exposure(&mut self, graph: &Graph, dt: f32) {
         let Some(mesh) = &self.mesh else { return };
+        let polys = mesh.len();
+        if polys == 0 {
+            return;
+        }
+        let slice = ((polys as f32 * dt / AI.team.exposure_every.max(1.0e-3)).ceil() as usize).clamp(1, polys);
         for t in 0..self.arena.teams {
-            self.exposure[t] = if self.smart[t] {
-                let alive = |j: usize| self.droids.get(j).is_some_and(|d| d.alive());
-                let seen = self.intel[t].known(&AI.team, alive);
-                Exposure::survey(&AI.team, mesh, &seen, CHEST_STANDING, |enemy, at| {
-                    Self::clear(graph, enemy + Vector3::y() * EYES_STANDING, at)
-                })
-            } else {
-                Exposure::default()
-            };
+            if !self.smart[t] {
+                continue;
+            }
+            let alive = |j: usize| self.droids.get(j).is_some_and(|d| d.alive());
+            let seen = self.intel[t].known(&AI.team, alive);
+            let from = self.exposure_at[t] % polys;
+            let to = (from + slice).min(polys);
+            self.exposure[t].survey_part(&AI.team, mesh, &seen, CHEST_STANDING, |enemy, at| {
+                Self::clear(graph, enemy + Vector3::y() * EYES_STANDING, at)
+            }, from..to);
+            self.exposure_at[t] = to % polys;
         }
     }
 
@@ -2053,9 +2168,19 @@ impl Battle {
     /// Sets droid `i` on its way to `goal`, planning a route only when the goal moves.
     fn walk_to(&mut self, i: usize, goal: Vector3<f32>) {
         let droid = &self.droids[i];
-        if droid.going_to.is_some_and(|g| (g - goal).norm() < 1.0) && !droid.route.is_empty() {
-            return;
+        // Going there already, or near enough - a goal that drifts, an enemy on the move, is
+        // routed to afresh only every so often, unless it has gone far.
+        if let (Some(g), false) = (droid.going_to, droid.route.is_empty()) {
+            let moved = (g - goal).norm();
+            if moved < 1.0 || moved < REPLAN_FAR && droid.planned < REPLAN_EVERY {
+                return;
+            }
+            // So many routes worked out this frame already: it keeps to the one it has a while.
+            if self.routes_left == 0 {
+                return;
+            }
         }
+        self.routes_left = self.routes_left.saturating_sub(1);
         if (droid.position - goal).norm() < 0.1 {
             self.droids[i].route.clear();
             return;
@@ -2072,6 +2197,7 @@ impl Battle {
         let droid = &mut self.droids[i];
         droid.route = route;
         droid.going_to = Some(goal);
+        droid.planned = 0.0;
     }
 
     fn shoot(&mut self, graph: &mut Graph, i: usize) {
