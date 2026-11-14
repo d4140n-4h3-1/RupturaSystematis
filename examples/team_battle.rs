@@ -133,9 +133,11 @@ pub struct Arena {
     /// Where the spectator camera starts, and how far down it looks, in degrees.
     pub camera: [f32; 3],
     pub pitch: f32,
-    /// How many teams fight: two, from either end along x, or up to four, from its corners - red,
+    /// How many teams fight: two, from either end along x, or up to four, from its four sides - red,
     /// cyan, green and yellow, in that order (see [`Team`]).
     pub teams: usize,
+    /// How many droids each team has.
+    pub per_team: usize,
 }
 
 /// The combat arena, under its roof, lit by its strips.
@@ -151,6 +153,28 @@ pub const COMBAT: Arena = Arena {
     camera: [0.0, 4.6, -29.0],
     pitch: 22.0,
     teams: 2,
+    per_team: 5,
+};
+
+/// Nexus: the battle royale's city of light round a soaring spire, on a platform in the void
+/// (`data/arena/br_nexus.py`), at night - its skyway ring 7 m up, its ziggurats and its domes for
+/// high ground and cover. Lit brighter than the game lights it - from all round, and a moon - since
+/// the battle does not light its glowing edges as the game does, and its droids would be lost
+/// against the black deck.
+#[allow(dead_code)] // not by every example that pulls this in
+pub const NEXUS: Arena = Arena {
+    title: "Team battle - Nexus, four teams of forty",
+    map: "data/arena/br_nexus.glb",
+    ambient: Color::opaque(96, 100, 120),
+    fog: None,
+    sun: Some(0.7),
+    sight: 45.0,
+    // Over one side of the platform, near enough to make the droids out, looking in across it
+    // to the spire, with teams coming from either side and from ahead and behind.
+    camera: [0.0, 16.0, -70.0],
+    pitch: 14.0,
+    teams: 4,
+    per_team: 40,
 };
 
 /// The forest: abandoned buildings among the trees, in the Foggy Forest's fog
@@ -170,6 +194,7 @@ pub const FOREST: Arena = Arena {
     camera: [0.0, 14.0, -40.0],
     pitch: 28.0,
     teams: 2,
+    per_team: 5,
 };
 
 impl Default for Arena {
@@ -200,8 +225,9 @@ const HOLSTER_AFTER: f32 = 6.0;
 /// The droids each team is made from: the same droid, in red, cyan, green and yellow.
 const MODELS: [&str; TEAMS] =
     ["data/droid_hostile.glb", "data/droid_full_deform.glb", "data/droid_explorer.glb", "data/droid_yellow.glb"];
-const PER_TEAM: usize = 5;
+/// How many kills win a match, at least, and for each droid a team has.
 const KILL_LIMIT: u32 = 30;
+const KILLS_PER_DROID: u32 = 3;
 
 /// Walk grid spacing: the game's survey's (see `maze::survey`).
 const CELL: f32 = 0.5;
@@ -821,6 +847,11 @@ impl Battle {
         std::env::var("BATTLE_MAP").unwrap_or_else(|_| self.arena.map.to_string())
     }
 
+    /// How many kills win a match: [`KILL_LIMIT`], or more with more droids a team.
+    fn kill_limit(&self) -> u32 {
+        KILL_LIMIT.max(KILLS_PER_DROID * self.arena.per_team as u32)
+    }
+
     /// The teams fighting, as many as the arena says.
     fn teams(&self) -> Vec<Team> {
         Team::ALL.into_iter().take(self.arena.teams.clamp(2, TEAMS)).collect()
@@ -894,7 +925,7 @@ impl Battle {
                     bench.walked += self.droids.iter().zip(&were).filter(|(d, _)| d.alive()).map(|(d, w)| flat(d.position - w).norm().min(1.0)).sum::<f32>();
                     bench.targeting += usize::from(self.droids.iter().any(|d| d.alive() && d.target.is_some()));
                 }
-                if let Some(&team) = self.teams().iter().find(|team| self.score[team.index()] >= KILL_LIMIT) {
+                if let Some(&team) = self.teams().iter().find(|team| self.score[team.index()] >= self.kill_limit()) {
                     self.phase = Phase::Won(team, 6.0);
                     Log::info(format!(
                         "Team battle: match over, {} wins, {}",
@@ -1059,10 +1090,22 @@ impl Battle {
         // Floor a droid can stand on, with room round it, as the game finds it: the arena's floor
         // and whatever stairs lead up from it to, storey over storey - a watchtower's platform
         // over the ground under it, a barracks' upper floor over its lower.
-        let Some((grid, origin)) = maze::survey::survey(graph, self.level, Handle::NONE, self.arena.sun.is_some()) else {
+        let Some((mut grid, origin)) = maze::survey::survey(graph, self.level, Handle::NONE, self.arena.sun.is_some()) else {
             return;
         };
         let (width, depth, storeys) = (grid.width, grid.depth, grid.storeys);
+        // The arena's floor: the level most of the floor is at. Whatever is found under it - under
+        // a platform in the void, out of sight - is no part of the arena.
+        let mut levels: Vec<f32> = grid.walkable_cells().map(|(x, row)| grid.floor(x, row)).collect();
+        levels.sort_by(f32::total_cmp);
+        let ground_level = levels.get(levels.len() / 2).copied().unwrap_or(0.0);
+        let under: Vec<(usize, usize)> = grid.walkable_cells().filter(|&(x, row)| grid.floor(x, row) < ground_level - 1.0).collect();
+        for &(x, row) in &under {
+            grid.set(x, row, false);
+        }
+        if !under.is_empty() {
+            Log::info(format!("Team battle: {} cells under the arena's floor at {ground_level:.1} m left out", under.len()));
+        }
 
         // Keep only the biggest connected area: anything else is outside the walls.
         let mut best: Vec<(usize, usize)> = Vec::new();
@@ -1093,8 +1136,9 @@ impl Battle {
         }
 
         // Each team starts in the tenth of the arena at its own end.
-        // On the ground, not up a barracks' stairs.
-        let ground: Vec<(usize, usize)> = best.iter().copied().filter(|&cell| grid.storey(cell) == 0).collect();
+        // On the arena's floor, not up a barracks' stairs.
+        let ground: Vec<(usize, usize)> =
+            best.iter().copied().filter(|&(x, row)| (grid.floor(x, row) - ground_level).abs() < 0.5).collect();
         let (min_x, max_x) = ground.iter().fold((usize::MAX, 0), |(lo, hi), &(x, _)| (lo.min(x), hi.max(x)));
         let (min_z, max_z) = ground.iter().fold((usize::MAX, 0), |(lo, hi), &(_, z)| (lo.min(z), hi.max(z)));
         if self.arena.teams <= 2 {
@@ -1103,23 +1147,27 @@ impl Battle {
             self.spawns[Team::Red.index()] = ground.iter().copied().filter(|&(x, _)| x <= min_x + band).collect();
             self.spawns[Team::Cyan.index()] = ground.iter().copied().filter(|&(x, _)| x >= max_x - band).collect();
         } else {
-            // From its corners, each a fifth of the way along either side - red's and cyan's
-            // across from each other, as green's and yellow's are.
-            let (band_x, band_z) = ((max_x - min_x) / 5, (max_z - min_z) / 5);
-            let corner = |low_x: bool, low_z: bool| -> Vec<(usize, usize)> {
-                ground
-                    .iter()
-                    .copied()
-                    .filter(|&(x, row)| {
-                        let z = row % depth;
-                        (if low_x { x <= min_x + band_x } else { x >= max_x - band_x })
-                            && (if low_z { z <= min_z % depth + band_z } else { z >= max_z % depth - band_z })
-                    })
-                    .collect()
+            // From its four sides - red's across from cyan's along x, green's from yellow's along
+            // z: out from the middle along each way, the outermost tenth of the floor in a band
+            // across the middle of that side - not its corners, which an octagon has not, nor
+            // whatever sticks out further off to one side.
+            let n = ground.len().max(1) as f32;
+            let (cx, cz) = ground.iter().fold((0.0, 0.0), |(a, b), &(x, row)| (a + x as f32 / n, b + (row % depth) as f32 / n));
+            let (span_x, span_z) = ((max_x - min_x) as f32, (max_z - min_z) as f32);
+            let side = |along_x: bool, sign: f32| -> Vec<(usize, usize)> {
+                let (span, across) = if along_x { (span_x, span_z) } else { (span_z, span_x) };
+                let offsets = |&(x, row): &(usize, usize)| {
+                    let (dx, dz) = (x as f32 - cx, (row % depth) as f32 - cz);
+                    if along_x { (sign * dx, dz.abs()) } else { (sign * dz, dx.abs()) }
+                };
+                let band: Vec<(usize, usize)> =
+                    ground.iter().copied().filter(|cell| offsets(cell).1 <= 0.2 * across).collect();
+                let far = band.iter().map(|cell| offsets(cell).0).fold(f32::MIN, f32::max);
+                band.into_iter().filter(|cell| offsets(cell).0 >= far - 0.1 * span).collect()
             };
-            let corners = [(true, true), (false, false), (true, false), (false, true)];
-            for (team, (low_x, low_z)) in Team::ALL.iter().zip(corners).take(self.arena.teams) {
-                self.spawns[team.index()] = corner(low_x, low_z);
+            let sides = [(true, -1.0), (true, 1.0), (false, -1.0), (false, 1.0)];
+            for (team, (along_x, sign)) in Team::ALL.iter().zip(sides).take(self.arena.teams) {
+                self.spawns[team.index()] = side(along_x, sign);
             }
         }
         Log::info(format!(
@@ -1176,7 +1224,7 @@ impl Battle {
         self.score = [0; TEAMS];
         self.following = None;
         for team in self.teams() {
-            for _ in 0..PER_TEAM {
+            for _ in 0..self.arena.per_team {
                 if let Some(droid) = self.make_droid(scene, team) {
                     self.droids.push(droid);
                 }
@@ -1262,12 +1310,17 @@ impl Battle {
 
     fn respawn(&mut self, i: usize) {
         let team = self.droids[i].team.index();
-        if self.spawns[team].is_empty() {
-            return;
-        }
-        let count = self.spawns[team].len();
+        // With nowhere of its own to start from, anywhere a team starts from.
+        let spawns = match self.spawns[team].is_empty() {
+            false => team,
+            true => match (0..TEAMS).find(|&t| !self.spawns[t].is_empty()) {
+                Some(t) => t,
+                None => return,
+            },
+        };
+        let count = self.spawns[spawns].len();
         let pick = self.rng().below(count);
-        let cell = self.spawns[team][pick];
+        let cell = self.spawns[spawns][pick];
         let count_all = self.droids.len();
         let Some((grid, origin)) = &self.grid else { return };
         let position = grid.on_floor(*origin, cell);
@@ -1296,8 +1349,8 @@ impl Battle {
         droid.heard = None;
         droid.blind.reset();
         droid.blind_at = None;
-        // Two of each team's five go round the side, one each way.
-        droid.flank = match i % PER_TEAM {
+        // Two of each five of a team go round the side, one each way.
+        droid.flank = match i % self.arena.per_team % 5 {
             1 => Some(1.0),
             3 => Some(-1.0),
             _ => None,
@@ -1512,9 +1565,9 @@ impl Battle {
                     Log::info(format!(
                         "Team battle: {} droid {} goes to cut {} droid {} off",
                         self.droids[i].team.name(),
-                        i % PER_TEAM + 1,
+                        i % self.arena.per_team + 1,
                         self.droids[j].team.name(),
-                        j % PER_TEAM + 1
+                        j % self.arena.per_team + 1
                     ));
                 }
                 self.droids[i].part = Some(part);
@@ -2365,9 +2418,9 @@ impl Battle {
             Log::info(format!(
                 "Team battle: {} {} downs {} {} from {:.0} m, {} - {}",
                 self.droids[i].team.name(),
-                i % PER_TEAM + 1,
+                i % self.arena.per_team + 1,
                 self.droids[j].team.name(),
-                j % PER_TEAM + 1,
+                j % self.arena.per_team + 1,
                 distance,
                 self.droids[i].task.label(),
                 score_line(&self.score, self.arena.teams)
@@ -2665,14 +2718,14 @@ impl Battle {
                 self.score[1],
                 alive(Team::Red),
                 alive(Team::Cyan),
-                KILL_LIMIT
+                self.kill_limit()
             )
         } else {
             format!(
                 "{}\n{} alive   first to {}",
                 teams.iter().map(|t| format!("{} {}", t.name(), self.score[t.index()])).collect::<Vec<_>>().join("   "),
                 teams.iter().map(|&t| alive(t).to_string()).collect::<Vec<_>>().join(" / "),
-                KILL_LIMIT
+                self.kill_limit()
             )
         };
         self.set_text(ctx, self.scoreboard, board);
@@ -2683,7 +2736,7 @@ impl Battle {
                 Some(d) => format!(
                     "Following {} droid {}   {:.0} hp   {} kills {} deaths   {}",
                     d.team.name(),
-                    self.following.unwrap() % PER_TEAM + 1,
+                    self.following.unwrap() % self.arena.per_team + 1,
                     d.health.max(0.0),
                     d.kills,
                     d.deaths,
