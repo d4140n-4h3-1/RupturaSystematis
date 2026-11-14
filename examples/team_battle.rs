@@ -109,6 +109,7 @@ use hydroxus_ai::{
         team::{self, Exposure, Intel, Stuck},
         vantage,
     },
+    schedule::{self, Scheduler, Work},
 };
 use maze::{
     sight_fog, AI,
@@ -172,7 +173,7 @@ pub const COMBAT: Arena = Arena {
 /// against the black deck.
 #[allow(dead_code)] // not by every example that pulls this in
 pub const NEXUS: Arena = Arena {
-    title: "Team battle - Nexus, four teams of forty",
+    title: "Team battle - Nexus, four teams of fifty",
     map: "data/arena/br_nexus.glb",
     ambient: Color::opaque(96, 100, 120),
     fog: None,
@@ -183,7 +184,7 @@ pub const NEXUS: Arena = Arena {
     camera: [0.0, 16.0, -70.0],
     pitch: 14.0,
     teams: 4,
-    per_team: 40,
+    per_team: 50,
     shadows: false,
 };
 
@@ -302,11 +303,7 @@ const LOOKING_UP: f32 = 20.0;
 /// it has drifted this far, in meters (see [`Battle::walk_to`]).
 const REPLAN_EVERY: f32 = 0.5;
 const REPLAN_FAR: f32 = 6.0;
-/// How many routes droids that have one to follow may work out afresh in a frame: the rest keep
-/// theirs till a later one. A droid with none always gets one.
-const ROUTES_A_FRAME: usize = 12;
-/// The most of a frame's time, in seconds, the droids' looking about and their team's survey of
-/// the ground take in at once.
+/// The most of a frame's time, in seconds, the team's survey of the ground takes in at once.
 const MOST_THINKING_DT: f32 = 0.05;
 /// How many of a team at most hold the high ground; and how far from the middle of the arena, in
 /// meters, and how far a walk, it may be (see [`Battle::high_ground`]).
@@ -636,6 +633,11 @@ struct Bench {
     /// The lights it drew, and the shadow maps: point, spot and cascaded, and traced shadows.
     lights: Vec<f32>,
     shadow_maps: Vec<f32>,
+    /// What the AI's scheduler made of each frame: how many droids thought, and routes
+    /// refused and overdrawn (see hydroxus-ai's `schedule`).
+    thought: Vec<f32>,
+    routes_refused: Vec<f32>,
+    routes_overdrawn: Vec<f32>,
 }
 
 impl Bench {
@@ -682,6 +684,11 @@ impl Bench {
             out += &format!("  {:<12} {}\n", "lights", stats(self.lights.clone()));
             out += &format!("  {:<12} {}", "shadow maps", stats(self.shadow_maps.clone()));
         }
+        if !self.thought.is_empty() {
+            out += &format!("\n  {:<12} {}\n", "droids think", stats(self.thought.clone()));
+            out += &format!("  {:<12} {}\n", "routes wait", stats(self.routes_refused.clone()));
+            out += &format!("  {:<12} {}", "routes over", stats(self.routes_overdrawn.clone()));
+        }
         out
     }
 }
@@ -713,8 +720,10 @@ struct Battle {
     /// Where each team's survey of it is up to, as a polygon's number (see
     /// [`Battle::survey_exposure`]).
     exposure_at: [usize; TEAMS],
-    /// How many more routes may be worked out this frame (see [`ROUTES_A_FRAME`]).
-    routes_left: usize,
+    /// Shares out the droids' thinking: which think each frame, by how important they are, and
+    /// how many routes, and how much survey of the ground, a frame allows (hydroxus-ai's
+    /// [`schedule`]; `BATTLE_PROFILE=low` its low profile).
+    scheduler: Scheduler,
     /// The bolts everyone fires, and those on their way to someone they will hit.
     bolts: Option<Bolts>,
     arrivals: Vec<Arrival>,
@@ -832,6 +841,9 @@ impl Battle {
         self.camera = CameraBuilder::new(BaseBuilder::new()).build(&mut scene.graph).to_base();
         self.scene = ctx.scenes.add(scene);
         self.map = Some(ctx.resource_manager.request::<Model>(self.map_path()));
+        let low = std::env::var("BATTLE_PROFILE").is_ok_and(|p| p.eq_ignore_ascii_case("low"));
+        self.scheduler = Scheduler::new(if low { schedule::Tuning::LOW } else { AI.schedule });
+        Log::info(format!("Team battle: the AI's {} profile", if low { "low" } else { "full" }));
         let old = std::env::var("BATTLE_OLD").unwrap_or_default();
         let old = old.to_lowercase();
         self.smart = Team::ALL.map(|team| !(old == team.name().to_lowercase() || old == "both" || old == "all"));
@@ -966,6 +978,11 @@ impl Battle {
                     bench.last = Some(now);
                     bench.played += dt;
                     bench.parts.push([thought, moved, 0.0, 0.0]);
+                    // This frame's, as the next frame starts: the last whole one's.
+                    let scheduled = self.scheduler.stats();
+                    bench.thought.push(scheduled.thought as f32);
+                    bench.routes_refused.push(scheduled.refused[Work::Route.index()] as f32);
+                    bench.routes_overdrawn.push(scheduled.overdrawn[Work::Route.index()] as f32);
                     if let fyrox::engine::GraphicsContext::Initialized(graphics) = &*ctx.graphics_context {
                         let stats = graphics.renderer.get_statistics();
                         bench.render.push(stats.pure_frame_time * 1000.0);
@@ -1472,6 +1489,7 @@ impl Battle {
         droid.fire_mode = if auto { FireMode::Auto } else { FireMode::Burst };
         droid.burst_left = 0;
         droid.rounds = pistol::MAGAZINE;
+        self.scheduler.reset(i);
         // Each looks about in its own time, not all on the same frame.
         let first_look = self.random((0.0, LOOK_EVERY));
         self.droids[i].look_timer = first_look;
@@ -1542,7 +1560,7 @@ impl Battle {
         // After a long frame, no more of the survey, and no more looking about, than after a
         // short one: it all came due at once, and made the next frame long too.
         let steady = dt.min(MOST_THINKING_DT);
-        self.routes_left = ROUTES_A_FRAME;
+        self.scheduler.begin_frame();
         self.survey_exposure(graph, steady);
         for droid in &mut self.droids {
             droid.suppressed = (droid.suppressed - dt).max(0.0);
@@ -1570,14 +1588,34 @@ impl Battle {
                 continue;
             }
             self.droids[i].reload -= dt;
-            self.droids[i].look_timer -= steady;
-            if self.droids[i].look_timer <= 0.0 {
-                self.droids[i].look_timer += LOOK_EVERY;
-                self.look(graph, i);
+            // It looks about and decides what to do on its turns, as important as it is (see
+            // `schedule`), for the time since its last; it fires every frame.
+            let importance = self.importance(i);
+            if let Some(time) = self.scheduler.due(i, importance, dt) {
+                self.droids[i].look_timer -= time.min(MOST_THINKING_DT.max(dt));
+                if self.droids[i].look_timer <= 0.0 {
+                    self.droids[i].look_timer += LOOK_EVERY;
+                    self.look(graph, i);
+                }
+                self.decide(graph, i, time);
             }
-            self.decide(graph, i, dt);
             self.shoot(graph, i);
         }
+    }
+
+    /// How important droid `i`'s thinking is, from 0 to 1 (see hydroxus-ai's [`schedule`]):
+    /// fully, caught up in the fight - with a target, shot at, after shooting it heard, firing
+    /// blind, falling back - or followed by the camera; otherwise the less, the further it is
+    /// from the camera.
+    fn importance(&self, i: usize) -> f32 {
+        let d = &self.droids[i];
+        let caught_up = d.target.is_some()
+            || d.suppressed > 0.0
+            || d.heard.is_some()
+            || d.blind.at().is_some()
+            || d.retreating
+            || self.following == Some(i);
+        schedule::importance(&self.scheduler.tuning, (d.position - self.camera_position).norm(), caught_up)
     }
 
     /// Droid `i` looks about it: becomes the more aware of each enemy it can see, the quicker the
@@ -1700,6 +1738,11 @@ impl Battle {
         let slice = ((polys as f32 * dt / AI.team.exposure_every.max(1.0e-3)).ceil() as usize).clamp(1, polys);
         for t in 0..self.arena.teams {
             if !self.smart[t] {
+                continue;
+            }
+            // As much as the frame allows of it.
+            let slice = self.scheduler.take_some(Work::Survey, slice as u32) as usize;
+            if slice == 0 {
                 continue;
             }
             let alive = |j: usize| self.droids.get(j).is_some_and(|d| d.alive());
@@ -2175,12 +2218,15 @@ impl Battle {
             if moved < 1.0 || moved < REPLAN_FAR && droid.planned < REPLAN_EVERY {
                 return;
             }
-            // So many routes worked out this frame already: it keeps to the one it has a while.
-            if self.routes_left == 0 {
+            // As many routes worked out this frame as it allows: it keeps to the one it has a
+            // while.
+            if !self.scheduler.take(Work::Route) {
                 return;
             }
+        } else {
+            // With none to follow, it cannot wait.
+            self.scheduler.force(Work::Route);
         }
-        self.routes_left = self.routes_left.saturating_sub(1);
         if (droid.position - goal).norm() < 0.1 {
             self.droids[i].route.clear();
             return;
