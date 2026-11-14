@@ -107,7 +107,7 @@ use hydroxus_ai::{
         blind::{self, BlindFire},
         roles::{self, Chaser, Part},
         team::{self, Exposure, Intel, Stuck},
-        vantage,
+        spread, vantage,
     },
     schedule::{self, Scheduler, Work},
 };
@@ -638,6 +638,11 @@ struct Bench {
     thought: Vec<f32>,
     routes_refused: Vec<f32>,
     routes_overdrawn: Vec<f32>,
+    /// How crowded the droids are, sampled every so often: the mean distance from each to its
+    /// nearest teammate, in meters, and the share of them with a teammate within a meter, in
+    /// percent.
+    nearest: Vec<f32>,
+    crowded: Vec<f32>,
 }
 
 impl Bench {
@@ -683,6 +688,10 @@ impl Bench {
             out += &format!("  {:<12} {}\n", "kilotris", stats(self.triangles.clone()));
             out += &format!("  {:<12} {}\n", "lights", stats(self.lights.clone()));
             out += &format!("  {:<12} {}", "shadow maps", stats(self.shadow_maps.clone()));
+        }
+        if !self.nearest.is_empty() {
+            out += &format!("\n  {:<12} {}\n", "nearest m", stats(self.nearest.clone()));
+            out += &format!("  {:<12} {}", "crowded %", stats(self.crowded.clone()));
         }
         if !self.thought.is_empty() {
             out += &format!("\n  {:<12} {}\n", "droids think", stats(self.thought.clone()));
@@ -978,6 +987,22 @@ impl Battle {
                     bench.last = Some(now);
                     bench.played += dt;
                     bench.parts.push([thought, moved, 0.0, 0.0]);
+                    // How crowded they are, every thirtieth frame.
+                    if bench.parts.len() % 30 == 0 {
+                        let alive: Vec<(Team, Vector3<f32>)> =
+                            self.droids.iter().filter(|d| d.alive()).map(|d| (d.team, d.position)).collect();
+                        let gaps: Vec<f32> = alive
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(a, &(team, at))| {
+                                alive.iter().enumerate().filter(|&(b, &(t, _))| b != a && t == team).map(|(_, &(_, p))| flat(p - at).norm()).min_by(f32::total_cmp)
+                            })
+                            .collect();
+                        if !gaps.is_empty() {
+                            bench.nearest.push(gaps.iter().sum::<f32>() / gaps.len() as f32);
+                            bench.crowded.push(100.0 * gaps.iter().filter(|&&g| g < 1.0).count() as f32 / gaps.len() as f32);
+                        }
+                    }
                     // This frame's, as the next frame starts: the last whole one's.
                     let scheduled = self.scheduler.stats();
                     bench.thought.push(scheduled.thought as f32);
@@ -1684,8 +1709,13 @@ impl Battle {
                 continue;
             }
             let (t, me) = (d.team.index(), d.position);
-            let nearest = self.intel[t].seen_within(AI.team.intel_time, |j| alive[j]).min_by(|a, b| (a.1 - me).norm().total_cmp(&(b.1 - me).norm()));
-            let Some((j, _)) = nearest else {
+            // The nearest it knows of - unless enough of its team are after that one already
+            // (see hydroxus-ai's `spread`).
+            let known: Vec<(usize, f32)> =
+                self.intel[t].seen_within(AI.team.intel_time, |j| alive[j]).map(|(j, at)| (j, (at - me).norm())).collect();
+            let after = |j: usize| groups.iter().find(|g| g.0 == t && g.1 == j).map_or(0, |g| g.2.len() as u32);
+            let nearest = spread::share_out(&AI.spread, known.into_iter(), after);
+            let Some(j) = nearest else {
                 self.droids[i].part = None;
                 self.droids[i].after = None;
                 continue;
@@ -1819,10 +1849,10 @@ impl Battle {
                     }
                     // Holding the high ground: it stays up there.
                     Some(_) if self.droids[i].high.is_some() => self.droids[i].high.unwrap(),
-                    Some(threat) => threat,
+                    Some(threat) => self.lane(i, threat),
                     // Shooting heard, or shot at by someone unseen: that way.
                     None => match self.droids[i].blind.at().or(self.droids[i].heard.map(|(at, _)| at)) {
-                        Some(at) => at,
+                        Some(at) => self.lane(i, at),
                         None => self.objective(i),
                     },
                 };
@@ -2050,6 +2080,18 @@ impl Battle {
         Log::info(format!("Team battle: {} droid {i} takes the high ground, {:.0} m up", team.name(), high.y - middle.y));
         self.droids[i].high = Some(high);
         Some(high)
+    }
+
+    /// Where droid `i` makes for, going to `goal` with others of its team: its own lane, side by
+    /// side with the few that go the same way across the way it comes (see hydroxus-ai's
+    /// `spread`), on the floor nearest it.
+    fn lane(&self, i: usize, goal: Vector3<f32>) -> Vector3<f32> {
+        let of = AI.spread.most_after.max(1) as usize;
+        let at = spread::lane(&AI.spread, goal, self.droids[i].position, i % of, of);
+        match &self.mesh {
+            Some(mesh) => mesh.nearest(at).map_or(goal, |n| mesh.closest_point(n, at)),
+            None => goal,
+        }
     }
 
     /// Somewhere to head for in the enemy's half, kept until it is reached - or, holding the
@@ -2624,9 +2666,28 @@ impl Battle {
     // ------------------------------------------------------------------ moving and showing
 
     fn move_droids(&mut self, dt: f32) {
+        // Where every droid on its feet is, for each to keep a little room round it (see
+        // hydroxus-ai's `spread`).
+        let standing: Vec<(usize, Vector3<f32>)> =
+            self.droids.iter().enumerate().filter(|(_, d)| d.alive()).map(|(i, d)| (i, d.position)).collect();
         for i in 0..self.droids.len() {
             if !self.droids[i].alive() {
                 continue;
+            }
+            let me = self.droids[i].position;
+            let push = spread::separation(
+                &AI.spread,
+                me,
+                standing.iter().filter(|&&(j, at)| j != i && (at - me).norm_squared() < AI.spread.personal * AI.spread.personal).map(|&(_, at)| at),
+                i as u32,
+            );
+            if push.norm_squared() > 0.0 {
+                if let Some(mesh) = &self.mesh {
+                    let to = me + push * dt;
+                    if let Some(n) = mesh.poly_at(to) {
+                        self.droids[i].position = Vector3::new(to.x, mesh.floor_of(n), to.z);
+                    }
+                }
             }
             // At the pace of what its feet are doing: jogging as it advances, running for cover,
             // and crouched, the crouch walk.
