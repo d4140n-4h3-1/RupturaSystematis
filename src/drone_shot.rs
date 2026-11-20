@@ -51,7 +51,7 @@ pub const SHOT_MODEL: &str = "data/drone_shot.glb";
 /// flown longest.
 const SHOTS: usize = 12;
 /// How fast one flies, in meters per second, and how far before it is gone, if it hits nothing.
-const SPEED: f32 = 12.0;
+pub const SPEED: f32 = 12.0;
 const RANGE: f32 = 40.0;
 /// How brightly it glows: as many times as its colour at strength 1, and its core brighter still.
 const GLOW: f32 = 3.0;
@@ -201,6 +201,13 @@ impl Shots {
     /// muzzles, all flying the same way side by side, aimed from its middle, as big and as hurtful
     /// as it has them, glowing its colour (strength 1 at its brightest).
     pub fn fire(&mut self, graph: &mut Graph, volley: &Fired, at: Vector3<f32>, by: Handle<Collider>) {
+        self.fire_to(graph, volley, at, by, None);
+    }
+
+    /// Fires `volley` as [`Shots::fire`] does, the shots flying no further than `reach`, in
+    /// meters, if given - gone where they get to something with no body to stop them, whose hit
+    /// is reckoned, as a team battle's droids' are.
+    pub fn fire_to(&mut self, graph: &mut Graph, volley: &Fired, at: Vector3<f32>, by: Handle<Collider>, reach: Option<f32>) {
         let Fired { ref muzzles, from, size, damage, colour } = *volley;
         let Some(direction) = (at - from).try_normalize(1.0e-4) else {
             return;
@@ -216,7 +223,7 @@ impl Shots {
                 fired_at: from,
                 position: muzzle,
                 direction,
-                range: RANGE,
+                range: reach.map_or(RANGE, |reach| reach.clamp(0.0, RANGE)),
                 landed: None,
                 from: by,
                 size,

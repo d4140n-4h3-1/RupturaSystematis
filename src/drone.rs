@@ -744,6 +744,15 @@ impl Drone {
         true
     }
 
+    /// Has it fight for `side`, called in by one of them: their shots and its own side's pass it
+    /// by, and it watches all the while for the other sides. It keeps no post: called in, it
+    /// searches where it was sent, then patrols wherever that leaves it.
+    pub fn take_side(&mut self, side: Side) {
+        self.side = Some(side);
+        self.mind.post = None;
+        self.mind.watches = true;
+    }
+
     /// Takes it out of the round: out of sight, and out of the way of bolts, until it is put down
     /// again.
     pub fn hide(&mut self, graph: &mut Graph) {
@@ -982,7 +991,12 @@ impl Drone {
             },
             &mut hits,
         );
-        let clear = hits.iter().find(|hit| hit.collider != self.collider).is_some_and(|hit| hit.collider == player.collider);
+        // The first thing in the way is them; or, for one with no body to hit - a team battle's
+        // droid, whose shots are reckoned rather than flown - nothing is in the way at all.
+        let clear = match hits.iter().find(|hit| hit.collider != self.collider) {
+            Some(hit) => hit.collider == player.collider,
+            None => player.collider.is_none(),
+        };
         if clear { visible } else { 0.0 }
     }
 

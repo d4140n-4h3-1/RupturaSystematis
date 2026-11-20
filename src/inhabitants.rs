@@ -818,7 +818,7 @@ impl Default for Grouping {
 /// Hangs an earpiece made from `model` from the head of the droid whose model is under `root`:
 /// from the bone its eyes ride, where [`EARPIECE_FROM_EYES`] says from them. So it goes where the
 /// head goes - and with it, blown apart or broken off.
-fn put_on_earpiece(scene: &mut Scene, root: Handle<Node>, model: &ModelResource) -> Option<Handle<Node>> {
+pub fn put_on_earpiece(scene: &mut Scene, root: Handle<Node>, model: &ModelResource) -> Option<Handle<Node>> {
     let (eyes, _) = scene.graph.find_by_name(root, EYES)?;
     let head = scene.graph[eyes].parent();
     let from_eyes = Matrix4::from_fn(|r, c| EARPIECE_FROM_EYES[r][c]);

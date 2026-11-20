@@ -41,6 +41,14 @@
 //! droid at a time, to see the difference - seeing, hearing and firing blind as the other side
 //! does: each match ends by saying which side won.
 //!
+//! A few droids - one in twelve or so - start a life with a radio, the game's yellow earpiece;
+//! the rest may come by one, taking it off a fallen droid of any side they pass, or going a
+//! little out of their way for one with no fight on. With an enemy in sight, one now and then
+//! radios for a drone - the game's ball or its quadcopter, whichever comes - and is brought in
+//! out of sight of it, to search where that enemy is. A team has one out at a time, and waits a
+//! while after it has gone. A drone goes after the nearest enemy it sees, droid or drone, and
+//! flies off once it finds no one; a droid with no droid to fight shoots back at it.
+//!
 //! `BATTLE_BENCH=<seconds>` benchmarks it: with vsync off, it times each part of every frame of
 //! play - the droids thinking, moving, shown, and their bolts - and the frame as a whole, for that
 //! many seconds of play, then says how long each took and quits. `BATTLE_SEED=<n>` fights the same
@@ -106,6 +114,7 @@ use hydroxus_ai::{
     tactics::{
         blind::{self, BlindFire},
         roles::{self, Chaser, Part},
+        patrol::State as DroneState,
         team::{self, Exposure, Intel, Stuck},
         spread, vantage,
     },
@@ -114,6 +123,8 @@ use hydroxus_ai::{
 use maze::{
     sight_fog, AI,
     dismember,
+    put_on_earpiece, Drone, DroneKind, DroneShots, DroneTarget, Side, DRONE_HOVER, DRONE_SHOT_MODEL,
+    DRONE_SHOT_SPEED, EARPIECE_MODEL, RADIO_CALL,
     player::{
         avatar::{Avatar, Going, Wall},
         pistol::{self, Bolts, FireMode, BOLT_SPEED},
@@ -310,6 +321,33 @@ const MOST_THINKING_DT: f32 = 0.05;
 const MOST_HIGH: usize = 1;
 const HIGH_NEAR: f32 = 60.0;
 const HIGH_REACH: f32 = 160.0;
+/// Radios, and the drones they call in (see [`Battle::radio`] and [`Battle::fly_drones`]). How
+/// many droids start a life with an earpiece, out of 1: few. The rest may come by one - taking a
+/// fallen droid's, friend's or foe's, if they pass within `RADIO_PICKUP` of it, in meters, or
+/// with no fight on go out of their way for one as near as `RADIO_DETOUR` - before it is gone with
+/// the body.
+const RADIO_CHANCE: f32 = 0.08;
+const RADIO_PICKUP: f32 = 1.5;
+const RADIO_DETOUR: f32 = 8.0;
+/// How likely a droid with a radio is to call a drone in, a second, while it has an enemy in
+/// sight and its team none in the air; the call takes the game's `RADIO_CALL`, cut short if it
+/// is shot down first. One drone a team at a time, and a while after the last has gone, in
+/// seconds, before the next.
+const CALL_RATE: f32 = 0.3;
+const CALL_AGAIN: f32 = 30.0;
+/// How long a drone stays, in seconds, at most - unless after someone - and how long it patrols
+/// finding no one before it flies off; how long a shot-down one lies where it fell.
+const DRONE_STAYS: f32 = 60.0;
+const DRONE_IDLE: f32 = 12.0;
+const WRECK_LIES: f32 = 8.0;
+/// How often a drone looks over who it can see, in seconds.
+const DRONE_LOOK_EVERY: f32 = 0.2;
+/// How much a drone's shot hurts a droid, times its kind's part of the drone's (the quadcopter's
+/// half, three times as often); how likely it is to hit, close by, and how far off it hits
+/// no more; and how much harder to hit a drone is, small and in the air, than a droid.
+const DRONE_HARM: f32 = 14.0;
+const DRONE_HIT: (f32, f32) = (0.75, 50.0);
+const AT_DRONE_HARDER: f32 = 0.5;
 const HELD_AT: f32 = 1.3;
 fn sight(range: f32) -> Sight {
     Sight { range, cone: 70f32.to_radians(), ..Sight::DEFAULT }
@@ -502,6 +540,13 @@ struct Droid {
     /// whose they were.
     blind: BlindFire,
     blind_at: Option<usize>,
+    /// Whether it has a radio, an earpiece, this life - from the start, or taken off the fallen -
+    /// and the earpiece on its head, if it is showing one; how long it has left calling a drone
+    /// in, while it is; and the enemy drone it shoots at, seeing no droid to.
+    radio: bool,
+    earpiece: Handle<Node>,
+    calling: Option<f32>,
+    air_target: Option<usize>,
 }
 
 impl Droid {
@@ -578,6 +623,8 @@ impl Droid {
 #[derive(Debug, Clone, Copy)]
 struct Shot {
     target: usize,
+    /// At an enemy drone, this one, rather than at `target`.
+    drone: Option<usize>,
     end: Vector3<f32>,
     hits: bool,
     damage: f32,
@@ -590,6 +637,8 @@ struct Shot {
 struct Arrival {
     shooter: usize,
     target: usize,
+    /// Onto an enemy drone, this one, rather than onto `target`.
+    drone: Option<usize>,
     damage: f32,
     from: Vector3<f32>,
     to: Vector3<f32>,
@@ -605,6 +654,91 @@ enum Phase {
     Playing,
     /// The match is over; a new one starts when the time runs out.
     Won(Team, f32),
+}
+
+/// Nobody, for a drone after no one: far under the floor.
+const NOBODY: DroneTarget = DroneTarget {
+    feet: Vector3::new(0.0, -1000.0, 0.0),
+    middle: Vector3::new(0.0, -1000.0, 0.0),
+    collider: Handle::NONE,
+    posture: Posture::Standing,
+    seeing: Seeing { dark: true, fog: None, looking_up: false },
+    armed: false,
+};
+
+/// What a drone is after: a droid, or another team's drone, by its index.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Foe {
+    Droid(usize),
+    Drone(usize),
+}
+
+/// Who a shot that hit a droid came from: a droid, or a drone, by its index.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum By {
+    Droid(usize),
+    Drone(usize),
+}
+
+/// One of a team's drones, waiting to be called in or in the air: which team it fights for, how
+/// long it has been out, how long it has patrolled finding no one or lain shot down, who it is
+/// after and how long till it looks again.
+#[derive(Debug)]
+struct Called {
+    drone: Drone,
+    team: Team,
+    out_for: f32,
+    idle_for: f32,
+    down_for: f32,
+    foe: Option<Foe>,
+    look_in: f32,
+}
+
+/// A drone's shot on its way to the droid it hits.
+#[derive(Debug, Clone, Copy)]
+struct DroneArrival {
+    drone: usize,
+    target: usize,
+    damage: f32,
+    from: Vector3<f32>,
+    to: Vector3<f32>,
+    left: f32,
+}
+
+/// The drones the teams' radios call in: the game's security drone, the ball, and its quadcopter,
+/// one of each for every team, waiting out of sight until called (see [`Battle::radio`]), with
+/// their models, the earpiece's, and their shots.
+#[derive(Debug, Default)]
+struct AirSupport {
+    drone_model: Option<ModelResource>,
+    quad_model: Option<ModelResource>,
+    shot_model: Option<ModelResource>,
+    earpiece: Option<ModelResource>,
+    drones: Vec<Called>,
+    shots: Option<DroneShots>,
+    /// How long each team waits yet before it can call another.
+    wait: [f32; TEAMS],
+    arrivals: Vec<DroneArrival>,
+}
+
+impl AirSupport {
+    /// Whether drone `n` is in the air, and not shot down.
+    fn up(&self, n: usize) -> bool {
+        self.drones.get(n).is_some_and(|c| c.drone.is_placed() && c.drone.state() != DroneState::Down)
+    }
+
+    /// Whether `team` has a drone out, up or lying shot down.
+    fn out(&self, team: Team) -> bool {
+        self.drones.iter().any(|c| c.team == team && c.drone.is_placed())
+    }
+
+    /// Whether every model has loaded, or failed to: the drones are left out without theirs.
+    fn settled(&self) -> bool {
+        [&self.drone_model, &self.quad_model, &self.shot_model, &self.earpiece]
+            .into_iter()
+            .flatten()
+            .all(|m| m.is_ok() || m.is_failed_to_load())
+    }
 }
 
 /// A benchmark of the battle (see `BATTLE_BENCH` at the top): each frame of play, how long its
@@ -736,6 +870,8 @@ struct Battle {
     /// The bolts everyone fires, and those on their way to someone they will hit.
     bolts: Option<Bolts>,
     arrivals: Vec<Arrival>,
+    /// The drones the teams' radios call in, and their shots (see [`AirSupport`]).
+    air: AirSupport,
     /// Where each team last saw each enemy, and how long ago.
     intel: [Intel; TEAMS],
     /// Which way each team has seen each enemy going (see [`Battle::note_going`]): where it was
@@ -864,6 +1000,11 @@ impl Battle {
         for team in teams {
             self.models[team.index()] = Some(ctx.resource_manager.request::<Model>(MODELS[team.index()]));
         }
+        let request = |path: &str| Some(ctx.resource_manager.request::<Model>(path));
+        self.air.drone_model = request(DroneKind::Security.model());
+        self.air.quad_model = request(DroneKind::Quad.model());
+        self.air.shot_model = request(DRONE_SHOT_MODEL);
+        self.air.earpiece = request(EARPIECE_MODEL);
 
         ctx.user_interfaces.add(UserInterface::new(Vector2::new(1280.0, 720.0)));
         let ui = ctx.user_interfaces.first_mut();
@@ -952,7 +1093,7 @@ impl Battle {
                 } else if models.iter().any(Option::is_none) {
                     self.set_text(ctx, self.scoreboard, format!("Could not load {MODELS:?}"));
                     self.map = None;
-                } else if map.is_ok() && models.iter().flatten().all(|m| m.is_ok()) {
+                } else if map.is_ok() && models.iter().flatten().all(|m| m.is_ok()) && self.air.settled() {
                     self.place_level(&mut ctx.scenes[self.scene], &map);
                     self.phase = Phase::Settling(0);
                 }
@@ -963,6 +1104,7 @@ impl Battle {
                 let graph = &ctx.scenes[self.scene].graph;
                 self.survey(graph);
                 self.find_cover(graph);
+                self.make_drones(&mut ctx.scenes[self.scene]);
                 self.start_match(&mut ctx.scenes[self.scene]);
                 self.phase = Phase::Playing;
             }
@@ -974,6 +1116,8 @@ impl Battle {
                 let thought = Bench::ms(t);
                 let t = std::time::Instant::now();
                 self.move_droids(dt);
+                self.fly_drones(graph, dt);
+                self.drone_shots_fly(graph, dt);
                 let moved = Bench::ms(t);
                 if let Some(bench) = self.bench.as_mut() {
                     let now = std::time::Instant::now();
@@ -1041,12 +1185,14 @@ impl Battle {
         }
         if matches!(self.phase, Phase::Playing | Phase::Won(..)) {
             self.raise_the_fallen(&mut ctx.scenes[self.scene]);
+            self.wear_radios(&mut ctx.scenes[self.scene]);
         }
         for i in 0..self.droids.len() {
             let at = self.droids[i]
                 .target
                 .map(|j| self.droids[j].chest())
-                .or(self.droids[i].suppress_at.map(|(_, at)| at));
+                .or(self.droids[i].suppress_at.map(|(_, at)| at))
+                .or(self.droids[i].air_target.filter(|&n| self.air.up(n)).map(|n| self.air.drones[n].drone.at()));
             self.droids[i].target_at = at;
         }
         let graph = &mut ctx.scenes[self.scene].graph;
@@ -1358,6 +1504,15 @@ impl Battle {
             None => self.bolts = Some(Bolts::new(&mut scene.graph)),
         }
         self.arrivals.clear();
+        self.air.arrivals.clear();
+        self.air.wait = [0.0; TEAMS];
+        if let Some(shots) = self.air.shots.as_mut() {
+            shots.clear(&mut scene.graph);
+        }
+        for called in &mut self.air.drones {
+            called.drone.hide(&mut scene.graph);
+            called.foe = None;
+        }
         for mut droid in self.droids.drain(..) {
             Self::clear_body(&mut scene.graph, &mut droid);
         }
@@ -1447,6 +1602,10 @@ impl Battle {
             heard: None,
             blind: BlindFire::default(),
             blind_at: None,
+            radio: false,
+            earpiece: Handle::NONE,
+            calling: None,
+            air_target: None,
         })
     }
 
@@ -1498,6 +1657,12 @@ impl Battle {
             _ => None,
         };
         self.pick_gun(i);
+        // Now and then, one with a radio.
+        let radio = self.random((0.0, 1.0)) < RADIO_CHANCE;
+        let droid = &mut self.droids[i];
+        droid.radio = radio;
+        droid.calling = None;
+        droid.air_target = None;
     }
 
     /// Droid `i` picks its gun for the life it is starting, as it likes and for what it is to do:
@@ -1621,9 +1786,12 @@ impl Battle {
                 if self.droids[i].look_timer <= 0.0 {
                     self.droids[i].look_timer += LOOK_EVERY;
                     self.look(graph, i);
+                    self.look_for_drones(graph, i);
                 }
                 self.decide(graph, i, time);
+                self.go_for_radio(i);
             }
+            self.radio(graph, i, dt);
             self.shoot(graph, i);
         }
     }
@@ -1635,6 +1803,8 @@ impl Battle {
     fn importance(&self, i: usize) -> f32 {
         let d = &self.droids[i];
         let caught_up = d.target.is_some()
+            || d.air_target.is_some()
+            || d.calling.is_some()
             || d.suppressed > 0.0
             || d.heard.is_some()
             || d.blind.at().is_some()
@@ -2292,14 +2462,17 @@ impl Battle {
         // At its target, or with none in sight, at where an enemy was just seen, to keep them
         // down: that goes into their cover, or wide.
         let blind = self.droids[i].blind_at.zip(self.droids[i].blind.at());
-        let (j, keeping_down) = match (self.droids[i].target, self.droids[i].suppress_at) {
-            (Some(j), _) => (j, None),
-            (None, Some((j, at))) => (j, Some(at)),
+        let air = self.droids[i].air_target.filter(|&n| self.air.up(n));
+        // At a droid - or, with none to fire at, at an enemy drone it can see, `drone`.
+        let (j, keeping_down, drone) = match (self.droids[i].target, self.droids[i].suppress_at) {
+            (Some(j), _) => (j, None, None),
+            (None, Some((j, at))) => (j, Some(at), None),
             // Shot at by someone it cannot see: blind, back where the bolts came from.
             (None, None) if blind.is_some() => {
                 let (j, at) = blind.unwrap();
-                (j, Some(blind::aim(&AI.blind, at, self.rng())))
+                (j, Some(blind::aim(&AI.blind, at, self.rng())), None)
             }
+            (None, None) if air.is_some() => (i, None, air),
             (None, None) => {
                 // Nothing to fire at: a burst under way stops.
                 self.droids[i].burst_left = 0;
@@ -2312,15 +2485,16 @@ impl Battle {
             || self.droids[i].crouched
             || hidden
             || self.droids[i].avatar.changing_posture()
-            || !self.droids[j].alive()
+            || (drone.is_none() && !self.droids[j].alive())
             || self.droids[i].pending.is_some()
         {
             return;
         }
-        let (from, to) = (
-            self.droids[i].eyes() - Vector3::y() * 0.35,
-            keeping_down.unwrap_or_else(|| self.droids[j].chest()),
-        );
+        let aim_at = match drone {
+            Some(n) => self.air.drones[n].drone.at(),
+            None => self.droids[j].chest(),
+        };
+        let (from, to) = (self.droids[i].eyes() - Vector3::y() * 0.35, keeping_down.unwrap_or(aim_at));
         // Only while facing them - and, but for leaning out round tall cover, with its body turned
         // near enough to them for its aim to reach, not still stepping round to them.
         let droid = &self.droids[i];
@@ -2370,11 +2544,15 @@ impl Battle {
         if moving {
             chance *= 0.5;
         }
-        if !self.droids[j].route.is_empty() {
-            chance *= 0.75;
-        }
-        if self.droids[j].prone {
-            chance *= PRONE_HARDER;
+        if drone.is_some() {
+            chance *= AT_DRONE_HARDER;
+        } else {
+            if !self.droids[j].route.is_empty() {
+                chance *= 0.75;
+            }
+            if self.droids[j].prone {
+                chance *= PRONE_HARDER;
+            }
         }
         let hit_cover = Self::blocked(graph, from, to);
         let hit = keeping_down.is_none() && hit_cover.is_none() && self.random((0.0, 1.0)) < chance;
@@ -2391,7 +2569,7 @@ impl Battle {
         // does its harm when it gets there (see `bolts_arrive`).
         let damage = self.random(DAMAGE) * if rifle { RIFLE_HARM } else { 1.0 };
         self.droids[i].fired = true;
-        self.droids[i].pending = Some(Shot { target: j, end, hits: hit, damage, waited: 0.0 });
+        self.droids[i].pending = Some(Shot { target: j, drone, end, hits: hit, damage, waited: 0.0 });
     }
 
     /// Droid `i` fires from `from`: every enemy the shot carries to along the floor (see
@@ -2483,7 +2661,11 @@ impl Battle {
             } else {
                 from
             };
-            let chest = self.droids[shot.target].chest();
+            // Where it is aimed: their chest, or the drone it fires at, where it is now.
+            let (chest, there) = match shot.drone {
+                Some(n) => (self.air.drones[n].drone.at(), self.air.up(n)),
+                None => (self.droids[shot.target].chest(), self.droids[shot.target].alive()),
+            };
             let Some(aimed) = (chest - from).try_normalize(1.0e-3) else { continue };
             // How far over the barrel was, for it to ask that much less next time.
             if let (Some(pointed), Some(wanted)) = (heading_of(pointing), heading_of(aimed)) {
@@ -2498,7 +2680,7 @@ impl Battle {
                 );
             }
             let onto = |to: Vector3<f32>| Some((to - from).norm()).filter(|_| Self::clear(graph, from, to));
-            let landing = if !shot.hits || !self.droids[shot.target].alive() {
+            let landing = if !shot.hits || !there {
                 None
             } else if pointing.dot(&aimed) >= AIM_SNAP.cos() {
                 onto(chest).map(|length| (aimed, length))
@@ -2522,6 +2704,7 @@ impl Battle {
                     self.arrivals.push(Arrival {
                         shooter: i,
                         target: shot.target,
+                        drone: shot.drone,
                         damage: shot.damage,
                         from,
                         to: from + way * length,
@@ -2586,19 +2769,42 @@ impl Battle {
             !here
         });
         for arrival in arrived {
-            let Arrival { shooter: i, target: j, damage, from, to, .. } = arrival;
+            let Arrival { shooter: i, target: j, drone, damage, from, to, .. } = arrival;
+            if let Some(n) = drone {
+                // Onto a drone: a hit, as the player's bolt is to one in the game.
+                let collider = self.air.drones[n].drone.collider();
+                if self.air.up(n) && self.air.drones[n].drone.shot(graph, collider, from, 1) == Some(true) {
+                    Log::info(format!(
+                        "Team battle: {} {} brings down {}'s {:?} drone",
+                        self.droids[i].team.name(),
+                        i % self.arena.per_team + 1,
+                        self.air.drones[n].team.name(),
+                        self.air.drones[n].drone.kind()
+                    ));
+                }
+                continue;
+            }
             if self.droids[j].alive() {
-                self.hit(graph, i, j, damage, from, to);
+                self.hit(graph, By::Droid(i), j, damage, from, to);
             }
         }
     }
 
-    /// Droid `i`'s bolt, fired from `from`, gets to droid `j` at `to`, for `damage`.
-    fn hit(&mut self, graph: &mut Graph, i: usize, j: usize, damage: f32, from: Vector3<f32>, to: Vector3<f32>) {
+    /// A bolt fired `by` a droid or a drone from `from` gets to droid `j` at `to`, for `damage`.
+    fn hit(&mut self, graph: &mut Graph, by: By, j: usize, damage: f32, from: Vector3<f32>, to: Vector3<f32>) {
         let distance = (to - from).norm();
         let eagerness = self.eagerness(j);
         let target = &mut self.droids[j];
-        Self::shot_at_by(target, i, from, eagerness);
+        match by {
+            By::Droid(i) => Self::shot_at_by(target, i, from, eagerness),
+            // Shot at by a drone: it shoots back, with no droid to fight.
+            By::Drone(n) => {
+                if target.target.is_none() {
+                    target.air_target = Some(n);
+                }
+                target.suppressed = AI.team.suppressed_for;
+            }
+        }
         target.health -= damage;
         target.hurt_flash = 0.12;
         if target.health <= 0.0 {
@@ -2626,17 +2832,31 @@ impl Battle {
             }
             target.deaths += 1;
             target.route.clear();
-            self.droids[i].kills += 1;
-            self.droids[i].target = None;
-            self.score[self.droids[i].team.index()] += 1;
+            target.calling = None;
+            target.air_target = None;
+            let who = match by {
+                By::Droid(i) => {
+                    self.droids[i].kills += 1;
+                    self.droids[i].target = None;
+                    self.score[self.droids[i].team.index()] += 1;
+                    format!("{} {}", self.droids[i].team.name(), i % self.arena.per_team + 1)
+                }
+                By::Drone(n) => {
+                    let called = &mut self.air.drones[n];
+                    called.foe = None;
+                    self.score[called.team.index()] += 1;
+                    format!("{}'s {:?} drone", called.team.name(), called.drone.kind())
+                }
+            };
+            let doing = match by {
+                By::Droid(i) => self.droids[i].task.label(),
+                By::Drone(_) => "from the air",
+            };
             Log::info(format!(
-                "Team battle: {} {} downs {} {} from {:.0} m, {} - {}",
-                self.droids[i].team.name(),
-                i % self.arena.per_team + 1,
+                "Team battle: {who} downs {} {} from {:.0} m, {doing} - {}",
                 self.droids[j].team.name(),
                 j % self.arena.per_team + 1,
                 distance,
-                self.droids[i].task.label(),
                 score_line(&self.score, self.arena.teams)
             ));
             for intel in &mut self.intel {
@@ -2649,7 +2869,10 @@ impl Battle {
             }
         } else {
             // Shot at out in the open: get to cover. Badly hurt anywhere: fall back.
-            let threat = self.droids[i].position;
+            let threat = match by {
+                By::Droid(i) => self.droids[i].position,
+                By::Drone(n) => self.air.drones[n].drone.at() - Vector3::y() * DRONE_HOVER,
+            };
             let hurt = self.droids[j].health < RETREAT_HEALTH;
             let exposed = matches!(self.droids[j].task, Task::Advance | Task::Standing { .. });
             if exposed || hurt {
@@ -2662,6 +2885,354 @@ impl Battle {
     }
 
 
+
+    // ------------------------------------------------------------------ radios and drones
+
+    /// Makes every team's drones, a ball and a quadcopter each, out of sight until one of its
+    /// radios calls one in, and the shots they fire. Without their models there are none.
+    fn make_drones(&mut self, scene: &mut Scene) {
+        let ok = |model: &Option<ModelResource>| model.clone().filter(|m| m.is_ok());
+        if let Some(model) = ok(&self.air.shot_model) {
+            self.air.shots = Some(DroneShots::spawn(&model, scene));
+        }
+        let kinds = [(DroneKind::Security, ok(&self.air.drone_model)), (DroneKind::Quad, ok(&self.air.quad_model))];
+        for team in self.teams() {
+            for (kind, model) in &kinds {
+                let Some(drone) = model.as_ref().and_then(|model| Drone::spawn(model, scene, *kind)) else { continue };
+                self.air.drones.push(Called { drone, team, out_for: 0.0, idle_for: 0.0, down_for: 0.0, foe: None, look_in: 0.0 });
+            }
+        }
+        match self.air.drones.is_empty() || self.air.shots.is_none() {
+            true => Log::warn("Team battle: no drones to call in"),
+            false => Log::info(format!("Team battle: {} drones waiting to be called in", self.air.drones.len())),
+        }
+    }
+
+    /// Droid `i`'s radio, if it has one, for another `dt`. With an enemy in sight, its team with
+    /// no drone out and not waiting after the last, now and then it calls one in - only one of
+    /// a team at a time - which takes it the game's `RADIO_CALL`: shot down first, no drone.
+    fn radio(&mut self, graph: &mut Graph, i: usize, dt: f32) {
+        let droid = &self.droids[i];
+        if !droid.alive() || !droid.radio || self.air.drones.is_empty() {
+            return;
+        }
+        let team = droid.team;
+        if let Some(left) = droid.calling {
+            if left > dt {
+                self.droids[i].calling = Some(left - dt);
+            } else {
+                self.droids[i].calling = None;
+                self.call_drone(graph, i);
+            }
+            return;
+        }
+        if droid.target.is_none() || self.air.out(team) || self.air.wait[team.index()] > 0.0 {
+            return;
+        }
+        if self.random((0.0, 1.0)) >= CALL_RATE * dt || self.droids.iter().any(|d| d.team == team && d.calling.is_some()) {
+            return;
+        }
+        self.droids[i].calling = Some(RADIO_CALL);
+        Log::info(format!("Team battle: {} {} radios for a drone", team.name(), i % self.arena.per_team + 1));
+    }
+
+    /// Droid `i` has radioed for a drone: one of its team's, either kind, as it comes, is put
+    /// down out of sight of it and sent to search where the enemy it saw is.
+    fn call_drone(&mut self, graph: &mut Graph, i: usize) {
+        let team = self.droids[i].team;
+        let at = self.droids[i]
+            .target
+            .filter(|&j| self.droids[j].alive())
+            .map(|j| self.droids[j].position)
+            .or_else(|| self.nearest_known_enemy(i));
+        let waiting: Vec<usize> =
+            (0..self.air.drones.len()).filter(|&n| self.air.drones[n].team == team && !self.air.drones[n].drone.is_placed()).collect();
+        let (Some(at), false) = (at, waiting.is_empty() || self.air.out(team)) else { return };
+        let n = waiting[self.rng().below(waiting.len())];
+        let feet = self.droids[i].position;
+        let (Some(mesh), Some(rng)) = (self.mesh.as_ref(), self.rng.as_mut()) else { return };
+        let called = &mut self.air.drones[n];
+        if !called.drone.call_in(graph, mesh, feet, at, rng) {
+            self.air.wait[team.index()] = 5.0;
+            return;
+        }
+        called.drone.take_side(Side::Lone(team.index() as u8));
+        (called.out_for, called.idle_for, called.down_for, called.foe, called.look_in) = (0.0, 0.0, 0.0, None, 0.0);
+        Log::info(format!(
+            "Team battle: {} {}'s call brings in a {:?} drone",
+            team.name(),
+            i % self.arena.per_team + 1,
+            called.drone.kind()
+        ));
+    }
+
+    /// With no fight on, going about its business, a droid with no radio goes out of its way for
+    /// a fallen droid's lying near, before it is gone with the body.
+    fn go_for_radio(&mut self, i: usize) {
+        let me = &self.droids[i];
+        if !me.alive() || me.radio || me.target.is_some() || me.suppressed > 0.0 || me.retreating || !matches!(me.task, Task::Advance) {
+            return;
+        }
+        let at = me.position;
+        let near = |d: &&Droid| d.radio && d.fallen && d.dead_for.is_some_and(|left| left > 1.0);
+        let lying = self.droids.iter().filter(near).map(|d| d.position).filter(|p| flat(p - at).norm() < RADIO_DETOUR);
+        if let Some(there) = lying.min_by(|a, b| flat(a - at).norm().total_cmp(&flat(b - at).norm())) {
+            self.walk_to(i, there);
+        }
+    }
+
+    /// Each fallen droid's radio, still on it, is taken by the first droid without one that
+    /// comes by - of its own team or another.
+    fn take_radios(&mut self) {
+        for k in 0..self.droids.len() {
+            if self.droids[k].alive() || !self.droids[k].radio {
+                continue;
+            }
+            let at = self.droids[k].position;
+            let by = |d: &Droid| d.alive() && !d.radio && flat(d.position - at).norm() < RADIO_PICKUP;
+            let Some(i) = self.droids.iter().position(by) else { continue };
+            self.droids[k].radio = false;
+            self.droids[i].radio = true;
+            Log::info(format!(
+                "Team battle: {} {} takes {} {}'s radio",
+                self.droids[i].team.name(),
+                i % self.arena.per_team + 1,
+                self.droids[k].team.name(),
+                k % self.arena.per_team + 1
+            ));
+        }
+    }
+
+    /// Puts an earpiece on each droid on its feet that has a radio, and takes it off one that
+    /// has not; a fallen droid's taken off it is gone from its head.
+    fn wear_radios(&mut self, scene: &mut Scene) {
+        let Some(model) = self.air.earpiece.clone().filter(|m| m.is_ok()) else { return };
+        for droid in &mut self.droids {
+            let shown = scene.graph.is_valid_handle(droid.earpiece);
+            if droid.fallen {
+                if shown && !droid.radio {
+                    scene.graph[droid.earpiece].set_visibility(false);
+                }
+                continue;
+            }
+            match (droid.radio, shown) {
+                (true, false) => droid.earpiece = put_on_earpiece(scene, droid.root, &model).unwrap_or_default(),
+                (false, true) => {
+                    scene.graph.remove_node(droid.earpiece);
+                    droid.earpiece = Handle::NONE;
+                }
+                _ => (),
+            }
+        }
+    }
+
+    /// Droid `i` looks for enemy drones, with no droid to fight: one in front of it in clear
+    /// view, or heard close by wherever it is, the nearest, is what it fires at.
+    fn look_for_drones(&mut self, graph: &Graph, i: usize) {
+        let me = &self.droids[i];
+        if me.target.is_some() || self.air.drones.is_empty() {
+            self.droids[i].air_target = None;
+            return;
+        }
+        let sight = sight(self.arena.sight);
+        let (alert, seeing, eyes) = (self.alert(i), self.seeing(), me.eyes());
+        let seen = (0..self.air.drones.len())
+            .filter(|&n| self.air.up(n) && self.air.drones[n].team != me.team)
+            .map(|n| (n, self.air.drones[n].drone.at()))
+            .filter(|&(_, at)| {
+                let away = (at - eyes).norm();
+                let feet = at - Vector3::y() * DRONE_HOVER;
+                let noticed = away < 12.0 || sight.visibility(alert, me.position, me.heading, feet, Stance::Standing, seeing) > 0.0;
+                away < self.arena.sight && noticed && Self::clear(graph, eyes, at)
+            })
+            .min_by(|a, b| (a.1 - eyes).norm().total_cmp(&(b.1 - eyes).norm()))
+            .map(|(n, _)| n);
+        self.droids[i].air_target = seen;
+    }
+
+    /// Droid `j` as a drone's target: no body to hit, its shots being reckoned (see
+    /// [`Battle::fly_drones`]).
+    fn droid_as_target(&self, j: usize, seeing: Seeing) -> DroneTarget {
+        let d = &self.droids[j];
+        DroneTarget { feet: d.position, middle: d.chest(), collider: Handle::NONE, posture: d.posture(), seeing, armed: true }
+    }
+
+    /// The drones in the air, for another `dt`: each goes after the nearest enemy it sees - droid
+    /// or drone - or the last it had, fires at it, and leaves once it has found no one for a
+    /// while, been out long enough, or lain shot down a while; its team can call another a while
+    /// after. Its shots at droids are reckoned as theirs are, flying only as far as whoever they
+    /// hit; at drones, they fly, and hit what they hit.
+    fn fly_drones(&mut self, graph: &mut Graph, dt: f32) {
+        for wait in &mut self.air.wait {
+            *wait = (*wait - dt).max(0.0);
+        }
+        self.take_radios();
+        for droid in &mut self.droids {
+            if droid.air_target.is_some_and(|n| !self.air.up(n)) {
+                droid.air_target = None;
+            }
+        }
+        if !self.air.drones.iter().any(|c| c.drone.is_placed()) {
+            return;
+        }
+        let seeing = self.seeing();
+        let up: Vec<bool> = (0..self.air.drones.len()).map(|n| self.air.up(n)).collect();
+        // Who each is after, looked over now and then.
+        for n in 0..self.air.drones.len() {
+            let called = &self.air.drones[n];
+            let still = match called.foe {
+                Some(Foe::Droid(j)) => self.droids[j].alive(),
+                Some(Foe::Drone(m)) => up[m],
+                None => false,
+            };
+            let foe = called.foe.filter(|_| still);
+            if !up[n] || called.look_in > dt {
+                let called = &mut self.air.drones[n];
+                called.look_in -= dt;
+                called.foe = foe;
+                continue;
+            }
+            let (drone, team) = (&called.drone, called.team);
+            let away = |t: &DroneTarget| (t.feet - drone.at()).norm_squared();
+            let droids = (0..self.droids.len())
+                .filter(|&j| self.droids[j].alive() && self.droids[j].team != team)
+                .map(|j| (Foe::Droid(j), self.droid_as_target(j, seeing)));
+            let drones = (0..self.air.drones.len())
+                .filter(|&m| up[m] && self.air.drones[m].team != team)
+                .filter_map(|m| Some((Foe::Drone(m), self.air.drones[m].drone.as_target()?)));
+            let seen = droids
+                .chain(drones)
+                .filter(|(_, t)| away(t) < 80.0 * 80.0 && drone.sees(graph, t))
+                .min_by(|a, b| away(&a.1).total_cmp(&away(&b.1)))
+                .map(|(foe, _)| foe);
+            let called = &mut self.air.drones[n];
+            called.foe = seen.or(foe);
+            called.look_in = DRONE_LOOK_EVERY;
+        }
+        let targets: Vec<DroneTarget> = self
+            .air
+            .drones
+            .iter()
+            .map(|c| match c.foe {
+                Some(Foe::Droid(j)) => Some(self.droid_as_target(j, seeing)),
+                Some(Foe::Drone(m)) => self.air.drones[m].drone.as_target(),
+                None => None,
+            })
+            .map(|t| t.unwrap_or(NOBODY))
+            .collect();
+        let Some(mesh) = self.mesh.take() else { return };
+        self.rng();
+        let Some(mut rng) = self.rng.take() else {
+            self.mesh = Some(mesh);
+            return;
+        };
+        let mut volleys = Vec::new();
+        for (n, called) in self.air.drones.iter_mut().enumerate() {
+            if !called.drone.is_placed() {
+                continue;
+            }
+            let doing = called.drone.update(graph, &mesh, &targets[n], &|_| true, None, &mut rng, dt, true);
+            if let Some(volley) = doing.fired {
+                volleys.push((n, volley, called.foe));
+            }
+            called.out_for += dt;
+            let state = called.drone.state();
+            match state {
+                DroneState::Down => called.down_for += dt,
+                DroneState::Patrol => called.idle_for += dt,
+                _ => called.idle_for = 0.0,
+            }
+            let done = match state {
+                DroneState::Down => called.down_for > WRECK_LIES,
+                DroneState::Alert => false,
+                _ => called.idle_for > DRONE_IDLE || called.out_for > DRONE_STAYS,
+            };
+            if done {
+                if state != DroneState::Down {
+                    Log::info(format!("Team battle: {}'s {:?} drone flies off", called.team.name(), called.drone.kind()));
+                }
+                called.drone.hide(graph);
+                called.foe = None;
+                self.air.wait[called.team.index()] = CALL_AGAIN;
+            }
+        }
+        self.mesh = Some(mesh);
+        self.rng = Some(rng);
+        // Its shots: at a droid, onto them if they hit, a little wide if not.
+        for (n, volley, foe) in volleys {
+            let by = self.air.drones[n].drone.collider();
+            let (aim, reach) = match foe {
+                Some(Foe::Droid(j)) if self.droids[j].alive() => {
+                    let chest = self.droids[j].chest();
+                    let distance = (chest - volley.from).norm();
+                    let mut chance = DRONE_HIT.0 * (1.0 - distance / DRONE_HIT.1).max(0.0);
+                    if self.droids[j].prone {
+                        chance *= PRONE_HARDER;
+                    }
+                    let hits = Self::clear(graph, volley.from, chest) && self.random((0.0, 1.0)) < chance;
+                    // Near enough either way to keep their head down, and to show them where it is.
+                    let them = &mut self.droids[j];
+                    them.suppressed = AI.team.suppressed_for;
+                    if them.target.is_none() {
+                        them.air_target = Some(n);
+                    }
+                    if hits {
+                        self.air.arrivals.push(DroneArrival {
+                            drone: n,
+                            target: j,
+                            damage: DRONE_HARM * volley.damage,
+                            from: volley.from,
+                            to: chest,
+                            left: distance / DRONE_SHOT_SPEED,
+                        });
+                        (chest, Some(distance))
+                    } else {
+                        let wide = Vector3::new(self.random((-0.8, 0.8)), self.random((-0.3, 0.6)), self.random((-0.8, 0.8)));
+                        (chest + wide, None)
+                    }
+                }
+                Some(Foe::Drone(m)) => match self.air.drones[m].drone.as_target() {
+                    Some(t) => (t.middle, None),
+                    None => continue,
+                },
+                _ => continue,
+            };
+            if let Some(shots) = self.air.shots.as_mut() {
+                shots.fire_to(graph, &volley, aim, by, reach);
+            }
+        }
+    }
+
+    /// The drones' shots fly on for another `dt`: into another team's drone, or onto the droid
+    /// they were to hit.
+    fn drone_shots_fly(&mut self, graph: &mut Graph, dt: f32) {
+        let hits = self.air.shots.as_mut().map_or_else(Vec::new, |shots| shots.update(graph, dt, &[]));
+        for hit in hits {
+            let Some(m) = self.air.drones.iter().position(|c| c.drone.collider() == hit.collider) else { continue };
+            let from = self.air.drones.iter().position(|c| c.drone.collider() == hit.by);
+            if from.is_some_and(|f| self.air.drones[f].team == self.air.drones[m].team) {
+                continue;
+            }
+            if self.air.drones[m].drone.shot(graph, hit.collider, hit.at - hit.way, 1) == Some(true) {
+                Log::info(format!("Team battle: {}'s drone is shot down by another", self.air.drones[m].team.name()));
+            }
+        }
+        // Drone shots that have got to the droid they hit.
+        let mut arrived = Vec::new();
+        self.air.arrivals.retain_mut(|arrival| {
+            arrival.left -= dt;
+            let here = arrival.left <= 0.0;
+            if here {
+                arrived.push(*arrival);
+            }
+            !here
+        });
+        for a in arrived {
+            if self.droids[a.target].alive() {
+                self.hit(graph, By::Drone(a.drone), a.target, a.damage, a.from, a.to);
+            }
+        }
+    }
 
     // ------------------------------------------------------------------ moving and showing
 
@@ -2742,9 +3313,10 @@ impl Battle {
                 _ if along.is_some() => along,
                 (Some(j), _) => heading_of(self.droids[j].position - self.droids[i].position),
                 (None, Some((_, at))) => heading_of(at - self.droids[i].position),
-                (None, None) => match droid.blind.at() {
-                    Some(at) => heading_of(at - self.droids[i].position),
-                    None => heading_of(way),
+                (None, None) => match (droid.blind.at(), droid.air_target.filter(|&n| self.air.up(n))) {
+                    (Some(at), _) => heading_of(at - self.droids[i].position),
+                    (None, Some(n)) => heading_of(self.air.drones[n].drone.at() - self.droids[i].position),
+                    (None, None) => heading_of(way),
                 },
             };
             let droid = &mut self.droids[i];

@@ -32,6 +32,14 @@ pub const AI: hydroxus_ai::Tuning = hydroxus_ai::Tuning::DEFAULT;
 /// and what the droids see through it as.
 pub use ctf::{sight_fog, FOG};
 
+/// The security drones, the ball and the quadcopter, and their shots, for the examples that call
+/// them in (see `examples/team_battle.rs`); and the earpiece a droid radios for one with.
+pub use ctf::Side;
+pub use drone::{Drone, Kind as DroneKind, Target as DroneTarget, HOVER as DRONE_HOVER};
+pub use drone_shot::{Shots as DroneShots, SHOT_MODEL as DRONE_SHOT_MODEL, SPEED as DRONE_SHOT_SPEED};
+pub use inhabitants::{put_on_earpiece, EARPIECE_MODEL, RADIO_CALL};
+pub use leaves::Leaves;
+
 mod alarm;
 mod chips;
 mod computer;
