@@ -41,10 +41,10 @@
 //! droid at a time, to see the difference - seeing, hearing and firing blind as the other side
 //! does: each match ends by saying which side won.
 //!
-//! A few droids - one in twelve or so - start a life with a radio, the game's yellow earpiece;
-//! the rest may come by one, taking it off a fallen droid of any side they pass, or going a
-//! little out of their way for one with no fight on. With an enemy in sight, one now and then
-//! radios for a drone - the game's ball or its quadcopter, whichever comes - and is brought in
+//! Now and then a droid comes back with a radio, the game's yellow earpiece - one in twelve or
+//! so, and only while no other of its team on its feet wears one: one radio a team at a time,
+//! going with the wearer's body when it falls. With an enemy in sight, the wearer now and then
+//! radios for a drone - the game's ball or its quadcopter, whichever comes - which is brought in
 //! out of sight of it, to search where that enemy is. A team has one out at a time, and waits a
 //! while after it has gone. A drone goes after the nearest enemy it sees, droid or drone, and
 //! flies off once it finds no one; a droid with no droid to fight shoots back at it.
@@ -322,13 +322,10 @@ const MOST_HIGH: usize = 1;
 const HIGH_NEAR: f32 = 60.0;
 const HIGH_REACH: f32 = 160.0;
 /// Radios, and the drones they call in (see [`Battle::radio`] and [`Battle::fly_drones`]). How
-/// many droids start a life with an earpiece, out of 1: few. The rest may come by one - taking a
-/// fallen droid's, friend's or foe's, if they pass within `RADIO_PICKUP` of it, in meters, or
-/// with no fight on go out of their way for one as near as `RADIO_DETOUR` - before it is gone with
-/// the body.
+/// likely a droid is to come back with an earpiece, out of 1: rarely, and only while no other
+/// droid of its team on its feet has one - one radio a team at a time. A fallen wearer's goes
+/// with its body.
 const RADIO_CHANCE: f32 = 0.08;
-const RADIO_PICKUP: f32 = 1.5;
-const RADIO_DETOUR: f32 = 8.0;
 /// How likely a droid with a radio is to call a drone in, a second, while it has an enemy in
 /// sight and its team none in the air; the call takes the game's `RADIO_CALL`, cut short if it
 /// is shot down first. One drone a team at a time, and a while after the last has gone, in
@@ -1657,8 +1654,10 @@ impl Battle {
             _ => None,
         };
         self.pick_gun(i);
-        // Now and then, one with a radio.
-        let radio = self.random((0.0, 1.0)) < RADIO_CHANCE;
+        // Now and then, one with a radio - if none of its team on its feet has one.
+        let theirs = self.droids[i].team;
+        let taken = self.droids.iter().enumerate().any(|(k, d)| k != i && d.team == theirs && d.alive() && d.radio);
+        let radio = !taken && self.random((0.0, 1.0)) < RADIO_CHANCE;
         let droid = &mut self.droids[i];
         droid.radio = radio;
         droid.calling = None;
@@ -1789,7 +1788,6 @@ impl Battle {
                     self.look_for_drones(graph, i);
                 }
                 self.decide(graph, i, time);
-                self.go_for_radio(i);
             }
             self.radio(graph, i, dt);
             self.shoot(graph, i);
@@ -2966,45 +2964,8 @@ impl Battle {
         ));
     }
 
-    /// With no fight on, going about its business, a droid with no radio goes out of its way for
-    /// a fallen droid's lying near, before it is gone with the body.
-    fn go_for_radio(&mut self, i: usize) {
-        let me = &self.droids[i];
-        if !me.alive() || me.radio || me.target.is_some() || me.suppressed > 0.0 || me.retreating || !matches!(me.task, Task::Advance) {
-            return;
-        }
-        let at = me.position;
-        let near = |d: &&Droid| d.radio && d.fallen && d.dead_for.is_some_and(|left| left > 1.0);
-        let lying = self.droids.iter().filter(near).map(|d| d.position).filter(|p| flat(p - at).norm() < RADIO_DETOUR);
-        if let Some(there) = lying.min_by(|a, b| flat(a - at).norm().total_cmp(&flat(b - at).norm())) {
-            self.walk_to(i, there);
-        }
-    }
-
-    /// Each fallen droid's radio, still on it, is taken by the first droid without one that
-    /// comes by - of its own team or another.
-    fn take_radios(&mut self) {
-        for k in 0..self.droids.len() {
-            if self.droids[k].alive() || !self.droids[k].radio {
-                continue;
-            }
-            let at = self.droids[k].position;
-            let by = |d: &Droid| d.alive() && !d.radio && flat(d.position - at).norm() < RADIO_PICKUP;
-            let Some(i) = self.droids.iter().position(by) else { continue };
-            self.droids[k].radio = false;
-            self.droids[i].radio = true;
-            Log::info(format!(
-                "Team battle: {} {} takes {} {}'s radio",
-                self.droids[i].team.name(),
-                i % self.arena.per_team + 1,
-                self.droids[k].team.name(),
-                k % self.arena.per_team + 1
-            ));
-        }
-    }
-
     /// Puts an earpiece on each droid on its feet that has a radio, and takes it off one that
-    /// has not; a fallen droid's taken off it is gone from its head.
+    /// has not; a fallen droid's stays on it, going with its body.
     fn wear_radios(&mut self, scene: &mut Scene) {
         let Some(model) = self.air.earpiece.clone().filter(|m| m.is_ok()) else { return };
         for droid in &mut self.droids {
@@ -3066,7 +3027,6 @@ impl Battle {
         for wait in &mut self.air.wait {
             *wait = (*wait - dt).max(0.0);
         }
-        self.take_radios();
         for droid in &mut self.droids {
             if droid.air_target.is_some_and(|n| !self.air.up(n)) {
                 droid.air_target = None;
