@@ -596,6 +596,14 @@ pub struct MazeGame {
     #[visit(skip)]
     #[reflect(hidden)]
     distance_blur: Option<fyrox_gfx::Switch>,
+    /// Whether Yoctite draws the level, and whether Candelite's global illumination lights it, as
+    /// the options say (see [`Self::with_yoctite`]).
+    #[visit(skip)]
+    #[reflect(hidden)]
+    yoctite: Option<fyrox_gfx::Switch>,
+    #[visit(skip)]
+    #[reflect(hidden)]
+    candelite: Option<fyrox_gfx::Switch>,
     /// The level's lines of light, lighting what is round them, if it has any (see [`glow`]).
     #[visit(skip)]
     #[reflect(hidden)]
@@ -1102,6 +1110,23 @@ impl MazeGame {
         switch.set_enabled(false);
         self.distance_blur = Some(switch);
         self
+    }
+
+    /// The game, letting the player turn Yoctite and Candelite's global illumination on and off
+    /// in the options through `yoctite` and `candelite`, which it leaves as they are given.
+    pub fn with_yoctite(mut self, yoctite: fyrox_gfx::Switch, candelite: fyrox_gfx::Switch) -> Self {
+        self.yoctite = Some(yoctite);
+        self.candelite = Some(candelite);
+        self
+    }
+
+    /// Shows in the options whether Yoctite and Candelite are on.
+    fn show_geometry_options(&self, ui: &UserInterface) {
+        let yoctite = self.yoctite.as_ref().map(fyrox_gfx::Switch::is_enabled);
+        self.menu.set_yoctite(ui, yoctite);
+        // Candelite lights Yoctite's geometry: without it, there is nothing to switch.
+        let candelite = self.candelite.as_ref().map(fyrox_gfx::Switch::is_enabled).filter(|_| yoctite != Some(false));
+        self.menu.set_candelite(ui, candelite);
     }
 
     fn build_scene(&mut self, ctx: &mut PluginContext) {
@@ -6381,6 +6406,7 @@ impl Plugin for MazeGame {
             .inspect_err(|error| Log::err(format!("Maze: the quadcopters speak as the drones: {error}")))
             .ok();
         self.menu = PauseMenu::build(ctx.user_interfaces.first_mut(), "Start again");
+        self.show_geometry_options(ctx.user_interfaces.first());
         // Over the pause menu. With a model to play from MAZE_MODEL - or with MAZE_CHIPS, to look
         // at the credit chips in a maze - straight into the maze.
         self.main_menu = MainMenu::build(ctx.user_interfaces.first_mut());
@@ -6770,6 +6796,18 @@ impl Plugin for MazeGame {
             Some(Choice::EnglishSubtitles) => {
                 self.subtitles.english = !self.subtitles.english;
                 self.apply_subtitles(ctx);
+            }
+            Some(Choice::Yoctite) => {
+                if let Some(switch) = &self.yoctite {
+                    switch.set_enabled(!switch.is_enabled());
+                }
+                self.show_geometry_options(ctx.user_interfaces.first());
+            }
+            Some(Choice::Candelite) => {
+                if let Some(switch) = &self.candelite {
+                    switch.set_enabled(!switch.is_enabled());
+                }
+                self.show_geometry_options(ctx.user_interfaces.first());
             }
             Some(Choice::Restart) => self.restart(ctx),
             Some(Choice::Quit) => platform::quit(ctx),

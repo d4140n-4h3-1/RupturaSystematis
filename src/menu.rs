@@ -7,7 +7,8 @@
 //! The pause menu: the world stops behind a dimmed screen, with buttons to carry on, to switch
 //! the maze's lights, to change the options, to start again, to go back to the main menu or to
 //! leave, and a reminder of the controls. The options are a page of their own: the subtitles of
-//! what the droids say, in System Latin and in English, each on or off. Escape there goes back to
+//! what the droids say, in System Latin and in English, each on or off, and Yoctite's geometry and
+//! Candelite's lighting, each on or off (Candelite only with Yoctite). Escape there goes back to
 //! the menu.
 //!
 //! Every menu works from the keyboard as well as the mouse: the arrow keys, or W and S, go up and
@@ -172,6 +173,9 @@ pub enum Choice {
     /// Switch the subtitles in System Latin, or those in English, off or back on.
     LatinSubtitles,
     EnglishSubtitles,
+    /// Switch Yoctite's geometry, or Candelite's global illumination, on or back off.
+    Yoctite,
+    Candelite,
     Restart,
     /// Go back to the main menu, leaving the game under way.
     MainMenu,
@@ -496,6 +500,10 @@ pub struct PauseMenu {
     latin_label: Handle<Text>,
     english: Handle<Button>,
     english_label: Handle<Text>,
+    yoctite: Handle<Button>,
+    yoctite_label: Handle<Text>,
+    candelite: Handle<Button>,
+    candelite_label: Handle<Text>,
     back: Handle<Button>,
     open: bool,
     /// Whether the options are showing rather than the menu's own page.
@@ -549,9 +557,12 @@ impl PauseMenu {
         let options_buttons = [
             button(ctx, &latin_text(subtitles.latin)),
             button(ctx, &english_text(subtitles.english)),
+            button(ctx, &yoctite_text(true)),
+            button(ctx, &candelite_text(false)),
             button(ctx, "Back"),
         ];
-        let [(latin, latin_label), (english, english_label), (back, _)] = options_buttons;
+        let [(latin, latin_label), (english, english_label), (yoctite, yoctite_label), (candelite, candelite_label), (back, _)] =
+            options_buttons;
         let options_page = page(
             ctx,
             false,
@@ -559,6 +570,8 @@ impl PauseMenu {
                 options_title.to_base(),
                 latin.to_base(),
                 english.to_base(),
+                yoctite.to_base(),
+                candelite.to_base(),
                 back.to_base(),
             ],
         );
@@ -593,6 +606,10 @@ impl PauseMenu {
             latin_label,
             english,
             english_label,
+            yoctite,
+            yoctite_label,
+            candelite,
+            candelite_label,
             back,
             open: false,
             in_options: false,
@@ -659,6 +676,20 @@ impl PauseMenu {
         );
     }
 
+    /// Shows whether Yoctite draws the level: `None` if the game has no say in it, which leaves
+    /// the option greyed out.
+    pub fn set_yoctite(&self, ui: &UserInterface, on: Option<bool>) {
+        ui.send(self.yoctite, WidgetMessage::Enabled(on.is_some()));
+        ui.send(self.yoctite_label, TextMessage::Text(yoctite_text(on.unwrap_or(false))));
+    }
+
+    /// Shows whether Candelite lights the level: `None` if the game has no say in it, which
+    /// leaves the option greyed out.
+    pub fn set_candelite(&self, ui: &UserInterface, on: Option<bool>) {
+        ui.send(self.candelite, WidgetMessage::Enabled(on.is_some()));
+        ui.send(self.candelite_label, TextMessage::Text(candelite_text(on.unwrap_or(false))));
+    }
+
     /// Shows whether the lights are on.
     pub fn set_lights(&self, ui: &UserInterface, on: bool) {
         ui.send(self.lights_label, TextMessage::Text(lights_text(on)));
@@ -673,6 +704,8 @@ impl PauseMenu {
             (self.back, Choice::Back),
             (self.latin, Choice::LatinSubtitles),
             (self.english, Choice::EnglishSubtitles),
+            (self.yoctite, Choice::Yoctite),
+            (self.candelite, Choice::Candelite),
             (self.restart, Choice::Restart),
             (self.main_menu, Choice::MainMenu),
             (self.quit, Choice::Quit),
@@ -693,6 +726,14 @@ fn latin_text(on: bool) -> String {
 
 fn english_text(on: bool) -> String {
     format!("English subtitles: {}", on_off(on))
+}
+
+fn yoctite_text(on: bool) -> String {
+    format!("Yoctite geometry: {}", on_off(on))
+}
+
+fn candelite_text(on: bool) -> String {
+    format!("Candelite lighting: {}", on_off(on))
 }
 
 fn on_off(on: bool) -> &'static str {

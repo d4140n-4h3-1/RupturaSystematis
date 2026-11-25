@@ -33,8 +33,17 @@ fn main() {
     let switches = [effects.shadow_switch(), effects.reflection_switch()];
     // And where to blur what is far off: a night race through a city traced in light.
     let distance_blur = effects.distance_blur_switch();
+    // And whether Yoctite draws the maze and Candelite lights it, as the options say.
+    let yoctite = effects.yoctite_switch();
+    yoctite.set_enabled(platform::var("MAZE_YOCTITE").as_deref() != Some("0"));
+    let candelite = effects.candelite_switch();
+    candelite.set_enabled(platform::var("MAZE_CANDELITE").as_deref() == Some("1"));
     executor.add_plugin(effects);
-    executor.add_plugin(MazeGame::new(moving, area_lights, switches).with_distance_blur(distance_blur));
+    executor.add_plugin(
+        MazeGame::new(moving, area_lights, switches)
+            .with_distance_blur(distance_blur)
+            .with_yoctite(yoctite, candelite),
+    );
     executor.run()
 }
 
@@ -105,14 +114,16 @@ fn graphics_effects() -> GraphicsEffects {
         effects = effects.with_ray_traced_shadows(shadows);
     }
     // The maze is drawn with Yoctite - every mesh's clusters at the level of detail it needs from
-    // the camera, chosen and drawn by the GPU, in place of the renderer - and lit with Candelite's
-    // global illumination: the lamps' light bounced off walls, floors and ceilings into the
-    // corridors' corners, in place of the flat ambient colour. Each only where the graphics card
-    // can run it (fyrox-gfx checks at start): without Yoctite the renderer draws the maze, and
-    // without Candelite - or if it fails along the way - the ambient colour lights it.
-    // MAZE_CANDELITE=0 leaves Candelite out; MAZE_YOCTITE=0 leaves both out.
-    // MAZE_YOCTITE_VIEW=1 shows Yoctite's clusters instead (=cpu chosen on the CPU), and
-    // MAZE_CANDELITE_VIEW=1 what Candelite's rays see (=lit with the light on it).
+    // the camera, chosen and drawn by the GPU, in place of the renderer - and can be lit with
+    // Candelite's global illumination: the lamps' light bounced off walls, floors and ceilings,
+    // in place of the flat ambient colour. Each only where the graphics card can run it
+    // (fyrox-gfx checks at start): without Yoctite the renderer draws the maze, and without
+    // Candelite - or if it fails along the way - the ambient colour lights it.
+    // The options switch each on and off (see `MazeGame::with_yoctite`). Yoctite starts on, and
+    // MAZE_YOCTITE=0 starts with it off; Candelite starts off - it lights the corridors far too
+    // brightly as yet - and MAZE_CANDELITE=1 starts with it on. MAZE_YOCTITE_VIEW=1 shows
+    // Yoctite's clusters instead (=cpu chosen on the CPU), and MAZE_CANDELITE_VIEW=1 what
+    // Candelite's rays see (=lit with the light on it).
     match platform::var("MAZE_YOCTITE_VIEW").as_deref() {
         Some("1") => effects = effects.with_yoctite_view(),
         Some("cpu") => effects = effects.with_yoctite_view_on_cpu(),
@@ -122,8 +133,6 @@ fn graphics_effects() -> GraphicsEffects {
         _ if platform::var("MAZE_CANDELITE_VIEW").as_deref() == Some("lit") => {
             effects = effects.with_candelite_light_view()
         }
-        _ if platform::var("MAZE_YOCTITE").as_deref() == Some("0") => {}
-        _ if platform::var("MAZE_CANDELITE").as_deref() == Some("0") => effects = effects.with_yoctite(),
         _ => effects = effects.with_candelite(),
     }
     // MAZE_REFLECTIONS=0 turns the floor reflections off.
