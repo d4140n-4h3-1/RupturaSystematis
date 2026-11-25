@@ -23,7 +23,7 @@ hydroxus-ai = { git = "https://github.com/d4140n-4h3-1/hydroxus-ai.git", branch 
 # The droids' and drones' voices, made from formants.
 hydroxus-voice = { git = "https://github.com/d4140n-4h3-1/hydroxus-voice.git", branch = "main" }
 # Refractive glass and other graphics improvements kept outside the engine.
-fyrox-gfx = { git = "https://github.com/d4140n-4h3-1/fyrox-gfx.git", branch = "main", features = ["raytracing"] }
+fyrox-gfx = { git = "https://github.com/d4140n-4h3-1/Hydroxus.git", branch = "vulkan", features = ["raytracing"] }
 
 # Optimized engine, debuggable game code. The engine's own debug assertions and overflow checks
 # cost more than they are worth here: with them on, a `cargo run` build spends about four times

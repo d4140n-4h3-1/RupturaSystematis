@@ -120,7 +120,7 @@ cargo run --release
   render like the OpenGL one and adds the hardware ray tracing that the traced shadows use. Its
   crates keep Fyrox's names, so the game still says `fyrox`. `VULKAN.md` in Hydroxus describes
   every change.
-  [`fyrox-gfx`](https://github.com/d4140n-4h3-1/fyrox-gfx) holds the graphics effects the game
+  `fyrox-gfx`, a crate in Hydroxus, holds the graphics effects the game
   adds on top of the engine, [`hydroxus-ai`](https://github.com/d4140n-4h3-1/hydroxus-ai) the
   droids' and drones' AI, and [`hydroxus-voice`](https://github.com/d4140n-4h3-1/hydroxus-voice)
   their voices.
@@ -400,8 +400,8 @@ and, in full, in `VULKAN.md` in Hydroxus.
 
 ### fyrox-gfx
 
-Graphics effects the game adds on top of the engine, kept out of it: refractive glass, softer
-shadow edges, temporal anti-aliasing, further-reaching ambient occlusion, screen-space
+Graphics effects the game adds on top of the engine, in Hydroxus's `fyrox-gfx` crate: refractive
+glass, softer shadow edges, temporal anti-aliasing, further-reaching ambient occlusion, screen-space
 reflections, a budget that keeps shadow maps for the nearest lamps only, the ray-traced
 shadows (its `raytracing` feature), and surfaces drawn from both sides for the maze's tube-shaped
 pieces.

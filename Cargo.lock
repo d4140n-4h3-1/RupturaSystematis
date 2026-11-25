@@ -1537,7 +1537,7 @@ dependencies = [
 [[package]]
 name = "fyrox"
 version = "2.0.0-rc.1"
-source = "git+https://github.com/d4140n-4h3-1/Hydroxus.git?branch=vulkan#6c67ec28dbe198c52203cdc92b7e8e4bd1270a95"
+source = "git+https://github.com/d4140n-4h3-1/Hydroxus.git?branch=vulkan#2f2b9196a667ab66c6e34554ccb26bdc35f6f9f1"
 dependencies = [
  "fyrox-impl",
 ]
@@ -1545,7 +1545,7 @@ dependencies = [
 [[package]]
 name = "fyrox-animation"
 version = "2.0.0-rc.1"
-source = "git+https://github.com/d4140n-4h3-1/Hydroxus.git?branch=vulkan#6c67ec28dbe198c52203cdc92b7e8e4bd1270a95"
+source = "git+https://github.com/d4140n-4h3-1/Hydroxus.git?branch=vulkan#2f2b9196a667ab66c6e34554ccb26bdc35f6f9f1"
 dependencies = [
  "fxhash",
  "fyrox-core",
@@ -1558,7 +1558,7 @@ dependencies = [
 [[package]]
 name = "fyrox-autotile"
 version = "2.0.0-rc.1"
-source = "git+https://github.com/d4140n-4h3-1/Hydroxus.git?branch=vulkan#6c67ec28dbe198c52203cdc92b7e8e4bd1270a95"
+source = "git+https://github.com/d4140n-4h3-1/Hydroxus.git?branch=vulkan#2f2b9196a667ab66c6e34554ccb26bdc35f6f9f1"
 dependencies = [
  "fxhash",
  "nalgebra 0.35.0",
@@ -1568,7 +1568,7 @@ dependencies = [
 [[package]]
 name = "fyrox-core"
 version = "2.0.0-rc.1"
-source = "git+https://github.com/d4140n-4h3-1/Hydroxus.git?branch=vulkan#6c67ec28dbe198c52203cdc92b7e8e4bd1270a95"
+source = "git+https://github.com/d4140n-4h3-1/Hydroxus.git?branch=vulkan#2f2b9196a667ab66c6e34554ccb26bdc35f6f9f1"
 dependencies = [
  "android-activity",
  "arrayvec",
@@ -1603,7 +1603,7 @@ dependencies = [
 [[package]]
 name = "fyrox-core-derive"
 version = "2.0.0-rc.1"
-source = "git+https://github.com/d4140n-4h3-1/Hydroxus.git?branch=vulkan#6c67ec28dbe198c52203cdc92b7e8e4bd1270a95"
+source = "git+https://github.com/d4140n-4h3-1/Hydroxus.git?branch=vulkan#2f2b9196a667ab66c6e34554ccb26bdc35f6f9f1"
 dependencies = [
  "convert_case",
  "darling",
@@ -1616,16 +1616,19 @@ dependencies = [
 [[package]]
 name = "fyrox-gfx"
 version = "0.1.0"
-source = "git+https://github.com/d4140n-4h3-1/fyrox-gfx.git?branch=main#24d59224089abd42ee6a71594c5128ba444cae39"
+source = "git+https://github.com/d4140n-4h3-1/Hydroxus.git?branch=vulkan#2f2b9196a667ab66c6e34554ccb26bdc35f6f9f1"
 dependencies = [
  "fyrox",
  "fyrox-graphics-wgpu",
+ "half",
+ "wgpu",
+ "yoctite",
 ]
 
 [[package]]
 name = "fyrox-graph"
 version = "2.0.0-rc.1"
-source = "git+https://github.com/d4140n-4h3-1/Hydroxus.git?branch=vulkan#6c67ec28dbe198c52203cdc92b7e8e4bd1270a95"
+source = "git+https://github.com/d4140n-4h3-1/Hydroxus.git?branch=vulkan#2f2b9196a667ab66c6e34554ccb26bdc35f6f9f1"
 dependencies = [
  "fxhash",
  "fyrox-core",
@@ -1635,7 +1638,7 @@ dependencies = [
 [[package]]
 name = "fyrox-graphics"
 version = "2.0.0-rc.1"
-source = "git+https://github.com/d4140n-4h3-1/Hydroxus.git?branch=vulkan#6c67ec28dbe198c52203cdc92b7e8e4bd1270a95"
+source = "git+https://github.com/d4140n-4h3-1/Hydroxus.git?branch=vulkan#2f2b9196a667ab66c6e34554ccb26bdc35f6f9f1"
 dependencies = [
  "bytemuck",
  "fyrox-core",
@@ -1647,20 +1650,22 @@ dependencies = [
 [[package]]
 name = "fyrox-graphics-wgpu"
 version = "2.0.0-rc.1"
-source = "git+https://github.com/d4140n-4h3-1/Hydroxus.git?branch=vulkan#6c67ec28dbe198c52203cdc92b7e8e4bd1270a95"
+source = "git+https://github.com/d4140n-4h3-1/Hydroxus.git?branch=vulkan#2f2b9196a667ab66c6e34554ccb26bdc35f6f9f1"
 dependencies = [
  "bytemuck",
  "fyrox-core",
  "fyrox-graphics",
+ "half",
  "raw-window-handle",
  "wgpu",
  "winit",
+ "yoctite",
 ]
 
 [[package]]
 name = "fyrox-impl"
 version = "2.0.0-rc.1"
-source = "git+https://github.com/d4140n-4h3-1/Hydroxus.git?branch=vulkan#6c67ec28dbe198c52203cdc92b7e8e4bd1270a95"
+source = "git+https://github.com/d4140n-4h3-1/Hydroxus.git?branch=vulkan#2f2b9196a667ab66c6e34554ccb26bdc35f6f9f1"
 dependencies = [
  "approx",
  "base64",
@@ -1713,7 +1718,7 @@ dependencies = [
 [[package]]
 name = "fyrox-material"
 version = "2.0.0-rc.1"
-source = "git+https://github.com/d4140n-4h3-1/Hydroxus.git?branch=vulkan#6c67ec28dbe198c52203cdc92b7e8e4bd1270a95"
+source = "git+https://github.com/d4140n-4h3-1/Hydroxus.git?branch=vulkan#2f2b9196a667ab66c6e34554ccb26bdc35f6f9f1"
 dependencies = [
  "fxhash",
  "fyrox-core",
@@ -1731,7 +1736,7 @@ dependencies = [
 [[package]]
 name = "fyrox-math"
 version = "2.0.0-rc.1"
-source = "git+https://github.com/d4140n-4h3-1/Hydroxus.git?branch=vulkan#6c67ec28dbe198c52203cdc92b7e8e4bd1270a95"
+source = "git+https://github.com/d4140n-4h3-1/Hydroxus.git?branch=vulkan#2f2b9196a667ab66c6e34554ccb26bdc35f6f9f1"
 dependencies = [
  "arrayvec",
  "bytemuck",
@@ -1744,7 +1749,7 @@ dependencies = [
 [[package]]
 name = "fyrox-resource"
 version = "2.0.0-rc.1"
-source = "git+https://github.com/d4140n-4h3-1/Hydroxus.git?branch=vulkan#6c67ec28dbe198c52203cdc92b7e8e4bd1270a95"
+source = "git+https://github.com/d4140n-4h3-1/Hydroxus.git?branch=vulkan#2f2b9196a667ab66c6e34554ccb26bdc35f6f9f1"
 dependencies = [
  "fxhash",
  "fyrox-core",
@@ -1757,7 +1762,7 @@ dependencies = [
 [[package]]
 name = "fyrox-sound"
 version = "2.0.0-rc.1"
-source = "git+https://github.com/d4140n-4h3-1/Hydroxus.git?branch=vulkan#6c67ec28dbe198c52203cdc92b7e8e4bd1270a95"
+source = "git+https://github.com/d4140n-4h3-1/Hydroxus.git?branch=vulkan#2f2b9196a667ab66c6e34554ccb26bdc35f6f9f1"
 dependencies = [
  "fyrox-core",
  "fyrox-resource",
@@ -1773,7 +1778,7 @@ dependencies = [
 [[package]]
 name = "fyrox-texture"
 version = "2.0.0-rc.1"
-source = "git+https://github.com/d4140n-4h3-1/Hydroxus.git?branch=vulkan#6c67ec28dbe198c52203cdc92b7e8e4bd1270a95"
+source = "git+https://github.com/d4140n-4h3-1/Hydroxus.git?branch=vulkan#2f2b9196a667ab66c6e34554ccb26bdc35f6f9f1"
 dependencies = [
  "ddsfile",
  "fast_image_resize",
@@ -1790,7 +1795,7 @@ dependencies = [
 [[package]]
 name = "fyrox-ui"
 version = "2.0.0-rc.1"
-source = "git+https://github.com/d4140n-4h3-1/Hydroxus.git?branch=vulkan#6c67ec28dbe198c52203cdc92b7e8e4bd1270a95"
+source = "git+https://github.com/d4140n-4h3-1/Hydroxus.git?branch=vulkan#2f2b9196a667ab66c6e34554ccb26bdc35f6f9f1"
 dependencies = [
  "bytemuck",
  "copypasta",
@@ -6294,6 +6299,11 @@ name = "y4m"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7a5a4b21e1a62b67a2970e6831bc091d7b87e119e7f9791aef9702e3bef04448"
+
+[[package]]
+name = "yoctite"
+version = "0.1.0"
+source = "git+https://github.com/d4140n-4h3-1/Hydroxus.git?branch=vulkan#2f2b9196a667ab66c6e34554ccb26bdc35f6f9f1"
 
 [[package]]
 name = "yoke"
