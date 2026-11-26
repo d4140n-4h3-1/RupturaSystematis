@@ -35,6 +35,12 @@ inherits = "release"
 lto = true
 codegen-units = 1
 
+# The game's own code a little optimized too: unoptimized, the droids of a town - Demo Town's
+# crowd, security and traffic - took about 50 ms a frame (12 FPS) where opt-level 1 takes a few
+# (46 FPS), building as quickly after an edit and still easy to step through.
+[profile.dev]
+opt-level = 1
+
 [profile.dev.package."*"]
 opt-level = 3
 debug-assertions = false

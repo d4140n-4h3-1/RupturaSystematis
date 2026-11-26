@@ -135,8 +135,8 @@ cargo run
 ```
 
 It can be started from anywhere; it finds its models in `data/` next to `Cargo.toml`. The engine
-is compiled with optimizations even in a debug build, and the game itself is not, so `cargo run`
-is quick enough to play while still easy to debug. `cargo run --release` optimizes the game as
+is compiled with optimizations even in a debug build, and the game itself lightly (opt-level 1),
+so `cargo run` is quick enough to play - a town full of droids too - while still easy to debug. `cargo run --release` optimizes the game as
 well.
 
 It opens on the main menu, to pick which game to play:
