@@ -33,6 +33,8 @@ fn main() {
     let switches = [effects.shadow_switch(), effects.reflection_switch()];
     // And where to blur what is far off: a night race through a city traced in light.
     let distance_blur = effects.distance_blur_switch();
+    // And where to trace shadows at half resolution: the big day maps.
+    let half_resolution_shadows = effects.half_resolution_shadows_switch();
     // And whether Yoctite draws the maze and Candelite lights it, as the options say.
     let yoctite = effects.yoctite_switch();
     yoctite.set_enabled(platform::var("MAZE_YOCTITE").as_deref() != Some("0"));
@@ -42,6 +44,7 @@ fn main() {
     executor.add_plugin(
         MazeGame::new(moving, area_lights, switches)
             .with_distance_blur(distance_blur)
+            .with_half_resolution_shadows(half_resolution_shadows)
             .with_yoctite(yoctite, candelite),
     );
     executor.run()

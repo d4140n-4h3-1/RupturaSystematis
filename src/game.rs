@@ -596,6 +596,11 @@ pub struct MazeGame {
     #[visit(skip)]
     #[reflect(hidden)]
     distance_blur: Option<fyrox_gfx::Switch>,
+    /// Whether shadows are traced at half resolution (see [`Self::with_half_resolution_shadows`]):
+    /// on the big day maps only.
+    #[visit(skip)]
+    #[reflect(hidden)]
+    half_resolution_shadows: Option<fyrox_gfx::Switch>,
     /// Whether Yoctite draws the level, and whether Candelite's global illumination lights it, as
     /// the options say (see [`Self::with_yoctite`]).
     #[visit(skip)]
@@ -1112,6 +1117,17 @@ impl MazeGame {
         self
     }
 
+    /// The game, tracing shadows at half resolution through `switch` only on the big day maps -
+    /// the forest, under a sun over all of it, and the race tracks, a kilometer of lamps - and at
+    /// full resolution on the rest, with few lamps: the maze, capture the flag, the demo town. At
+    /// half, a quarter of the pixels traced each frame and the rest filled in, their edges are
+    /// built up over the frames, and go jagged wherever things move.
+    pub fn with_half_resolution_shadows(mut self, switch: fyrox_gfx::Switch) -> Self {
+        switch.set_enabled(false);
+        self.half_resolution_shadows = Some(switch);
+        self
+    }
+
     /// The game, letting the player turn Yoctite and Candelite's global illumination on and off
     /// in the options through `yoctite` and `candelite`, which it leaves as they are given.
     pub fn with_yoctite(mut self, yoctite: fyrox_gfx::Switch, candelite: fyrox_gfx::Switch) -> Self {
@@ -1244,6 +1260,12 @@ impl MazeGame {
         let raced = model.as_deref().is_some_and(|path| ctf::RACE_MAPS.iter().any(|map| map.path == path));
         if let Some(switch) = &self.distance_blur {
             switch.set_enabled(night && raced);
+        }
+        if let Some(switch) = &self.half_resolution_shadows {
+            let big = [ctf::FOREST, ctf::CIRCUIT, ctf::GRAND_CIRCUIT];
+            let half = model.as_deref().is_some_and(|path| big.iter().any(|map| map.path == path));
+            switch.set_enabled(half);
+            Log::info(format!("Shadows traced at {} resolution", if half { "half" } else { "full" }));
         }
         match model {
             Some(path) => {
