@@ -66,6 +66,9 @@ fn window_attributes() -> WindowAttributes {
     attributes
 }
 
+/// How much of Candelite's light the maze is lit with (see `graphics_effects`).
+const CANDELITE_STRENGTH: f32 = 0.2;
+
 /// Refractive glass for the ceiling panes, softer shadow edges, anti-aliasing, a budget that keeps
 /// shadow maps for the nearest lamps only (while shadows are not traced), and ambient occlusion
 /// reaching far enough to shade the corners of corridors this wide - each of which the
@@ -135,6 +138,11 @@ fn graphics_effects() -> GraphicsEffects {
         }
         _ => effects = effects.with_candelite(),
     }
+    // The maze's lamps were set for no light between surfaces at all, and its corridors are pale
+    // and closed: Candelite's light, all of it, washes them out and fills in their shadows. Taken
+    // down, they keep the look they were made with. MAZE_CANDELITE_STRENGTH sets it.
+    let strength = platform::var("MAZE_CANDELITE_STRENGTH").and_then(|s| s.parse().ok()).unwrap_or(CANDELITE_STRENGTH);
+    effects = effects.with_candelite_strength(strength);
     // MAZE_REFLECTIONS=0 turns the floor reflections off.
     if platform::var("MAZE_REFLECTIONS").as_deref() != Some("0") {
         effects = effects.with_reflections(fyrox_gfx::Reflections {

@@ -261,6 +261,7 @@ logs goes to the browser's console there.
 | `MAZE_REFLECTIONS=0`     | Turns floor reflections off.                                            |
 | `MAZE_YOCTITE=0`         | Starts with Yoctite off: the renderer draws the maze itself. Options > Yoctite geometry switches it while playing. |
 | `MAZE_CANDELITE=1`       | Starts with Candelite's global illumination on (it starts off). Options > Candelite lighting switches it while playing, with Yoctite on. |
+| `MAZE_CANDELITE_STRENGTH=0.2` | How much of Candelite's light the maze is lit with (0.2 by default; 1 is all of it, which washes the pale corridors out). |
 | `MAZE_YOCTITE_VIEW=1`    | Shows Yoctite's clusters, each in its own colour (`=cpu` chooses them on the CPU). |
 | `MAZE_CANDELITE_VIEW=1`  | Shows what Candelite's rays see on its cards (`=lit` with the light on them). |
 | `MAZE_KNOCKDOWN=<s>`     | That many seconds into a round, shoots down the droid nearest you, to try the ragdolls out. |
