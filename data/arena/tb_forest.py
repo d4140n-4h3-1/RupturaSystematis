@@ -55,6 +55,8 @@ TREES = [("norway-spruce", 3.0, 0.28), ("pine", 2.5, 0.28), ("silver-fir", 1.5, 
          ("english-oak", 0.7, 0.45)]
 TREE_SCALE = (0.95, 1.35)  # the models are 7-13 m; the forest's trees were 8-19
 TRUNK_POST = 7.0           # how high a trunk is solid, in meters: over a watchtower's platform
+TREE_APART = 6.0           # the least distance between two trees' trunks, spread out
+TREE_TRIES = 30            # places clear for each pair of trees tried, the one furthest from the rest taken
 # The undergrowth in place of the bushes: the model and how common it is, the big ones scarcer.
 UNDERGROWTH = [("common-hawthorn", 1.0), ("common-broom", 1.0), ("bracken", 3.0), ("hard-fern", 2.0),
                ("bilberry", 2.0)]
@@ -253,16 +255,31 @@ def main():
                            "sandbags", "container", "crate", "sandbags"])
     boulders(base, rng, 10)
 
-    # The forest: all through it, and on past the wall, where none can go, for the fog.
-    planted = 0
-    for _ in range(8000):
-        if planted >= 80:
+    # The forest: all through it, and on past the wall, where none can go, for the fog. Spread
+    # out: each pair of trees goes, of TREE_TRIES places clear for it, at the one furthest from
+    # every tree already planted, and none nearer another than TREE_APART. Put down wherever
+    # there was room, TREE_GAP from the next, they piled up in the few gaps the cover left -
+    # four clumps of crowns grown into each other, and the rest of the ground bare.
+    trees = []
+    for _ in range(80):
+        best, tried = None, 0
+        for _ in range(TREE_TRIES * 40):
+            if tried == TREE_TRIES:
+                break
+            x, y = rng.uniform(-HX + 2, HX - 2), rng.uniform(-HY + 2, HY - 2)
+            if not (base.clear(x, y, 0.5, TREE_GAP) and base.clear(-x, -y, 0.5, TREE_GAP)):
+                continue
+            tried += 1
+            apart = min((math.hypot(x - tx, y - ty) for tx, ty in trees), default=math.inf)
+            apart = min(apart, math.hypot(2 * x, 2 * y))
+            if best is None or apart > best[0]:
+                best = (apart, x, y)
+        if best is None or best[0] < TREE_APART:
             break
-        x, y = rng.uniform(-HX + 2, HX - 2), rng.uniform(-HY + 2, HY - 2)
-        if base.clear(x, y, 0.5, TREE_GAP) and base.clear(-x, -y, 0.5, TREE_GAP):
-            forest_tree(base, rng, x, y)
-            forest_tree(base, rng, -x, -y)
-            planted += 1
+        _, x, y = best
+        forest_tree(base, rng, x, y)
+        forest_tree(base, rng, -x, -y)
+        trees += [(x, y), (-x, -y)]
     for _ in range(110):
         along = rng.random()
         side = rng.randrange(4)
