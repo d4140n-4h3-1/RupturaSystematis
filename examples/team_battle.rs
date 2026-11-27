@@ -161,6 +161,9 @@ pub struct Arena {
     /// Whether the map marks where the Wilderness's trees and undergrowth grow, to plant them
     /// (see `maze::plants`).
     pub plants: bool,
+    /// Whether it is drawn and lit as the Wilderness is (see [`graphics_effects`]): by Yoctite, lit
+    /// by Candelite, the sun's shadows traced. Not where hundreds of droids fight.
+    pub effects: bool,
 }
 
 /// The combat arena, under its roof, lit by its strips.
@@ -179,6 +182,7 @@ pub const COMBAT: Arena = Arena {
     per_team: 5,
     shadows: true,
     plants: false,
+    effects: false,
 };
 
 /// Nexus: the battle royale's city of light round a soaring spire, on a platform in the void
@@ -202,6 +206,7 @@ pub const NEXUS: Arena = Arena {
     per_team: 50,
     shadows: false,
     plants: false,
+    effects: false,
 };
 
 /// The forest: abandoned buildings among the trees, in the Foggy Forest's fog
@@ -223,8 +228,10 @@ pub const FOREST: Arena = Arena {
     teams: 2,
     per_team: 5,
     shadows: true,
-    // The Wilderness's trees, undergrowth, boulders and forest floor.
+    // The Wilderness's trees, undergrowth, boulders and forest floor, drawn and lit as it draws
+    // and lights them.
     plants: true,
+    effects: true,
 };
 
 impl Default for Arena {
@@ -849,6 +856,9 @@ struct Battle {
     map: Option<ModelResource>,
     /// The trees and undergrowth to plant where the map marks them, if it does.
     plants: Option<maze::plants::Plants>,
+    /// What moves, for the temporal anti-aliasing to follow rather than leave a ghost behind,
+    /// where there is any (see [`graphics_effects`]).
+    moving: Option<fyrox_gfx::MovingThings>,
     /// The droids' models, red's and cyan's.
     models: [Option<ModelResource>; TEAMS],
     level: Handle<Collider>,
@@ -941,10 +951,40 @@ pub fn run(arena: Arena) {
         },
     );
     let mut battle = TeamBattle::default();
+    if arena.effects {
+        let effects = graphics_effects();
+        battle.battle.moving = Some(effects.moving_things());
+        executor.add_plugin(effects);
+    }
     battle.battle.arena = arena;
     battle.battle.bench = Bench::wanted();
     executor.add_plugin(battle);
     executor.run()
+}
+
+/// The forest drawn and lit as the Wilderness draws and lights it, where the graphics card can:
+/// by Yoctite - every tree's clusters at the level of detail it needs, chosen and drawn on the GPU -
+/// and lit by Candelite's global illumination, the sky's light and the sun's bounced between
+/// surfaces in place of the flat ambient colour; the sun's shadows traced, through the gaps in the
+/// leaves and needles, from a sun near the real one's size, which keeps them sharp; and temporal
+/// anti-aliasing with FXAA after it, which needles' fine edges need. BATTLE_CANDELITE=0 leaves
+/// Candelite out, BATTLE_YOCTITE=0 both; BATTLE_RT=0 draws the shadows from shadow maps.
+fn graphics_effects() -> fyrox_gfx::GraphicsEffects {
+    let off = |name: &str| std::env::var(name).as_deref() == Ok("0");
+    let mut effects = fyrox_gfx::GraphicsEffects::default()
+        .with_anti_aliasing(fyrox_gfx::AntiAliasing { fxaa: true, temporal: true });
+    if !off("BATTLE_YOCTITE") {
+        effects = if off("BATTLE_CANDELITE") { effects.with_yoctite() } else { effects.with_candelite() };
+    }
+    if !off("BATTLE_RT") {
+        effects = effects.with_ray_traced_shadows(fyrox_gfx::RayTracedShadows {
+            sun_angular_radius: 0.35,
+            // Past this, the fog has hidden a shadow.
+            reach: 150.0,
+            ..Default::default()
+        });
+    }
+    effects
 }
 
 impl Plugin for TeamBattle {
@@ -1057,6 +1097,23 @@ impl Battle {
         ScreenBuilder::new(WidgetBuilder::new().with_children(children)).build(ctx);
     }
 
+    /// The droids the temporal anti-aliasing follows, as many as it can (see `fyrox_gfx::moving`):
+    /// the nearest the camera, alive, each in a capsule from its knees to over its head.
+    fn moving_things(&self) -> Vec<fyrox_gfx::MovingThing> {
+        let mut near: Vec<&Droid> = self.droids.iter().filter(|d| d.alive()).collect();
+        let away = |d: &Droid| (d.position - self.camera_position).norm_squared();
+        near.sort_by(|a, b| away(a).total_cmp(&away(b)));
+        near.into_iter()
+            .take(fyrox_gfx::moving::MAX_MOVING_THINGS)
+            .map(|d| fyrox_gfx::MovingThing {
+                bottom: d.position + Vector3::y() * 0.5,
+                top: d.position + Vector3::y() * 1.5,
+                radius: 0.6,
+                moved: d.position - d.was_at,
+            })
+            .collect()
+    }
+
     /// The arena's map, or `BATTLE_MAP`'s.
     fn map_path(&self) -> String {
         std::env::var("BATTLE_MAP").unwrap_or_else(|_| self.arena.map.to_string())
@@ -1090,6 +1147,9 @@ impl Battle {
 
     fn update(&mut self, ctx: &mut PluginContext) {
         let dt = ctx.dt;
+        if let Some(moving) = &self.moving {
+            moving.set(self.moving_things());
+        }
         match self.phase {
             Phase::Loading => {
                 let Some(map) = self.map.clone() else { return };

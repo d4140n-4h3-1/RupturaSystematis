@@ -109,8 +109,11 @@ impl Plants {
             .traverse_handle_iter(root)
             .filter(|&h| graph[h].is_mesh() && graph[h].name().starts_with(TRUNK_POSTS))
             .collect();
+        // Hidden, and casting no shadow: a shadow traced against the scene would otherwise still
+        // find a post standing still, hidden or not.
         for post in posts {
             scene.graph[post].set_visibility(false);
+            scene.graph[post].set_cast_shadows(false);
         }
         let mut planted = 0;
         let mut missing = FxHashSet::default();
