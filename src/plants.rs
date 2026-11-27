@@ -124,6 +124,10 @@ impl Plants {
         if !missing.is_empty() {
             Log::warn(format!("Plants: no model for {missing:?}"));
         }
+        // Where each copy is in the world, worked out now: the graph works it out again only for
+        // nodes whose own place has changed, and a copy put under its marker has not - left as
+        // it was made, every copy stood at the middle of the map, one in another.
+        scene.graph.update_hierarchical_data();
         planted
     }
 

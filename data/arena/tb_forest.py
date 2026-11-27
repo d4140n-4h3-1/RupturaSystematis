@@ -44,6 +44,8 @@ import br_forest  # noqa: E402
 from br_forest import Base, Tiled, prism, log, broken_wall, hangar, watchtower, export_tiled, WALL_T, \
     TREE_GAP  # noqa: E402
 
+BR_FOREST_TREE = br_forest.tree  # the hangar's, before it is given the Wilderness's
+
 HX, HY = 56.0, 32.0   # from the middle to the wall round it, along x and y
 FOREST = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "forest")
 
@@ -118,6 +120,18 @@ def forest_tree(base, rng, x, y, solid=True):
         base.posts.at = (x, y)
         prism(base.posts, x, y, -0.1, TRUNK_POST, r, r * 0.8, 8)
         base.solid.append((x, y, r))
+
+
+def hangar_tree(base, rng, x, y, solid=True):
+    """In place of br_forest's tree, for the hangar to grow up through its roof: one of the
+    Wilderness's. br_forest's still grows - its trunk thrown away, its leaves never built - so
+    that it takes from `rng` as it did, and the rest of the map comes out as it was; the
+    Wilderness's is chosen by where it stands."""
+    trunks, n_trees = base.trunks, base.n_trees
+    base.trunks = Tiled("Discarded", [base.bark])
+    BR_FOREST_TREE(base, rng, x, y, solid)
+    base.trunks, base.n_trees = trunks, n_trees
+    forest_tree(base, random.Random(f"{x:.3f},{y:.3f}"), x, y, solid)
 
 
 def undergrowth(base, rng, x, y):
@@ -234,7 +248,12 @@ def main():
         base.keep_clear.append((min(sx * HX, sx * (HX - SPAWN_ROOM)), max(sx * HX, sx * (HX - SPAWN_ROOM)), -HY * 0.6, HY * 0.6))
 
     # The buildings: the hangar in the middle, and each side's own, turned half round about it.
-    hangar(base, rng, 0.0, 0.0, 20.0, 14.0, "Hangar")
+    # Its trees, through the holes in its roof, the Wilderness's too.
+    br_forest.tree = hangar_tree
+    try:
+        hangar(base, rng, 0.0, 0.0, 20.0, 14.0, "Hangar")
+    finally:
+        br_forest.tree = BR_FOREST_TREE
     floors = 1 + (rng.random() < 0.6)
     width = rng.uniform(13.0, 16.0)
     for k, (x, y, quarter) in enumerate(((-26.0, 17.0, 0), (26.0, -17.0, 2))):
