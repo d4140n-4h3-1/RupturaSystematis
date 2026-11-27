@@ -158,6 +158,9 @@ pub struct Arena {
     /// Whether anything casts shadows: not in a city traced in light at night, as the game has it -
     /// the map's own lamps would draw every droid near them six times over, a shadow map a side.
     pub shadows: bool,
+    /// Whether the map marks where the Wilderness's trees and undergrowth grow, to plant them
+    /// (see `maze::plants`).
+    pub plants: bool,
 }
 
 /// The combat arena, under its roof, lit by its strips.
@@ -175,6 +178,7 @@ pub const COMBAT: Arena = Arena {
     teams: 2,
     per_team: 5,
     shadows: true,
+    plants: false,
 };
 
 /// Nexus: the battle royale's city of light round a soaring spire, on a platform in the void
@@ -197,6 +201,7 @@ pub const NEXUS: Arena = Arena {
     teams: 4,
     per_team: 50,
     shadows: false,
+    plants: false,
 };
 
 /// The forest: abandoned buildings among the trees, in the Foggy Forest's fog
@@ -218,6 +223,8 @@ pub const FOREST: Arena = Arena {
     teams: 2,
     per_team: 5,
     shadows: true,
+    // The Wilderness's trees, undergrowth, boulders and forest floor.
+    plants: true,
 };
 
 impl Default for Arena {
@@ -840,6 +847,8 @@ struct Battle {
     arena: Arena,
     scene: Handle<Scene>,
     map: Option<ModelResource>,
+    /// The trees and undergrowth to plant where the map marks them, if it does.
+    plants: Option<maze::plants::Plants>,
     /// The droids' models, red's and cyan's.
     models: [Option<ModelResource>; TEAMS],
     level: Handle<Collider>,
@@ -983,6 +992,9 @@ impl Battle {
         self.camera = CameraBuilder::new(BaseBuilder::new()).build(&mut scene.graph).to_base();
         self.scene = ctx.scenes.add(scene);
         self.map = Some(ctx.resource_manager.request::<Model>(self.map_path()));
+        if self.arena.plants {
+            self.plants = Some(maze::plants::Plants::request(&ctx.resource_manager));
+        }
         let low = std::env::var("BATTLE_PROFILE").is_ok_and(|p| p.eq_ignore_ascii_case("low"));
         self.scheduler = Scheduler::new(if low { schedule::Tuning::LOW } else { AI.schedule });
         Log::info(format!("Team battle: the AI's {} profile", if low { "low" } else { "full" }));
@@ -1090,7 +1102,11 @@ impl Battle {
                 } else if models.iter().any(Option::is_none) {
                     self.set_text(ctx, self.scoreboard, format!("Could not load {MODELS:?}"));
                     self.map = None;
-                } else if map.is_ok() && models.iter().flatten().all(|m| m.is_ok()) && self.air.settled() {
+                } else if map.is_ok()
+                    && models.iter().flatten().all(|m| m.is_ok())
+                    && self.air.settled()
+                    && self.plants.as_ref().is_none_or(|plants| plants.loaded())
+                {
                     self.place_level(&mut ctx.scenes[self.scene], &map);
                     self.phase = Phase::Settling(0);
                 }
@@ -1101,6 +1117,15 @@ impl Battle {
                 let graph = &ctx.scenes[self.scene].graph;
                 self.survey(graph);
                 self.find_cover(graph);
+                // The trees and undergrowth, where the map marks them - their trunks are in the
+                // collider already, as posts. Only now: the survey lays its grid over every mesh
+                // in the scene, and with the crowns reaching past the floor's edge the grid moved
+                // by a fraction of a cell, and the stairs up to the watchtowers' and barracks'
+                // upper floors were found no more (85 cover spots up high, then 14).
+                if let Some(plants) = &mut self.plants {
+                    let planted = plants.plant(&mut ctx.scenes[self.scene], self.map_root);
+                    Log::info(format!("Team battle: {planted} trees and plants planted"));
+                }
                 self.make_drones(&mut ctx.scenes[self.scene]);
                 self.start_match(&mut ctx.scenes[self.scene]);
                 self.phase = Phase::Playing;

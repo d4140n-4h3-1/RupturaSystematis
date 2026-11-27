@@ -82,6 +82,7 @@ mod powerups;
 mod precinct;
 mod race;
 pub mod platform;
+pub mod plants;
 pub mod player;
 pub mod ragdoll;
 mod roads;

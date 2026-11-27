@@ -15,8 +15,14 @@ about the middle, so neither side has the better ground):
   forest all through: trunks solid, leaves and bushes not.
 - A crumbling wall round it all, and a little forest past it, out of reach, that the fog swallows.
 
-The canopies and bushes go in meshes named `Foliage_*`, which the game leaves out of the level's
-collider - they hide whoever is in them, but bolts and droids go through.
+The trees, undergrowth, boulders and forest floor are the Wilderness's (plant_life's, CC0), copied
+into data/forest. The trees and undergrowth are not in the map: each is an empty named
+`Plant_<model>_<n>` (`_far` after it past the wall), turned and scaled as it grows, where the game plants a copy of
+data/forest/trees|plants/<model>.glb - leaves and all, which hide whoever is in them but stop
+nothing. Each tree's trunk is in it, as a plain eight-sided post the size of the model's trunk, in
+`TreeTrunks_*` meshes: solid, for bolts, sight and the droids' ground as any trunk, and hidden by
+the game behind the model's own bark. The boulders are cover, part of the map; the forest floor
+is the loam's.
 
 Builds data/arena/tb_forest.glb (and a .blend to look it over, wherever --out puts it):
 
@@ -33,12 +39,26 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import br_town  # noqa: E402
-from br_town import add_box, add_block, building  # noqa: E402
+from br_town import add_box, add_block, building, collection  # noqa: E402
 import br_forest  # noqa: E402
-from br_forest import Base, tree, bush, log, broken_wall, hangar, watchtower, export_tiled, WALL_T, \
+from br_forest import Base, Tiled, prism, log, broken_wall, hangar, watchtower, export_tiled, WALL_T, \
     TREE_GAP  # noqa: E402
 
 HX, HY = 56.0, 32.0   # from the middle to the wall round it, along x and y
+FOREST = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "forest")
+
+# The trees, as the Wilderness grows them (its forest.rs SPECIES): the model, how common it is
+# against the others, and its trunk's radius near the ground at full size, in meters. Alder and
+# willow, which grow only by water, are left out: there is none here.
+TREES = [("norway-spruce", 3.0, 0.28), ("pine", 2.5, 0.28), ("silver-fir", 1.5, 0.30),
+         ("european-larch", 1.5, 0.27), ("silver-birch", 1.5, 0.18), ("rowan", 0.8, 0.20),
+         ("english-oak", 0.7, 0.45)]
+TREE_SCALE = (0.95, 1.35)  # the models are 7-13 m; the forest's trees were 8-19
+TRUNK_POST = 7.0           # how high a trunk is solid, in meters: over a watchtower's platform
+# The undergrowth in place of the bushes: the model and how common it is, the big ones scarcer.
+UNDERGROWTH = [("common-hawthorn", 1.0), ("common-broom", 1.0), ("bracken", 3.0), ("hard-fern", 2.0),
+               ("bilberry", 2.0)]
+LOAM_TILE = 1.0            # meters of ground to one of the loam's tiles, as the Wilderness has it
 BEYOND = 10.0         # forest past the wall, out of reach
 EDGE_WALL = 3.5
 SPAWN_ROOM = 7.0      # kept clear of trees at each end, for the teams to be put down
@@ -62,6 +82,100 @@ def ruin(base, rng, cx, cy, w, d, name):
         add_block(f"{name}_Crate{i}", x, y, 1.4, 1.4, 1.2, rng.uniform(0, math.pi), base.cover, base.low, "low")
     base.keep_clear.append((cx - w / 2 - 1.0, cx + w / 2 + 1.0, cy - d / 2 - 1.0, cy + d / 2 + 1.0))
     base.n_buildings += 1
+
+
+def weighted(rng, kinds):
+    """One of `kinds`, (name, weight, ...) each, as likely as its weight."""
+    pick = rng.uniform(0, sum(k[1] for k in kinds))
+    for kind in kinds:
+        pick -= kind[1]
+        if pick <= 0:
+            return kind
+    return kinds[-1]
+
+
+def plant(base, name, x, y, yaw, scale, far=False):
+    """An empty where the game plants a copy of the model `name`, turned and scaled; `far`, out of
+    reach past the wall, where the game has it cast no shadow."""
+    base.n_plants = getattr(base, "n_plants", 0) + 1
+    empty = bpy.data.objects.new(f"Plant_{name}_{base.n_plants}{'_far' if far else ''}", None)
+    empty.location = (x, y, 0.0)
+    empty.rotation_euler.z = yaw
+    empty.scale = (scale, scale, scale)
+    bpy.context.scene.collection.objects.link(empty)
+
+
+def forest_tree(base, rng, x, y, solid=True):
+    """One of the Wilderness's trees at (x, y), and - if it can be reached - its trunk, solid."""
+    name, _, trunk = weighted(rng, TREES)
+    scale = rng.uniform(*TREE_SCALE)
+    plant(base, name, x, y, rng.uniform(0, 2 * math.pi), scale, far=not solid)
+    base.n_trees += 1
+    if solid:
+        r = trunk * scale
+        base.posts.at = (x, y)
+        prism(base.posts, x, y, -0.1, TRUNK_POST, r, r * 0.8, 8)
+        base.solid.append((x, y, r))
+
+
+def undergrowth(base, rng, x, y):
+    """A bush, bracken or ferns at (x, y): leaves, which stop nothing."""
+    name, _ = weighted(rng, UNDERGROWTH)
+    plant(base, name, x, y, rng.uniform(0, 2 * math.pi), rng.uniform(0.8, 1.25))
+    base.n_bushes += 1
+
+
+def imported(path):
+    """The mesh object of the glTF at `path`, out of every collection: to copy, not to export."""
+    bpy.ops.object.select_all(action="DESELECT")
+    bpy.ops.import_scene.gltf(filepath=path)
+    objects = list(bpy.context.selected_objects)
+    mesh = next(o for o in objects if o.type == "MESH")
+    for o in objects:
+        for c in list(o.users_collection):
+            c.objects.unlink(o)
+    mesh.parent = None
+    return mesh
+
+
+def boulders(base, rng, pairs):
+    """The Wilderness's granite boulders, in pairs each the other turned half round about the
+    middle: low cover to crouch behind, among the trees."""
+    rock = imported(os.path.join(FOREST, "rocks", "granite-boulder.glb"))
+    placed = 0
+    for i in range(pairs):
+        for _ in range(80):
+            scale = rng.uniform(1.2, 1.7)
+            r = 0.55 * scale
+            x, y = rng.uniform(-HX + SPAWN_ROOM + 3, HX - SPAWN_ROOM - 3), rng.uniform(-HY + 3, HY - 3)
+            if abs(x) < r + 1.0 or not base.clear(x, y, r) or not base.clear(-x, -y, r):
+                continue
+            yaw = rng.uniform(0, 2 * math.pi)
+            for k, (px, py) in enumerate(((x, y), (-x, -y))):
+                o = rock.copy()
+                o.data = rock.data.copy()
+                o.name = f"Cover_boulder_{i}_{k}"
+                o.location = (px, py, -0.05 * scale)
+                o.rotation_euler = (0.0, 0.0, yaw + math.pi * k)
+                o.scale = (scale, scale * rng.uniform(0.85, 1.15), scale)
+                o["cover"] = "low"
+                base.cover.objects.link(o)
+                base.solid.append((px, py, r))
+            placed += 2
+            break
+    base.n_boulders = placed
+
+
+def loam(obj):
+    """Gives `obj` the Wilderness's forest loam, a tile to every LOAM_TILE meters across it."""
+    sample = imported(os.path.join(FOREST, "ground", "forest-loam.glb"))
+    material = sample.data.materials[0]
+    obj.data.materials.clear()
+    obj.data.materials.append(material)
+    uv = obj.data.uv_layers.new(name="UVMap")
+    for loop in obj.data.loops:
+        v = obj.matrix_world @ obj.data.vertices[loop.vertex_index].co
+        uv.data[loop.index].uv = (v.x / LOAM_TILE, v.y / LOAM_TILE)
 
 
 def cover_pair(base, rng, kinds):
@@ -98,9 +212,11 @@ def main():
     bpy.ops.wm.read_factory_settings(use_empty=True)
     base = Base()
     base.n_buildings = 0
+    base.trunk_posts = collection("TreeTrunks")
+    base.posts = Tiled("TreeTrunks", [base.bark])
 
-    # The forest floor, out past the wall.
-    add_box("ForestFloor", -HX - BEYOND, HX + BEYOND, -HY - BEYOND, HY + BEYOND, -1.0, 0.0, base.ground, base.grass)
+    # The forest floor, out past the wall: the Wilderness's loam.
+    loam(add_box("ForestFloor", -HX - BEYOND, HX + BEYOND, -HY - BEYOND, HY + BEYOND, -1.0, 0.0, base.ground, base.grass))
 
     # The wall round it, crumbling.
     for k, (along_x, at, half) in enumerate(((True, HY, HX), (True, -HY, HX), (False, HX, HY), (False, -HX, HY))):
@@ -135,6 +251,7 @@ def main():
 
     cover_pair(base, rng, ["wreck", "container", "container", "sandbags", "sandbags", "crate", "crate", "wreck",
                            "sandbags", "container", "crate", "sandbags"])
+    boulders(base, rng, 10)
 
     # The forest: all through it, and on past the wall, where none can go, for the fog.
     planted = 0
@@ -143,8 +260,8 @@ def main():
             break
         x, y = rng.uniform(-HX + 2, HX - 2), rng.uniform(-HY + 2, HY - 2)
         if base.clear(x, y, 0.5, TREE_GAP) and base.clear(-x, -y, 0.5, TREE_GAP):
-            tree(base, rng, x, y)
-            tree(base, rng, -x, -y)
+            forest_tree(base, rng, x, y)
+            forest_tree(base, rng, -x, -y)
             planted += 1
     for _ in range(110):
         along = rng.random()
@@ -154,7 +271,7 @@ def main():
             x, y = -HX - BEYOND + along * 2 * (HX + BEYOND), (HY + past) * (1 if side == 0 else -1)
         else:
             x, y = (HX + past) * (1 if side == 2 else -1), -HY - BEYOND + along * 2 * (HY + BEYOND)
-        tree(base, rng, x, y, solid=False)
+        forest_tree(base, rng, x, y, solid=False)
     for _ in range(12):
         for _ in range(60):
             x, y = rng.uniform(-HX + SPAWN_ROOM + 2, HX - SPAWN_ROOM - 2), rng.uniform(-HY + 3, HY - 3)
@@ -167,9 +284,18 @@ def main():
     for _ in range(140):
         x, y = rng.uniform(-HX + 2, HX - 2), rng.uniform(-HY + 2, HY - 2)
         if base.clear(x, y, 0.8, 0.6):
-            bush(base, rng, x, y)
+            undergrowth(base, rng, x, y)
+    # Low growth over the rest of the floor, closer together: bracken, ferns and bilberry, below
+    # the knee - it hides nothing, and stops nothing.
+    low = [kind for kind in UNDERGROWTH if kind[0] in ("bracken", "hard-fern", "bilberry")]
+    for _ in range(500):
+        x, y = rng.uniform(-HX + 1, HX - 1), rng.uniform(-HY + 1, HY - 1)
+        if base.clear(x, y, 0.3, 0.1):
+            name, _ = weighted(rng, low)
+            plant(base, name, x, y, rng.uniform(0, 2 * math.pi), rng.uniform(0.7, 1.1))
+            base.n_bushes += 1
     base.trunks.build(base.struct)
-    base.canopy.build(base.foliage)
+    base.posts.build(base.trunk_posts)
 
     # A grey sun and a camera, to look it over in Blender.
     bpy.ops.object.light_add(type="SUN", location=(0, 0, 60), rotation=(math.radians(40), 0, math.radians(30)))
@@ -186,9 +312,16 @@ def main():
         os.path.join(os.path.dirname(os.path.abspath(__file__)), "tb_forest.blend")
     bpy.ops.wm.save_as_mainfile(filepath=out)
     print(f"[map] seed={seed} {HX * 2:.0f} x {HY * 2:.0f} m, buildings={base.n_buildings} trees={base.n_trees} "
-          f"logs={base.n_logs} bushes={base.n_bushes} cover={base.n_cover} -> {out}")
+          f"logs={base.n_logs} undergrowth={base.n_bushes} boulders={base.n_boulders} cover={base.n_cover} -> {out}")
     if glb:
-        export_tiled(os.path.abspath(glb), [base.ground, base.struct, base.cover, base.foliage])
+        # Every mesh with a UV map of the boulders' name: joined tile by tile, a boulder's own
+        # map is kept only if what it is joined with has one by that name too - crates and
+        # sandbags have none - or its textures are left with none to follow.
+        cols = [base.ground, base.struct, base.cover, base.trunk_posts]
+        for o in [o for col in cols for o in col.objects if o.type == "MESH"]:
+            if "UVMap" not in o.data.uv_layers:
+                o.data.uv_layers.new(name="UVMap")
+        export_tiled(os.path.abspath(glb), cols)
 
 
 if __name__ == "__main__":
