@@ -694,7 +694,7 @@ dependencies = [
 [[package]]
 name = "candelite"
 version = "0.1.0"
-source = "git+https://github.com/d4140n-4h3-1/yoctite-candelite.git?branch=main#ac9b0e0ebb37135f9d231f7ec6cc198553f0be38"
+source = "git+https://github.com/d4140n-4h3-1/yoctite-candelite.git?branch=main#1de3f6cf9ac4f7738570f5f5a217631459aea65c"
 dependencies = [
  "bytemuck",
  "fyrox-graphics",
@@ -5793,7 +5793,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
@@ -6317,12 +6317,12 @@ checksum = "7a5a4b21e1a62b67a2970e6831bc091d7b87e119e7f9791aef9702e3bef04448"
 [[package]]
 name = "yoctite"
 version = "0.1.0"
-source = "git+https://github.com/d4140n-4h3-1/yoctite-candelite.git?branch=main#ac9b0e0ebb37135f9d231f7ec6cc198553f0be38"
+source = "git+https://github.com/d4140n-4h3-1/yoctite-candelite.git?branch=main#1de3f6cf9ac4f7738570f5f5a217631459aea65c"
 
 [[package]]
 name = "yoctite-wgpu"
 version = "0.1.0"
-source = "git+https://github.com/d4140n-4h3-1/yoctite-candelite.git?branch=main#ac9b0e0ebb37135f9d231f7ec6cc198553f0be38"
+source = "git+https://github.com/d4140n-4h3-1/yoctite-candelite.git?branch=main#1de3f6cf9ac4f7738570f5f5a217631459aea65c"
 dependencies = [
  "bytemuck",
  "fyrox-core",
