@@ -57,6 +57,9 @@ TREES = [("norway-spruce", 3.0, 0.28), ("pine", 2.5, 0.28), ("silver-fir", 1.5, 
          ("english-oak", 0.7, 0.45)]
 TREE_SCALE = (0.95, 1.35)  # the models are 7-13 m; the forest's trees were 8-19
 TRUNK_POST = 7.0           # how high a trunk is solid, in meters: over a watchtower's platform
+# How far past the wall a tree's shadow still reaches into the arena: under the team battle's sun,
+# 60 degrees up, a 12 m tree's runs 7 m, over the 3.5 m wall about 5 m. Trees further out cast none.
+SHADOW_REACH = 5.0
 TREE_APART = 6.0           # the least distance between two trees' trunks, spread out
 TREE_TRIES = 30            # places clear for each pair of trees tried, the one furthest from the rest taken
 # The undergrowth in place of the bushes: the model and how common it is, the big ones scarcer.
@@ -109,11 +112,13 @@ def plant(base, name, x, y, yaw, scale, far=False):
     bpy.context.scene.collection.objects.link(empty)
 
 
-def forest_tree(base, rng, x, y, solid=True):
-    """One of the Wilderness's trees at (x, y), and - if it can be reached - its trunk, solid."""
+def forest_tree(base, rng, x, y, solid=True, far=False):
+    """One of the Wilderness's trees at (x, y), and - if it can be reached - its trunk, solid;
+    `far`, so far out past the wall that its shadow falls short of it, and the game has it cast
+    none."""
     name, _, trunk = weighted(rng, TREES)
     scale = rng.uniform(*TREE_SCALE)
-    plant(base, name, x, y, rng.uniform(0, 2 * math.pi), scale, far=not solid)
+    plant(base, name, x, y, rng.uniform(0, 2 * math.pi), scale, far=far)
     base.n_trees += 1
     if solid:
         r = trunk * scale
@@ -307,7 +312,7 @@ def main():
             x, y = -HX - BEYOND + along * 2 * (HX + BEYOND), (HY + past) * (1 if side == 0 else -1)
         else:
             x, y = (HX + past) * (1 if side == 2 else -1), -HY - BEYOND + along * 2 * (HY + BEYOND)
-        forest_tree(base, rng, x, y, solid=False)
+        forest_tree(base, rng, x, y, solid=False, far=past > SHADOW_REACH)
     for _ in range(12):
         for _ in range(60):
             x, y = rng.uniform(-HX + SPAWN_ROOM + 2, HX - SPAWN_ROOM - 2), rng.uniform(-HY + 3, HY - 3)

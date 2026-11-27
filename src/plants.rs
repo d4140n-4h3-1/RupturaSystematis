@@ -12,10 +12,11 @@
 //! shares its surface data. Surfaces meant to be seen from both sides - the glTF materials'
 //! `doubleSided`, which the importer drops - get a reversed twin of every triangle, since the
 //! renderer culls faces seen from behind and a leaf card is a single sheet. The wind's morph
-//! targets, and the clip baked from them, are dropped: the trees stand still. The undergrowth -
-//! [`MODELS`] under `plants` - casts no shadows: low and many, its shadows hardly showed, and
-//! drawing it again into every shadow map cost more than drawing it once. Nor does a tree out of
-//! reach, past the wall round a map - most of a small map's trees - whose shadow falls past it.
+//! targets, and the clip baked from them, are dropped: the trees stand still. The low undergrowth
+//! - [`LOW`]: bracken, ferns and bilberry - casts no shadows: below the knee and many, its shadows
+//! hardly showed, and drawing it again into every shadow map cost more than drawing it once; the
+//! bushes, hawthorn and broom, do. Nor does a tree marked [`FAR`] - well out past the wall round a
+//! map, most of a small map's trees - whose shadow falls short of it.
 
 use crate::level::FOLIAGE;
 use fyrox::{
@@ -44,6 +45,8 @@ pub const MARKER: &str = "Plant_";
 pub const TRUNK_POSTS: &str = "TreeTrunks";
 /// What a marker's name ends in for a plant out of reach, which casts no shadow.
 pub const FAR: &str = "_far";
+/// The models low enough to cast no shadows.
+pub const LOW: [&str; 3] = ["bracken", "hard-fern", "bilberry"];
 
 /// The models there are to plant.
 pub const MODELS: [&str; 12] = [
@@ -78,7 +81,8 @@ impl Plants {
             .iter()
             .map(|&path| {
                 let name = path.rsplit('/').next().unwrap_or(path).trim_end_matches(".glb").to_string();
-                (name, resources.request::<Model>(path), double_sided(path), !path.contains("/plants/"))
+                let shadows = !LOW.contains(&name.as_str());
+                (name, resources.request::<Model>(path), double_sided(path), shadows)
             })
             .collect();
         Self { models, prepared: Default::default() }
